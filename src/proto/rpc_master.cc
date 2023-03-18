@@ -1,0 +1,1 @@
+#include "proto/rpc_master.hpp"
