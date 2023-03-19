@@ -5,10 +5,9 @@
 #include "config.hpp"
 #include "rchms.hpp"
 
-namespace rchms {
-
 using page_id_t = uint64_t;
 using offset_t = uint64_t;
+using mac_id_t = uint32_t;
 
 enum SystemRole {
     CN = 1,
@@ -17,4 +16,4 @@ enum SystemRole {
     CXL_DAEMON = 4,
 };
 
-}  // namespace rchms
+constexpr static mac_id_t master_id = 0;

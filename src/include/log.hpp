@@ -59,6 +59,8 @@
         if (expr) DLOG(format, ##__VA_ARGS__); \
     } while (0)
 
+#ifndef NDEBUG
+
 namespace type_fmt_str_detail {
 template <typename T>
 struct helper;
@@ -156,3 +158,14 @@ struct helper<const char *> {
             DLOG_FATAL("Assertion `" #expr "` failed. " format); \
         }                                                        \
     } while (0)
+
+#else
+
+#define DLOG_EXPR(val_a, op, val_b) \
+    do {                            \
+    } while (0)
+#define DLOG_ASSERT(expr, format...) \
+    do {                             \
+    } while (0)
+
+#endif

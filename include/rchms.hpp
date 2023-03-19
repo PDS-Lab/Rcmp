@@ -23,7 +23,7 @@ class PoolContext;
  * @param master_port MN的端口号
  * @return PoolContext*
  */
-PoolContext *Open(Options options);
+PoolContext *Open(ClientOptions options);
 
 /**
  * @brief 关闭内存池上下文

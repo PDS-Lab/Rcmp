@@ -1,6 +1,9 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
+
+#include "utils.hpp"
 
 enum ConcurrentQueueProducerMode { SP, MP };
 enum ConcurrentQueueConsumerMode { SC, MC };
@@ -11,6 +14,44 @@ class ConcurrentQueue {
    public:
     bool empty() const;
     size_t size() const;
-    bool try_enqueue(T el);
-    bool try_dequeue(T *el);
+    bool tryEnqueue(T el);
+    bool tryDequeue(T *el);
+};
+
+/**
+ * @brief 单生产者单消费者队列
+ *
+ * @tparam T
+ * @tparam SZ
+ */
+template <typename T, size_t SZ>
+class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::SP, ConcurrentQueueConsumerMode::SC> {
+   public:
+    ConcurrentQueue() : m_head(0), m_tail(0) {}
+
+    bool tryEnqueue(T n) {
+        int tail = m_tail.load(std::memory_order_relaxed);
+        int next_tail = (tail + 1) % SZ;
+        if (UNLIKELY(next_tail == m_head.load(std::memory_order_acquire))) {
+            return false;  // 队列已满
+        }
+        data_[tail] = n;
+        m_tail.store(next_tail, std::memory_order_release);
+        return true;
+    }
+
+    bool tryDequeue(T *n) {
+        int head = m_head.load(std::memory_order_relaxed);
+        if (UNLIKELY(head == m_tail.load(std::memory_order_acquire))) {
+            return false;  // 队列已空
+        }
+        *n = data_[head];
+        m_head.store((head + 1) % SZ, std::memory_order_release);
+        return true;
+    }
+
+   private:
+    T data_[SZ];
+    CACHE_ALIGN std::atomic<int> m_head;
+    CACHE_ALIGN std::atomic<int> m_tail;
 };

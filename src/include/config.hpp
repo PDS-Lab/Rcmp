@@ -2,6 +2,7 @@
 
 #include <cstddef>
 
+#include "common.hpp"
 #include "rchms.hpp"
 
 /**
