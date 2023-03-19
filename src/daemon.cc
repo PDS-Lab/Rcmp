@@ -1,48 +1,7 @@
+#include "daemon_impl.hpp"
+
 #include <fcntl.h>
 #include <sys/mman.h>
-
-#include <cstdint>
-#include <memory>
-#include <type_traits>
-
-#include "allocator.hpp"
-#include "common.hpp"
-#include "concurrent_hashmap.hpp"
-#include "config.hpp"
-#include "log.hpp"
-#include "msg_queue.hpp"
-#include "options.hpp"
-
-struct ClientConnection {
-    MsgQueue send_msg_queue;        // 发给client的msg queue
-    MsgQueue recv_msg_queue;        // 接收client消息的msg queue
-
-    std::string ip;
-    uint16_t port;
-
-    mac_id_t client_id;
-};
-
-struct PageMetadata {
-    Allocator slab_allocator;
-};
-
-struct DaemonContext {
-    rchms::DaemonOptions options;
-
-    std::string ip;
-    uint16_t port;
-
-    mac_id_t daemon_id;     // 节点id，由master分配
-
-    int cxl_devdax_fd;
-    void *cxl_memory_addr;
-
-    std::unique_ptr<Allocator> cxl_msg_queue_allocator;
-    std::vector<ClientConnection> client_connect_table;
-    std::unique_ptr<Allocator> cxl_page_allocator;
-    ConcurrentHashMap<page_id_t, PageMetadata> page_table;
-};
 
 int main(int argc, char *argv[]) {
     rchms::DaemonOptions options;
@@ -64,17 +23,18 @@ int main(int argc, char *argv[]) {
     size_t total_msg_queue_zone_size =
         daemon_ctx.options.max_client_limit * daemon_ctx.options.cxl_msg_queue_size * 2;
     daemon_ctx.cxl_msg_queue_allocator.reset(
-        new Allocator(reinterpret_cast<uintptr_t>(daemon_ctx.cxl_memory_addr),
-                      total_msg_queue_zone_size, daemon_ctx.options.cxl_msg_queue_size));
+        new Allocator(total_msg_queue_zone_size, daemon_ctx.options.cxl_msg_queue_size));
 
     void *cxl_page_start_addr = reinterpret_cast<void *>(
         reinterpret_cast<uintptr_t>(daemon_ctx.cxl_memory_addr) + total_msg_queue_zone_size);
     size_t total_page_size = daemon_ctx.options.cxl_memory_size - total_msg_queue_zone_size;
-    size_t total_page_num = total_page_size / page_size;
-    size_t swap_page_num = daemon_ctx.options.swap_zone_size / page_size;
-    size_t total_free_page_num = total_page_num - swap_page_num;
-    daemon_ctx.cxl_page_allocator.reset(new Allocator(
-        reinterpret_cast<uintptr_t>(cxl_page_start_addr), total_page_size, page_size));
+    daemon_ctx.total_page_num = total_page_size / page_size;
+    daemon_ctx.max_swap_page_num = daemon_ctx.options.swap_zone_size / page_size;
+    daemon_ctx.max_data_page_num = daemon_ctx.total_page_num - daemon_ctx.max_swap_page_num;
+    daemon_ctx.cxl_page_allocator.reset(new Allocator(total_page_size, page_size));
+
+    daemon_ctx.current_used_page_num = 0;
+    daemon_ctx.current_used_swap_page_num = 0;
 
     // TODO: 与master建立连接
 
@@ -82,4 +42,5 @@ int main(int argc, char *argv[]) {
 
     // TODO: 开始监听client的msg queue
 
+    return 0;
 }

@@ -17,7 +17,7 @@ constexpr static GAddr GNullPtr = 0;
 class PoolContext;
 
 /**
- * @brief 打开内存池。成功后返回内存池上下文指针，否则返回`nullptr`
+ * @brief 打开内存池。成功后返回内存池上下文指针，否则返回`nullptr`。返回对象由new操作生成，应由`Close()`关闭并删除
  *
  * @param master_ip MN的IP地址
  * @param master_port MN的端口号
@@ -41,6 +41,9 @@ class PoolContext {
     class __PoolContextImpl;
 
    public:
+    PoolContext(ClientOptions options);
+    ~PoolContext();
+
     /**
      * @brief 申请内存。内存申请策略按照客户端所在机柜就近分配。申请失败返回`GNullPtr`
      *

@@ -8,7 +8,7 @@
 
 template <typename K, typename V>
 class ConcurrentHashMap {
-    constexpr static const size_t BucketNum = 128;
+    constexpr static const size_t BucketNum = 32;
 
    public:
     ConcurrentHashMap() {

@@ -28,6 +28,10 @@ class IDGenerator {
      */
     void recycle(id_t id);
 
+    bool empty() const;
+
+    bool full() const;
+
     /**
      * @brief 返回分配的个数
      *
@@ -76,17 +80,15 @@ class IDGenerator {
  * @brief 利用bitset实现的allocator
  *
  */
-class Allocator : private IDGenerator {
+class Allocator : public IDGenerator {
    public:
-    Allocator(uintptr_t start_ptr, size_t total_size, size_t unit_size);
+    Allocator(size_t total_size, size_t unit_size);
 
-    Allocator(uintptr_t start_ptr, size_t unit_size, size_t size, size_t capacity, const void* data,
-              size_t data_size);
+    Allocator(size_t unit_size, size_t size, size_t capacity, const void* data, size_t data_size);
 
     uintptr_t allocate(size_t n);
-    void deallocate(size_t n);
+    void deallocate(uintptr_t ptr);
 
    private:
-    const uintptr_t m_start_ptr;
     const size_t m_unit;
 };
