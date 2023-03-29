@@ -11,7 +11,9 @@ endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-include_directories("include" "src/include")
+# set(erpc "third_party/eRPC/liberpc.a")
+link_directories("third_party/eRPC/")
+include_directories("include" "src/include" "third_party")
 
 # ##################################################
 #                         库

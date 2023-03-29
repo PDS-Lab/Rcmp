@@ -1,9 +1,11 @@
 #include "utils.hpp"
 
-#include <sys/time.h>
 #include <pthread.h>
 #include <sched.h>
+#include <sys/time.h>
+
 #include <cstdlib>
+
 #include "log.hpp"
 
 void threadBindCore(int core_id) {
@@ -16,11 +18,7 @@ void threadBindCore(int core_id) {
     DLOG_ASSERT(result == 0, "Error: Failed to bind thread to core %d", core_id);
 }
 
-uint64_t rdtsc() {
-    uint32_t low, high;
-    asm volatile("rdtsc" : "=a"(low), "=d"(high));
-    return ((uint64_t)high << 32) | low;
-}
+uint64_t rdtsc() { return __builtin_ia32_rdtsc(); }
 
 uint64_t getTimestamp() {
     struct timeval tv;

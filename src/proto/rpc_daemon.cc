@@ -7,8 +7,8 @@
 
 namespace rpc_daemon {
 
-offset_t getPageRef(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
-                   page_id_t page_id) {
+GetPageRefReply getPageRef(DaemonContext& daemon_context,
+                           DaemonToClientConnection& client_connection, page_id_t page_id) {
     PageMetadata* page_metadata;
     bool ret = daemon_context.page_table.find(page_id, &page_metadata);
 
@@ -19,16 +19,21 @@ offset_t getPageRef(DaemonContext& daemon_context, DaemonToClientConnection& cli
 
     page_metadata->ref_client.insert(&client_connection);
 
-    return page_metadata->cxl_memory_offset;
+    return {
+        .local_get = true,
+        .offset = page_metadata->cxl_memory_offset,
+    };
 }
 
-bool allocPageMemory(DaemonContext& daemon_context, DaemonToMasterConnection& master_connection, page_id_t page_id, size_t slab_size) {
-    DLOG_ASSERT(daemon_context.current_used_page_num < daemon_context.max_data_page_num, "Can't allocate more page memory");
+bool allocPageMemory(DaemonContext& daemon_context, DaemonToMasterConnection& master_connection,
+                     page_id_t page_id, size_t slab_size) {
+    DLOG_ASSERT(daemon_context.current_used_page_num < daemon_context.max_data_page_num,
+                "Can't allocate more page memory");
 
     offset_t cxl_memory_offset = daemon_context.cxl_page_allocator->allocate(1);
     DLOG_ASSERT(cxl_memory_offset != -1, "Can't allocate cxl memory");
 
-    PageMetadata *page_metadata = new PageMetadata(slab_size);
+    PageMetadata* page_metadata = new PageMetadata(slab_size);
     page_metadata->cxl_memory_offset = cxl_memory_offset;
 
     daemon_context.page_table.insert(page_id, page_metadata);
@@ -36,7 +41,9 @@ bool allocPageMemory(DaemonContext& daemon_context, DaemonToMasterConnection& ma
     return true;
 }
 
-rchms::GAddr alloc(DaemonContext& daemon_context, DaemonToClientConnection& client_connection, size_t n) {
+rchms::GAddr alloc(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
+                   size_t n) {
+    // alloc size aligned by cache line
     n = div_floor(n, min_slab_size);
 
     size_t slab_cls = n / min_slab_size - 1;
@@ -65,8 +72,8 @@ rchms::GAddr alloc(DaemonContext& daemon_context, DaemonToClientConnection& clie
     return GetGAddr(page_id, page_offset);
 }
 
-bool free(DaemonContext& daemon_context, DaemonToClientConnection& client_connection, rchms::GAddr gaddr,
-          size_t n) {
+bool free(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
+          rchms::GAddr gaddr, size_t n) {
     DLOG_FATAL("Not Support");
     return false;
 }

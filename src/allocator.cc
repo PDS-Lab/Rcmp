@@ -20,12 +20,13 @@ IDGenerator::id_t IDGenerator::gen() {
         return -1;
     }
 
-    while (1) {
+    while (true) {
         int idx = ffsl(~m_bset[m_gen_cur]);
         if (idx == 0) {
             m_gen_cur = (m_gen_cur + 1) % m_bset.size();
         } else {
             ++m_size;
+            m_bset[m_gen_cur] |= (1 << (idx - 1));
             return m_gen_cur * 64 + idx - 1;
         }
     }

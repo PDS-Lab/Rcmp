@@ -9,6 +9,9 @@ class ClientOptions {
     std::string master_ip;  // MN的IP
     uint16_t master_port;   // MN的端口
 
+    std::string client_ip;
+    uint16_t client_port;
+
     uint32_t rack_id;
 
     bool with_cxl = false;        // 是否注册为CXL客户端
@@ -19,6 +22,9 @@ class DaemonOptions {
    public:
     std::string master_ip;  // MN的IP
     uint16_t master_port;   // MN的端口
+
+    std::string daemon_ip;
+    uint16_t daemon_port;
 
     uint32_t rack_id;
 
@@ -35,6 +41,8 @@ class MasterOptions {
     public:
     std::string master_ip;  // MN的IP
     uint16_t master_port;   // MN的端口
+
+    size_t max_cluster_mac_num; // 集群中最多连接个数
 };
 
 }  // namespace rchms

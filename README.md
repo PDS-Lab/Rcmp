@@ -47,3 +47,8 @@ RCHMS应用程序在单个计算节点（CN）上运行，可以访问一个或�
 * Page Table Cache：本地page缓存
 * Msg Queue：与Daemon通信的消息队列
 * RRPC：RDMA RPC通信模块
+
+
+# 注
+
+**千万不要修改`third_party`目录下的任何内容。**

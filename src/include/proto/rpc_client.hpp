@@ -2,6 +2,7 @@
 
 #include "common.hpp"
 #include "pool_impl.hpp"
+#include "rpc.hpp"
 
 namespace rpc_client {
 
