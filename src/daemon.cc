@@ -2,7 +2,7 @@
 #include <sys/mman.h>
 
 #include "common.hpp"
-#include "daemon_impl.hpp"
+#include "impl.hpp"
 #include "log.hpp"
 #include "proto/rpc_master.hpp"
 
@@ -10,6 +10,20 @@ DaemonContext &DaemonContext::getInstance() {
     static DaemonContext daemon_ctx;
     return daemon_ctx;
 }
+
+DaemonConnection *DaemonContext::get_connection(mac_id_t mac_id) {
+    DLOG_ASSERT(mac_id != daemon_id, "Can't find self connection");
+    if (mac_id == master_id) {
+        return &master_connection;
+    } else {
+        DaemonConnection *ctx;
+        bool ret = connect_table.find(mac_id, &ctx);
+        DLOG_ASSERT(ret, "Can't find mac %d", mac_id);
+        return ctx;
+    }
+}
+
+erpc::IBRpcWrap DaemonContext::get_erpc() { DLOG_FATAL("Not Support"); }
 
 PageMetadata::PageMetadata(size_t slab_size) : slab_allocator(page_size, slab_size) {}
 
@@ -51,8 +65,9 @@ int main(int argc, char *argv[]) {
     daemon_ctx.cxl_msg_queue_allocator.reset(
         new Allocator(total_msg_queue_zone_size, daemon_ctx.options.cxl_msg_queue_size));
 
-    void *cxl_page_start_addr = reinterpret_cast<void *>(
-        reinterpret_cast<uintptr_t>(daemon_ctx.cxl_memory_addr) + align_by(total_msg_queue_zone_size, page_size));
+    void *cxl_page_start_addr =
+        reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(daemon_ctx.cxl_memory_addr) +
+                                 align_by(total_msg_queue_zone_size, page_size));
     size_t total_page_size = daemon_ctx.options.cxl_memory_size - total_msg_queue_zone_size;
     daemon_ctx.total_page_num = total_page_size / page_size;
     daemon_ctx.max_swap_page_num = daemon_ctx.options.swap_zone_size / page_size;

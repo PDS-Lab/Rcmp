@@ -23,7 +23,7 @@ JoinDaemonReply joinDaemon(MasterContext& master_context,
     rack_table->daemon_connect->daemon_id = mac_id;
 
     master_context.cluster_manager.cluster_rack_table.insert(req.rack_id, rack_table);
-    master_context.cluster_manager.cluster_connect_table.insert(daemon_connection.daemon_id,
+    master_context.cluster_manager.connect_table.insert(daemon_connection.daemon_id,
                                                                 &daemon_connection);
 
     JoinDaemonReply reply;

@@ -2,6 +2,7 @@
 
 #include <config.hpp>
 #include <cstdint>
+#include <utility>
 
 #define CACHE_ALIGN __attribute__((aligned(cache_line_size)))
 
@@ -21,3 +22,21 @@ D align_by(D x, uint64_t aligned) {
 void threadBindCore(int core_id);
 uint64_t rdtsc();
 uint64_t getTimestamp();
+
+template <typename R, typename... Args>
+struct function_traits_helper {
+    static constexpr std::size_t count = sizeof...(Args);
+    using result_type = R;
+    using args_tuple_type = std::tuple<Args...>;
+    template <std::size_t N>
+    using args_type = typename std::tuple_element<N, std::tuple<Args...>>::type;
+};
+
+template <typename T>
+struct function_traits;
+template <typename R, typename... Args>
+struct function_traits<R(Args...)> : public function_traits_helper<R, Args...> {};
+template <typename R, typename... Args>
+struct function_traits<R(*)(Args...)> : public function_traits_helper<R, Args...> {};
+template <typename R, typename... Args>
+struct function_traits<R(&)(Args...)> : public function_traits_helper<R, Args...> {};

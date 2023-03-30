@@ -1,10 +1,10 @@
 #pragma once
 
 #include "common.hpp"
-#include "daemon_impl.hpp"
+#include "impl.hpp"
 #include "log.hpp"
 #include "rchms.hpp"
-#include "rpc.hpp"
+#include "rpc_base.hpp"
 
 namespace rpc_daemon {
 

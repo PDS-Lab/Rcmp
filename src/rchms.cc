@@ -3,13 +3,13 @@
 #include <cstdint>
 
 #include "common.hpp"
-#include "pool_impl.hpp"
+#include "impl.hpp"
 #include "status.hpp"
 
 namespace rchms {
 
 PoolContext::PoolContext(ClientOptions options) {
-    __PoolContextImpl *impl = new __PoolContextImpl();
+    PoolContextImpl *impl = new PoolContextImpl();
     DLOG_ASSERT(impl != nullptr, "Can't alloc ContextImpl");
     impl->options = options;
 

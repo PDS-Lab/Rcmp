@@ -38,7 +38,7 @@ class PoolContext {
      * @brief `PoolContext`内部实现
      * 
      */
-    class __PoolContextImpl;
+    class PoolContextImpl;
 
    public:
     PoolContext(ClientOptions options);
@@ -79,7 +79,7 @@ class PoolContext {
     Status Free(GAddr gaddr, size_t size);
 
    private:
-    __PoolContextImpl *__impl;
+    PoolContextImpl *__impl;
 };
 
 }  // namespace rchms

@@ -1,22 +1,8 @@
 #pragma once
 
 #include "common.hpp"
-#include "master_impl.hpp"
-#include "rpc.hpp"
-
-template <typename R, typename... Args>
-struct function_traits_helper {
-    static constexpr std::size_t count = sizeof...(Args);
-    using result_type = R;
-    using args_tuple_type = std::tuple<Args...>;
-    template <std::size_t N>
-    using args_type = typename std::tuple_element<N, std::tuple<Args...>>::type;
-};
-
-template <typename T>
-struct function_traits;
-template <typename R, typename... Args>
-struct function_traits<R(Args...)> : public function_traits_helper<R, Args...> {};
+#include "impl.hpp"
+#include "rpc_base.hpp"
 
 namespace rpc_master {
 

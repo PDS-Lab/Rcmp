@@ -1,8 +1,8 @@
 #pragma once
 
 #include "common.hpp"
-#include "pool_impl.hpp"
-#include "rpc.hpp"
+#include "impl.hpp"
+#include "rpc_base.hpp"
 
 namespace rpc_client {
 

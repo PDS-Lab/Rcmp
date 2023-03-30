@@ -2,8 +2,9 @@
 
 #include "common.hpp"
 #include "eRPC/erpc.h"
+#include "impl.hpp"
 #include "log.hpp"
-#include "master_impl.hpp"
+#include "proto/rpc_adaptor.hpp"
 #include "proto/rpc_master.hpp"
 
 MasterContext &MasterContext::getInstance() {
@@ -11,24 +12,15 @@ MasterContext &MasterContext::getInstance() {
     return master_ctx;
 }
 
-void req_joinDaemon(erpc::ReqHandle *req_handle, void *context) {
-    MasterContext &master_ctx = MasterContext::getInstance();
-    erpc::ReqHandleWrap req_wrap(req_handle);
-
-    auto resp_raw = req_wrap.get_pre_resp_msgbuf();
-    auto req_raw = req_wrap.get_req_msgbuf();
-
-    auto req = reinterpret_cast<rpc_master::JoinDaemonRequest *>(req_raw.get_buf());
-    auto resp = reinterpret_cast<rpc_master::JoinDaemonReply *>(resp_raw.get_buf());
-
-    MasterToDaemonConnection *daemon_connection = new MasterToDaemonConnection();
-    *resp = rpc_master::joinDaemon(master_ctx, *daemon_connection, *req);
-
-    DLOG("Connection with daemon %d OK", resp->your_mac_id);
-
-    master_ctx.erpc_ctx.rpc_set[0].resize_msg_buffer(resp_raw, sizeof(rpc_master::JoinDaemonReply));
-    master_ctx.erpc_ctx.rpc_set[0].enqueue_response(req_wrap, resp_raw);
+MasterConnection *MasterContext::get_connection(mac_id_t mac_id) {
+    DLOG_ASSERT(mac_id != master_id, "Can't find self connection");
+    MasterConnection *ctx;
+    bool ret = cluster_manager.connect_table.find(mac_id, &ctx);
+    DLOG_ASSERT(ret, "Can't find mac %d", mac_id);
+    return ctx;
 }
+
+erpc::IBRpcWrap MasterContext::get_erpc() { return erpc_ctx.rpc_set[0]; }
 
 int main(int argc, char *argv[]) {
     rchms::MasterOptions options;
@@ -54,12 +46,13 @@ int main(int argc, char *argv[]) {
         master_ctx.options.master_ip + ":" + std::to_string(master_ctx.options.master_port);
     master_ctx.erpc_ctx.nexus.reset(new erpc::NexusWrap(master_uri));
 
-    master_ctx.erpc_ctx.nexus->register_req_func(1, req_joinDaemon);
+    master_ctx.erpc_ctx.nexus->register_req_func(1, bind_erpc_func<true>(rpc_master::joinDaemon));
 
     erpc::SMHandlerWrap smhw;
     smhw.set_null();
 
-    auto rpc = erpc::IBRpcWrap(master_ctx.erpc_ctx.nexus.get(), nullptr, 0, smhw);
+    auto rpc =
+        erpc::IBRpcWrap(master_ctx.erpc_ctx.nexus.get(), &MasterContext::getInstance(), 0, smhw);
     master_ctx.erpc_ctx.rpc_set.push_back(rpc);
 
     master_ctx.erpc_ctx.running = true;
