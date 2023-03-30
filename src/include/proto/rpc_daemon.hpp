@@ -8,6 +8,10 @@
 
 namespace rpc_daemon {
 
+struct JoinRackRequest : public RequestMsg {};
+struct JoinRackReply : public ResponseMsg {
+    mac_id_t mac_id;
+};
 /**
  * @brief 将client加入到机柜中。在建立连接时调用。
  *
@@ -16,65 +20,88 @@ namespace rpc_daemon {
  * @return true 加入成功
  * @return false 加入失败
  */
-bool joinRack(DaemonContext& daemon_context, DaemonToClientConnection& client_connection);
+JoinRackReply joinRack(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
+                       JoinRackRequest& req);
 
-struct GetPageRefReply {
+struct GetPageRefRequest : public RequestMsg {
+    page_id_t page_id;
+};
+struct GetPageRefReply : public ResponseMsg {
     bool local_get;
-    union {
-        offset_t offset;
-        struct {
-            char dest_daemon_ipv4[16];
-            uint16_t dest_daemon_port;
-        };
-    };
+    offset_t offset;
+    // union {
+    // struct {
+    //     char dest_daemon_ipv4[16];
+    //     uint16_t dest_daemon_port;
+    // };
+    // };
 };
 /**
  * @brief 获取page的引用。如果本地Page Table没有该page
- * id，则会触发远程调用。如果是直接内存访问，则返回-1，让client自己调用master的
+ * id，则会触发远程调用。
+ *
+ * // 如果是直接内存访问，则返回-1，让client自己调用master的
  *
  * @param daemon_context
  * @param client_connection
- * @param page_id
+ * @param req
  * @return GetPageRefReply
  */
 GetPageRefReply getPageRef(DaemonContext& daemon_context,
-                           DaemonToClientConnection& client_connection, page_id_t page_id);
+                           DaemonToClientConnection& client_connection, GetPageRefRequest& req);
 
+struct AllocPageMemoryRequest : public RequestMsg {
+    page_id_t page_id;
+    size_t slab_size;
+};
+struct AllocPageMemoryReply : public ResponseMsg {
+    bool ret;
+};
 /**
  * @brief 申请一个page物理地址空间
  *
  * @param daemon_context
  * @param master_connection
- * @param page_id
- * @param slab_size
- * @return true
- * @return false
+ * @param req
+ * @return AllocPageMemoryReply
  */
-bool allocPageMemory(DaemonContext& daemon_context, DaemonToMasterConnection& master_connection,
-                     page_id_t page_id, size_t slab_size);
+AllocPageMemoryReply allocPageMemory(DaemonContext& daemon_context,
+                                     DaemonToMasterConnection& master_connection,
+                                     AllocPageMemoryRequest& req);
 
+struct AllocRequest : public RequestMsg {
+    size_t n;
+};
+struct AllocReply : public ResponseMsg {
+    rchms::GAddr gaddr;
+};
 /**
  * @brief 申请一个内存地址。如果本地缺少有效的page，则向master发送`allocPage()`请求获取新page
  *
  * @param daemon_context
  * @param client_connection
- * @param n
- * @return rchms::GAddr
+ * @param req
+ * @return AllocReply
  */
-rchms::GAddr alloc(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
-                   size_t n);
+AllocReply alloc(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
+                 AllocRequest& req);
 
+struct FreeRequest : public RequestMsg {
+    rchms::GAddr gaddr;
+    size_t n;
+};
+struct FreeReply : public ResponseMsg {
+    bool ret;
+};
 /**
  * @brief 释放一个内存地址。
  *
  * @param daemon_context
  * @param client_connection
- * @param gaddr
- * @param n
- * @return true
- * @return false
+ * @param req
+ * @return FreeReply
  */
-bool free(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
-          rchms::GAddr gaddr, size_t n);
+FreeReply free(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
+               FreeRequest& req);
 
 }  // namespace rpc_daemon

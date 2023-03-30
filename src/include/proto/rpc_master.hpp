@@ -97,26 +97,4 @@ GetRackDaemonByPageIDReply getRackDaemonByPageID(MasterContext& master_context,
                                                  MasterToDaemonConnection& daemon_connection,
                                                  GetRackDaemonByPageIDRequest& req);
 
-#define ERPC_REQUEST_HANDLER_WRAPPER_NAME(hdl) __erpc_request_handler_##hdl##_handler
-#define ERPC_REQUEST_HANDLER_WRAPPER(handler)                                                      \
-    void ERPC_REQUEST_HANDLER_WRAPPER_NAME(handler)(erpc::ReqHandle * req_handle, void* context) { \
-        using ft = function_traits<decltype(handler)>;                                             \
-        using result_type = ft::result_type;                                                       \
-        using connection_type = ft::args_type<1>;                                                  \
-        auto* rpc = reinterpret_cast<erpc::Rpc<erpc::CTransport>*>(context);                       \
-        auto req_raw = req_handle->get_req_msgbuf();                                               \
-        auto& resp_raw = req_handle->pre_resp_msgbuf_;                                             \
-        auto req = reinterpret_cast<typename ft::args_type<2>>(req_raw->buf_);                     \
-        auto resp = reinterpret_cast<result_type*>(resp_raw.buf_);                                 \
-        MasterContext& master_context = MasterContext::getInstance();                              \
-        MasterConnection* m_conn;                                                                  \
-        bool ret =                                                                                 \
-            master_context.cluster_manager.cluster_connect_table.find(req->mac_id, &m_conn);       \
-        DLOG_ASSERT(ret, "Can't find connection %u", req->mac_id);                                 \
-        connection_type& conn = *m_conn;                                                           \
-        *resp = handler(master_context, conn, *req);                                               \
-        rpc->resize_msg_buffer(&resp_raw, sizeof(result_type));                                    \
-        rpc->enqueue_response(req_handle, &resp_raw);                                              \
-    }
-
 }  // namespace rpc_master

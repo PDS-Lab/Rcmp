@@ -6,7 +6,19 @@
 
 namespace rpc_client {
 
-void removePageCache(ClientContext& client_context, ClientToDaemonConnection& daemon_connection,
-                     page_id_t page_id);
+struct RemovePageCacheRequest : public RequestMsg {
+    page_id_t page_id;
+};
+struct RemovePageCacheReply : public ResponseMsg {};
+/**
+ * @brief 清理page cache
+ *
+ * @param client_context
+ * @param daemon_connection
+ * @param page_id
+ */
+RemovePageCacheReply removePageCache(ClientContext& client_context,
+                                     ClientToDaemonConnection& daemon_connection,
+                                     RemovePageCacheRequest& req);
 
-}
+}  // namespace rpc_client

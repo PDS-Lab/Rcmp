@@ -4,8 +4,8 @@
 #include "eRPC/erpc.h"
 #include "impl.hpp"
 #include "log.hpp"
+#include "proto/rpc.hpp"
 #include "proto/rpc_adaptor.hpp"
-#include "proto/rpc_master.hpp"
 
 MasterContext &MasterContext::getInstance() {
     static MasterContext master_ctx;
@@ -46,7 +46,9 @@ int main(int argc, char *argv[]) {
         master_ctx.options.master_ip + ":" + std::to_string(master_ctx.options.master_port);
     master_ctx.erpc_ctx.nexus.reset(new erpc::NexusWrap(master_uri));
 
-    master_ctx.erpc_ctx.nexus->register_req_func(1, bind_erpc_func<true>(rpc_master::joinDaemon));
+    using JoinDaemonRPC = RPC_TYPE_STRUCT(rpc_master::joinDaemon);
+
+    master_ctx.erpc_ctx.nexus->register_req_func(JoinDaemonRPC::rpc_type, bind_erpc_func<true>(rpc_master::joinDaemon));
 
     erpc::SMHandlerWrap smhw;
     smhw.set_null();

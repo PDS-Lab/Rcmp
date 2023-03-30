@@ -4,7 +4,7 @@
 #include "common.hpp"
 #include "impl.hpp"
 #include "log.hpp"
-#include "proto/rpc_master.hpp"
+#include "proto/rpc.hpp"
 
 DaemonContext &DaemonContext::getInstance() {
     static DaemonContext daemon_ctx;
@@ -93,23 +93,25 @@ int main(int argc, char *argv[]) {
         daemon_ctx.options.master_ip + ":" + std::to_string(daemon_ctx.options.master_port);
     daemon_ctx.erpc_ctx.master_session = rpc.create_session(master_uri, 0);
 
-    auto req_raw = rpc.alloc_msg_buffer_or_die(sizeof(rpc_master::JoinDaemonRequest));
-    auto resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(rpc_master::JoinDaemonReply));
+    using JoinDaemonRPC = RPC_TYPE_STRUCT(rpc_master::joinDaemon);
 
-    auto req = reinterpret_cast<rpc_master::JoinDaemonRequest *>(req_raw.get_buf());
+    auto req_raw = rpc.alloc_msg_buffer_or_die(sizeof(JoinDaemonRPC::RequestType));
+    auto resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(JoinDaemonRPC::ResponseType));
+
+    auto req = reinterpret_cast<JoinDaemonRPC::RequestType *>(req_raw.get_buf());
     req->free_page_num = daemon_ctx.max_data_page_num;
     req->rack_id = daemon_ctx.options.rack_id;
     req->with_cxl = daemon_ctx.options.with_cxl;
 
     volatile bool f = false;
-    rpc.enqueue_request(daemon_ctx.erpc_ctx.master_session, 1, req_raw, resp_raw, joinDaemon_cb,
-                        const_cast<bool *>(&f));
+    rpc.enqueue_request(daemon_ctx.erpc_ctx.master_session, JoinDaemonRPC::rpc_type, req_raw,
+                        resp_raw, joinDaemon_cb, const_cast<bool *>(&f));
 
     while (!f) {
         rpc.run_event_loop_once();
     }
 
-    auto resp = reinterpret_cast<rpc_master::JoinDaemonReply *>(resp_raw.get_buf());
+    auto resp = reinterpret_cast<JoinDaemonRPC::ResponseType *>(resp_raw.get_buf());
 
     daemon_ctx.master_connection.ip = daemon_ctx.options.master_ip;
     daemon_ctx.master_connection.port = daemon_ctx.options.master_port;
