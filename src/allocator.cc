@@ -59,15 +59,15 @@ std::pair<const void*, size_t> IDGenerator::getRawData() const {
     return {m_bset.data(), m_bset.size() * sizeof(uint64_t)};
 }
 
-Allocator::Allocator(size_t total_size, size_t unit_size) : m_unit(unit_size) {
+SingleAllocator::SingleAllocator(size_t total_size, size_t unit_size) : m_unit(unit_size) {
     addCapacity(total_size / unit_size);
 }
 
-Allocator::Allocator(size_t unit_size, size_t size, size_t capacity, const void* data,
+SingleAllocator::SingleAllocator(size_t unit_size, size_t size, size_t capacity, const void* data,
                      size_t data_size)
     : m_unit(unit_size), IDGenerator(size, capacity, data, data_size) {}
 
-uintptr_t Allocator::allocate(size_t n) {
+uintptr_t SingleAllocator::allocate(size_t n) {
     DLOG_ASSERT(n == 1, "Allocator can only allocate 1 element");
     IDGenerator::id_t id = gen();
     if (UNLIKELY(id == -1)) {
@@ -76,4 +76,4 @@ uintptr_t Allocator::allocate(size_t n) {
     return id * m_unit;
 }
 
-void Allocator::deallocate(uintptr_t ptr) { recycle(ptr / m_unit); }
+void SingleAllocator::deallocate(uintptr_t ptr) { recycle(ptr / m_unit); }

@@ -10,7 +10,8 @@ namespace rpc_daemon {
 
 struct JoinRackRequest : public RequestMsg {};
 struct JoinRackReply : public ResponseMsg {
-    mac_id_t mac_id;
+    mac_id_t client_mac_id;
+    mac_id_t daemon_mac_id;
 };
 /**
  * @brief 将client加入到机柜中。在建立连接时调用。

@@ -10,13 +10,7 @@ enum ConcurrentQueueConsumerMode { SC, MC };
 
 template <typename T, size_t SZ, ConcurrentQueueProducerMode PROD_MODE,
           ConcurrentQueueConsumerMode CONS_MODE>
-class ConcurrentQueue {
-   public:
-    bool empty() const;
-    size_t size() const;
-    bool tryEnqueue(T el);
-    bool tryDequeue(T *el);
-};
+class ConcurrentQueue;
 
 /**
  * @brief 单生产者单消费者队列
@@ -35,7 +29,7 @@ class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::SP, ConcurrentQueueCon
         if (UNLIKELY(next_tail == m_head.load(std::memory_order_acquire))) {
             return false;  // 队列已满
         }
-        data_[tail] = n;
+        m_data[tail] = n;
         m_tail.store(next_tail, std::memory_order_release);
         return true;
     }
@@ -45,13 +39,13 @@ class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::SP, ConcurrentQueueCon
         if (UNLIKELY(head == m_tail.load(std::memory_order_acquire))) {
             return false;  // 队列已空
         }
-        *n = data_[head];
+        *n = m_data[head];
         m_head.store((head + 1) % SZ, std::memory_order_release);
         return true;
     }
 
    private:
-    T data_[SZ];
+    T m_data[SZ];
     CACHE_ALIGN std::atomic<int> m_head;
     CACHE_ALIGN std::atomic<int> m_tail;
 };

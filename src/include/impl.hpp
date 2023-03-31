@@ -50,20 +50,20 @@ struct ClusterManager {
 };
 
 struct MasterContext {
-    rchms::MasterOptions options;
+    rchms::MasterOptions m_options;
 
-    mac_id_t master_id;  // 节点id，由master分配
+    mac_id_t m_master_id;  // 节点id，由master分配
 
-    ClusterManager cluster_manager;
+    ClusterManager m_cluster_manager;
 
-    std::unique_ptr<IDGenerator> page_id_allocator;
-    ConcurrentHashMap<page_id_t, PageRackMetadata *> page_directory;
+    ConcurrentHashMap<page_id_t, PageRackMetadata *> m_page_directory;
+    std::unique_ptr<IDGenerator> m_page_id_allocator;
 
     struct {
         volatile bool running;
         std::unique_ptr<erpc::NexusWrap> nexus;
         std::vector<erpc::IBRpcWrap> rpc_set;
-    } erpc_ctx;
+    } m_erpc_ctx;
 
     MasterContext() = default;
     MasterContext(MasterContext &) = delete;
@@ -72,7 +72,6 @@ struct MasterContext {
     MasterContext &operator=(MasterContext &&) = delete;
 
     static MasterContext &getInstance();
-
     MasterConnection *get_connection(mac_id_t mac_id);
     erpc::IBRpcWrap get_erpc();
 };
@@ -104,43 +103,43 @@ struct DaemonToDaemonConnection : public DaemonConnection {
 
 struct PageMetadata {
     offset_t cxl_memory_offset;
-    Allocator slab_allocator;
+    SingleAllocator slab_allocator;
     std::unordered_set<DaemonToClientConnection *> ref_client;
 
     PageMetadata(size_t slab_size);
 };
 
 struct DaemonContext {
-    rchms::DaemonOptions options;
+    rchms::DaemonOptions m_options;
 
-    mac_id_t daemon_id;  // 节点id，由master分配
+    mac_id_t m_daemon_id;  // 节点id，由master分配
 
-    int cxl_devdax_fd;
-    void *cxl_memory_addr;
+    int m_cxl_devdax_fd;
+    void *m_cxl_memory_addr;
 
-    size_t total_page_num;     // 所有page的个数
-    size_t max_swap_page_num;  // swap区的page个数
-    size_t max_data_page_num;  // 所有可用数据页个数
+    size_t m_total_page_num;     // 所有page的个数
+    size_t m_max_swap_page_num;  // swap区的page个数
+    size_t m_max_data_page_num;  // 所有可用数据页个数
 
-    size_t current_used_page_num;       // 当前使用的数据页个数
-    size_t current_used_swap_page_num;  // 当前正在swap的页个数
+    size_t m_current_used_page_num;       // 当前使用的数据页个数
+    size_t m_current_used_swap_page_num;  // 当前正在swap的页个数
 
-    DaemonToMasterConnection master_connection;
-    std::unique_ptr<Allocator> cxl_msg_queue_allocator;
-    std::vector<DaemonToClientConnection *> client_connect_table;
-    std::vector<DaemonToDaemonConnection *> other_daemon_connect_table;
-    ConcurrentHashMap<mac_id_t, DaemonConnection *> connect_table;
-    std::unique_ptr<Allocator> cxl_page_allocator;
-    ConcurrentHashMap<page_id_t, PageMetadata *> page_table;
+    DaemonToMasterConnection m_master_connection;
+    std::vector<DaemonToClientConnection *> m_client_connect_table;
+    std::vector<DaemonToDaemonConnection *> m_other_daemon_connect_table;
+    std::unique_ptr<SingleAllocator> m_cxl_msg_queue_allocator;
+    std::unique_ptr<SingleAllocator> m_cxl_page_allocator;
+    ConcurrentHashMap<mac_id_t, DaemonConnection *> m_connect_table;
+    ConcurrentHashMap<page_id_t, PageMetadata *> m_page_table;
 
-    std::array<std::list<page_id_t>, page_size / min_slab_size> can_alloc_slab_class_lists;
+    std::array<std::list<page_id_t>, page_size / min_slab_size> m_can_alloc_slab_class_lists;
 
     struct {
         volatile bool running;
         int master_session;
         std::unique_ptr<erpc::NexusWrap> nexus;
         std::vector<erpc::IBRpcWrap> rpc_set;
-    } erpc_ctx;
+    } m_erpc_ctx;
 
     DaemonContext() = default;
     DaemonContext(DaemonContext &) = delete;
@@ -149,6 +148,10 @@ struct DaemonContext {
     DaemonContext &operator=(DaemonContext &&) = delete;
 
     static DaemonContext &getInstance();
+
+    void createCXLPool();
+    void connectWithMaster();
+
     DaemonConnection *get_connection(mac_id_t mac_id);
     erpc::IBRpcWrap get_erpc();
 };
@@ -175,20 +178,17 @@ struct ClientToDaemonConnection : public ClientConnection {
 };
 
 struct ClientContext {
-    rchms::ClientOptions options;
+    rchms::ClientOptions m_options;
 
-    std::string ip;
-    uint16_t port;
+    mac_id_t m_client_id;
 
-    mac_id_t client_id;
+    int m_cxl_devdax_fd;
+    void *m_cxl_memory_addr;
 
-    int cxl_devdax_fd;
-    void *cxl_memory_addr;
-
-    ClientToMasterConnection master_connection;
-    ClientToDaemonConnection local_rack_daemon_connection;
-    ConcurrentHashMap<mac_id_t, ClientToDaemonConnection *> other_rack_daemon_connection;
-    ConcurrentHashMap<page_id_t, offset_t> page_table_cache;
+    ClientToMasterConnection m_master_connection;
+    ClientToDaemonConnection m_local_rack_daemon_connection;
+    ConcurrentHashMap<mac_id_t, ClientToDaemonConnection *> m_other_rack_daemon_connection;
+    ConcurrentHashMap<page_id_t, offset_t> m_page_table_cache;
 
     ClientConnection *get_connection(mac_id_t mac_id);
 };

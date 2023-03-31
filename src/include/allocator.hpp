@@ -80,11 +80,11 @@ class IDGenerator {
  * @brief 利用bitset实现的allocator
  *
  */
-class Allocator : public IDGenerator {
+class SingleAllocator : public IDGenerator {
    public:
-    Allocator(size_t total_size, size_t unit_size);
+    SingleAllocator(size_t total_size, size_t unit_size);
 
-    Allocator(size_t unit_size, size_t size, size_t capacity, const void* data, size_t data_size);
+    SingleAllocator(size_t unit_size, size_t size, size_t capacity, const void* data, size_t data_size);
 
     uintptr_t allocate(size_t n);
     void deallocate(uintptr_t ptr);

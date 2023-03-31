@@ -1,36 +1,110 @@
-#include <fcntl.h>
-#include <sys/mman.h>
+#include <chrono>
+#include <future>
 
 #include "common.hpp"
+#include "cxl.hpp"
 #include "impl.hpp"
 #include "log.hpp"
 #include "proto/rpc.hpp"
+#include "proto/rpc_adaptor.hpp"
+
+using namespace std::chrono_literals;
 
 DaemonContext &DaemonContext::getInstance() {
     static DaemonContext daemon_ctx;
     return daemon_ctx;
 }
 
+void DaemonContext::createCXLPool() {
+    // 1. 打开cxl设备映射
+    m_cxl_memory_addr =
+        cxl_open_simulate(m_options.cxl_devdax_path, m_options.cxl_memory_size, &m_cxl_devdax_fd);
+
+    // 2. 初始化CN连接
+    size_t total_msg_queue_zone_size =
+        m_options.max_client_limit * m_options.cxl_msg_queue_size * 2;
+    m_cxl_msg_queue_allocator.reset(
+        new SingleAllocator(total_msg_queue_zone_size, m_options.cxl_msg_queue_size));
+
+    // 3. 确认page个数
+    void *cxl_page_start_addr =
+        reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(m_cxl_memory_addr) +
+                                 align_by(total_msg_queue_zone_size, page_size));
+    size_t total_page_size = m_options.cxl_memory_size - total_msg_queue_zone_size;
+    m_total_page_num = total_page_size / page_size;
+    m_max_swap_page_num = m_options.swap_zone_size / page_size;
+    m_max_data_page_num = m_total_page_num - m_max_swap_page_num;
+    m_cxl_page_allocator.reset(new SingleAllocator(total_page_size, page_size));
+
+    m_current_used_page_num = 0;
+    m_current_used_swap_page_num = 0;
+}
+
+void DaemonContext::connectWithMaster() {
+    std::string server_uri = m_options.daemon_ip + ":" + std::to_string(m_options.daemon_port);
+    m_erpc_ctx.nexus.reset(new erpc::NexusWrap(server_uri));
+
+    erpc::SMHandlerWrap smhw;
+    smhw.set_empty();
+
+    auto rpc = erpc::IBRpcWrap(m_erpc_ctx.nexus.get(), nullptr, 0, smhw);
+    m_erpc_ctx.rpc_set.push_back(rpc);
+    DLOG_ASSERT(m_erpc_ctx.rpc_set.size() == 1);
+    rpc = get_erpc();
+
+    std::string master_uri = m_options.master_ip + ":" + std::to_string(m_options.master_port);
+    m_erpc_ctx.master_session = rpc.create_session(master_uri, 0);
+
+    using JoinDaemonRPC = RPC_TYPE_STRUCT(rpc_master::joinDaemon);
+
+    auto req_raw = rpc.alloc_msg_buffer_or_die(sizeof(JoinDaemonRPC::RequestType));
+    auto resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(JoinDaemonRPC::ResponseType));
+
+    auto req = reinterpret_cast<JoinDaemonRPC::RequestType *>(req_raw.get_buf());
+    req->free_page_num = m_max_data_page_num;
+    req->rack_id = m_options.rack_id;
+    req->with_cxl = m_options.with_cxl;
+
+    std::promise<void> pro;
+    std::future<void> fu = pro.get_future();
+    rpc.enqueue_request(m_erpc_ctx.master_session, JoinDaemonRPC::rpc_type, req_raw, resp_raw,
+                        erpc_general_promise_flag_cb, static_cast<void *>(&pro));
+
+    while (fu.wait_for(1ns) == std::future_status::timeout) {
+        rpc.run_event_loop_once();
+    }
+
+    auto resp = reinterpret_cast<JoinDaemonRPC::ResponseType *>(resp_raw.get_buf());
+
+    m_master_connection.ip = m_options.master_ip;
+    m_master_connection.port = m_options.master_port;
+    m_master_connection.master_id = resp->master_mac_id;
+    m_daemon_id = resp->daemon_mac_id;
+
+    rpc.free_msg_buffer(req_raw);
+    rpc.free_msg_buffer(resp_raw);
+
+    DLOG_ASSERT(m_master_connection.master_id == master_id, "Fail to get master id");
+    DLOG_ASSERT(m_daemon_id != master_id, "Fail to get daemon id");
+
+    DLOG("Connection with master OK, my id is %d", m_daemon_id);
+}
+
 DaemonConnection *DaemonContext::get_connection(mac_id_t mac_id) {
-    DLOG_ASSERT(mac_id != daemon_id, "Can't find self connection");
+    DLOG_ASSERT(mac_id != m_daemon_id, "Can't find self connection");
     if (mac_id == master_id) {
-        return &master_connection;
+        return &m_master_connection;
     } else {
         DaemonConnection *ctx;
-        bool ret = connect_table.find(mac_id, &ctx);
+        bool ret = m_connect_table.find(mac_id, &ctx);
         DLOG_ASSERT(ret, "Can't find mac %d", mac_id);
         return ctx;
     }
 }
 
-erpc::IBRpcWrap DaemonContext::get_erpc() { DLOG_FATAL("Not Support"); }
+erpc::IBRpcWrap DaemonContext::get_erpc() { return m_erpc_ctx.rpc_set[0]; }
 
 PageMetadata::PageMetadata(size_t slab_size) : slab_allocator(page_size, slab_size) {}
-
-void joinDaemon_cb(void *_c, void *_tag) {
-    auto f = reinterpret_cast<volatile bool *>(_tag);
-    *f = true;
-}
 
 int main(int argc, char *argv[]) {
     rchms::DaemonOptions options;
@@ -47,88 +121,16 @@ int main(int argc, char *argv[]) {
     options.cxl_msg_queue_size = 4 << 10;
 
     DaemonContext &daemon_ctx = DaemonContext::getInstance();
-    daemon_ctx.options = options;
+    daemon_ctx.m_options = options;
 
-    // TODO: simulate cxl file open
-    daemon_ctx.cxl_devdax_fd =
-        open(daemon_ctx.options.cxl_devdax_path.c_str(), O_RDWR | O_CREAT, 0666);
-    DLOG_ASSERT(daemon_ctx.cxl_devdax_fd != -1, "Failed to open cxl dev: %s",
-                daemon_ctx.options.cxl_devdax_path.c_str());
-    daemon_ctx.cxl_memory_addr =
-        mmap(nullptr, daemon_ctx.options.cxl_memory_size, PROT_READ | PROT_WRITE, MAP_SHARED,
-             daemon_ctx.cxl_devdax_fd, 0);
-    DLOG_ASSERT(daemon_ctx.cxl_memory_addr != MAP_FAILED, "Failed to mmap cxl dev: %s",
-                daemon_ctx.options.cxl_devdax_path.c_str());
-
-    size_t total_msg_queue_zone_size =
-        daemon_ctx.options.max_client_limit * daemon_ctx.options.cxl_msg_queue_size * 2;
-    daemon_ctx.cxl_msg_queue_allocator.reset(
-        new Allocator(total_msg_queue_zone_size, daemon_ctx.options.cxl_msg_queue_size));
-
-    void *cxl_page_start_addr =
-        reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(daemon_ctx.cxl_memory_addr) +
-                                 align_by(total_msg_queue_zone_size, page_size));
-    size_t total_page_size = daemon_ctx.options.cxl_memory_size - total_msg_queue_zone_size;
-    daemon_ctx.total_page_num = total_page_size / page_size;
-    daemon_ctx.max_swap_page_num = daemon_ctx.options.swap_zone_size / page_size;
-    daemon_ctx.max_data_page_num = daemon_ctx.total_page_num - daemon_ctx.max_swap_page_num;
-    daemon_ctx.cxl_page_allocator.reset(new Allocator(total_page_size, page_size));
-
-    daemon_ctx.current_used_page_num = 0;
-    daemon_ctx.current_used_swap_page_num = 0;
-
-    // TODO: 与master建立连接
-
-    std::string server_uri =
-        daemon_ctx.options.daemon_ip + ":" + std::to_string(daemon_ctx.options.daemon_port);
-    daemon_ctx.erpc_ctx.nexus.reset(new erpc::NexusWrap(server_uri));
-
-    erpc::SMHandlerWrap smhw;
-    smhw.set_empty();
-
-    auto rpc = erpc::IBRpcWrap(daemon_ctx.erpc_ctx.nexus.get(), nullptr, 0, smhw);
-    daemon_ctx.erpc_ctx.rpc_set.push_back(rpc);
-
-    std::string master_uri =
-        daemon_ctx.options.master_ip + ":" + std::to_string(daemon_ctx.options.master_port);
-    daemon_ctx.erpc_ctx.master_session = rpc.create_session(master_uri, 0);
-
-    using JoinDaemonRPC = RPC_TYPE_STRUCT(rpc_master::joinDaemon);
-
-    auto req_raw = rpc.alloc_msg_buffer_or_die(sizeof(JoinDaemonRPC::RequestType));
-    auto resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(JoinDaemonRPC::ResponseType));
-
-    auto req = reinterpret_cast<JoinDaemonRPC::RequestType *>(req_raw.get_buf());
-    req->free_page_num = daemon_ctx.max_data_page_num;
-    req->rack_id = daemon_ctx.options.rack_id;
-    req->with_cxl = daemon_ctx.options.with_cxl;
-
-    volatile bool f = false;
-    rpc.enqueue_request(daemon_ctx.erpc_ctx.master_session, JoinDaemonRPC::rpc_type, req_raw,
-                        resp_raw, joinDaemon_cb, const_cast<bool *>(&f));
-
-    while (!f) {
-        rpc.run_event_loop_once();
-    }
-
-    auto resp = reinterpret_cast<JoinDaemonRPC::ResponseType *>(resp_raw.get_buf());
-
-    daemon_ctx.master_connection.ip = daemon_ctx.options.master_ip;
-    daemon_ctx.master_connection.port = daemon_ctx.options.master_port;
-    daemon_ctx.master_connection.master_id = resp->my_mac_id;
-    daemon_ctx.daemon_id = resp->your_mac_id;
-
-    DLOG_ASSERT(daemon_ctx.master_connection.master_id == master_id, "Fail to get master id");
-    DLOG_ASSERT(daemon_ctx.daemon_id != master_id, "Fail to get daemon id");
-
-    DLOG("Connection with master OK, my id is %d", daemon_ctx.daemon_id);
-
-    getchar();
-    getchar();
+    daemon_ctx.createCXLPool();
+    daemon_ctx.connectWithMaster();
 
     // TODO: 开始监听master的RRPC
 
     // TODO: 开始监听client的msg queue
 
+    getchar();
+    getchar();
     return 0;
 }

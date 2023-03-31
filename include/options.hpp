@@ -38,11 +38,11 @@ class DaemonOptions {
 };
 
 class MasterOptions {
-    public:
+   public:
     std::string master_ip;  // MN的IP
     uint16_t master_port;   // MN的端口
 
-    size_t max_cluster_mac_num; // 集群中最多连接个数
+    size_t max_cluster_mac_num;  // 集群中最多连接个数
 };
 
 }  // namespace rchms

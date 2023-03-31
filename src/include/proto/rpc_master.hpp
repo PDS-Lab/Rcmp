@@ -12,8 +12,8 @@ struct JoinDaemonRequest : public RequestMsg {
     size_t free_page_num;
 };
 struct JoinDaemonReply : public ResponseMsg {
-    mac_id_t your_mac_id;
-    mac_id_t my_mac_id;
+    mac_id_t daemon_mac_id;
+    mac_id_t master_mac_id;
 };
 /**
  * @brief 将daemon加入到集群中。在建立连接时调用。
@@ -48,7 +48,6 @@ struct AllocPageRequest : public RequestMsg {
 };
 struct AllocPageReply : public ResponseMsg {
     page_id_t page_id;
-    bool need_self_alloc_page_memory;
 };
 /**
  * @brief
@@ -66,13 +65,15 @@ AllocPageReply allocPage(MasterContext& master_context, MasterToDaemonConnection
 struct FreePageRequest : public RequestMsg {
     page_id_t page_id;
 };
-struct FreePageReply : public ResponseMsg {};
+struct FreePageReply : public ResponseMsg {
+    bool ret;
+};
 /**
  * @brief 释放page。该操作需要保证daemon本身持有这个页时才能释放这个page。
  *
  * @param master_context
  * @param daemon_connection
- * @param page_id
+ * @param req
  */
 FreePageReply freePage(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
                        FreePageRequest& req);
@@ -90,7 +91,7 @@ struct GetRackDaemonByPageIDReply : public ResponseMsg {
  *
  * @param master_context
  * @param client_connection
- * @param page_id
+ * @param req
  * @return GetRackDaemonByPageIDReply
  */
 GetRackDaemonByPageIDReply getRackDaemonByPageID(MasterContext& master_context,

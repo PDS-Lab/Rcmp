@@ -72,3 +72,10 @@ auto bind_erpc_func(RpcFunc func) {
     detail::ErpcFuncWrapper<RpcFunc>::registed = true;
     return detail::erpc_call_target<detail::ErpcFuncWrapper<RpcFunc>, ESTABLISH>;
 }
+
+/**
+ * @brief 作为通用的erpc回调函数
+ * 
+ * @param pr std::promise<void>
+ */
+void erpc_general_promise_flag_cb(void *, void *pr);

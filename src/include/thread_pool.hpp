@@ -20,14 +20,14 @@ class ThreadPool {
 
    private:
     // need to keep track of threads so we can join them
-    std::vector<std::thread> workers;
+    std::vector<std::thread> m_workers;
     // the task queue
-    std::queue<std::function<void()> > tasks;
+    std::queue<std::function<void()> > m_tasks;
 
     // synchronization
-    std::mutex queue_mutex;
-    std::condition_variable condition;
-    bool stop;
+    std::mutex m_queue_mutex;
+    std::condition_variable m_condition;
+    bool m_stop;
 };
 
 // add new work item to the pool
@@ -41,13 +41,13 @@ auto ThreadPool::enqueue(F&& f, Args&&... args)
 
     std::future<return_type> res = task->get_future();
     {
-        std::unique_lock<std::mutex> lock(queue_mutex);
+        std::unique_lock<std::mutex> lock(m_queue_mutex);
 
         // don't allow enqueueing after stopping the pool
-        DLOG_ASSERT(!stop, "enqueue on stopped ThreadPool");
+        DLOG_ASSERT(!m_stop, "enqueue on stopped ThreadPool");
 
-        tasks.emplace([task]() { (*task)(); });
+        m_tasks.emplace([task]() { (*task)(); });
     }
-    condition.notify_one();
+    m_condition.notify_one();
     return res;
 }

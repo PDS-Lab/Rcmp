@@ -74,5 +74,5 @@ class ConcurrentHashMap {
     std::unordered_map<K, V> m_maps[BucketNum];
     CACHE_ALIGN SharedMutex m_locks[BucketNum];
 
-    int hash(K key) const { return std::hash<K>()(key) % BucketNum; }
+    static int hash(K key) { return std::hash<K>()(key) % BucketNum; }
 };
