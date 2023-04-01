@@ -7,40 +7,85 @@
 
 #include "allocator.hpp"
 
+namespace msgq {
+
+struct MsgBuffer;
+struct MsgQueue;
+
+using msgq_handler_t = void (*)(MsgBuffer &req, MsgBuffer &resp, void *ctx);
+using msgq_callback_t = void (*)(MsgBuffer &resp, void *arg);
+
+constexpr static uint8_t INVALID_PADDING_FLAG = 255;
+
 struct MsgHeader final {
     uint8_t rpc_type;
     enum : uint8_t { REQ, RESP } msg_type;
-    size_t size;
-    void (*cb)(void *resp, size_t size, void *arg);
+    size_t size;            // 实际数据大小
+    msgq_callback_t cb;
     void *arg;
 
     uint8_t data[0];
 };
 
+struct MsgBuffer {
+    size_t size();
+    void *get_buf();
+    void reset(size_t size);
+
+    MsgQueue *m_q;
+    MsgHeader *m_msg;      // 指向MsgHeader的地址
+    size_t m_size;          // 实际数据大小
+};
+
+
 struct MsgQueue final {
+    constexpr static size_t RING_BUF_OFF = 16;
+
     MsgQueue();
     ~MsgQueue();
 
-    void *alloc_msg_buffer(size_t size);
-    void enqueue_request(uint8_t rpc_type, void *obj_addr, size_t size,
-                         void (*cb)(void *resp, size_t size, void *arg), void *arg);
-    void run_event_loop_once();
-    void free_msg_buffer(void *obj_addr, size_t size);
+    MsgHeader * alloc_msg_buffer(size_t size);
+    void enqueue_msg(uint8_t rpc_type, MsgHeader *h, size_t size);
+    size_t dequeue_msg(MsgHeader **start_h);
+    void free_msg_buffer(MsgHeader *h, size_t size, bool tail_valid);
 
     struct msg_ring_headtail {
         std::atomic<uint32_t> head; /**< prod/consumer head. */
         std::atomic<uint32_t> tail; /**< prod/consumer tail. */
     };
 
-    static void (*__handlers[(1 << (sizeof(uint8_t) * 8)) - 1])(void *req, size_t size, void *resp, void *ctx);
-
-    void *ctx;
     msg_ring_headtail buf_head;  // enq
     msg_ring_headtail buf_tail;  // deq
 
-    uint8_t buf[0];
+    uint8_t ring_buf[0];
+};
 
-    constexpr static size_t RING_BUF_OFF = 24;
+struct MsgQueueNexus {
+    constexpr static size_t max_msgq_handler = (1 << (sizeof(uint8_t) * 8)) - 1;
+
+    MsgQueueNexus(void *msgq_zone_start_addr);
+
+    void register_req_func(uint8_t rpc_type, msgq_handler_t handler);
+
+    static msgq_handler_t __handlers[max_msgq_handler];
+
+    void *m_msgq_zone_start_addr;
+};
+
+struct MsgQueueRPC {
+
+    MsgQueueRPC(MsgQueueNexus *nexus, void *ctx);
+
+    MsgBuffer alloc_msg_buffer(size_t size);
+    void enqueue_request(uint8_t rpc_type, MsgBuffer& msg_buf,
+                         msgq_callback_t cb, void *arg);
+    void run_event_loop_once();
+    void free_msg_buffer(MsgBuffer& msg_buf);
+
+    MsgQueueNexus *m_nexus;
+    MsgQueue *m_send_queue;
+    MsgQueue *m_recv_queue;
+    void *m_ctx;
 };
 
 struct MsgQueueManager {
@@ -49,7 +94,6 @@ struct MsgQueueManager {
     const static size_t RING_ELEM_SIZE = sizeof(MsgQueue) + RING_BUF_LEN;
     const static size_t RING_BUF_OFF = sizeof(MsgQueue);
     const static size_t RING_BUF_END_OFF = sizeof(MsgQueue) + RING_BUF_LEN;
-    const static int8_t INVALID_PADDING_FLAG = -1;
 
     uintptr_t start_addr;
     uint32_t ring_cnt;
@@ -63,7 +107,9 @@ struct MsgQueueManager {
 
     MsgQueue *alloc_ring();
     static uint32_t BUF_PLUS(uint32_t p, uint32_t len) {
-        return (((p) + (len)-RING_BUF_OFF) % (RING_BUF_LEN) + RING_BUF_OFF);
+        return (p + len) % RING_BUF_LEN;
     }
     void free_ring(MsgQueue *msgq);
 };
+
+}
