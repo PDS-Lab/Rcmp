@@ -8,7 +8,11 @@
 
 namespace rpc_daemon {
 
-struct JoinRackRequest : public RequestMsg {};
+struct JoinRackRequest : public RequestMsg {
+    char client_ipv4[16];
+    uint16_t client_port;
+    rack_id_t rack_id;
+};
 struct JoinRackReply : public ResponseMsg {
     mac_id_t client_mac_id;
     mac_id_t daemon_mac_id;

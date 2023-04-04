@@ -38,7 +38,7 @@ JoinClientReply joinClient(MasterContext& master_context,
                            MasterToClientConnection& client_connection, JoinClientRequest& req) {
     RackMacTable* rack_table;
     bool ret = master_context.m_cluster_manager.cluster_rack_table.find(req.rack_id, &rack_table);
-    DLOG_ASSERT(!ret, "Don't find rack %u", req.rack_id);
+    DLOG_ASSERT(ret, "Don't find rack %u", req.rack_id);
 
     mac_id_t mac_id = master_context.m_cluster_manager.mac_id_allocator->gen();
 

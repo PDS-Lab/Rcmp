@@ -5,6 +5,7 @@
 #include "cxl.hpp"
 #include "impl.hpp"
 #include "log.hpp"
+#include "msg_queue.hpp"
 #include "proto/rpc.hpp"
 #include "proto/rpc_adaptor.hpp"
 
@@ -15,32 +16,27 @@ DaemonContext &DaemonContext::getInstance() {
     return daemon_ctx;
 }
 
-void DaemonContext::createCXLPool() {
+void DaemonContext::initCXLPool() {
     // 1. 打开cxl设备映射
     m_cxl_memory_addr =
         cxl_open_simulate(m_options.cxl_devdax_path, m_options.cxl_memory_size, &m_cxl_devdax_fd);
 
-    // 2. 初始化CN连接
-    size_t total_msg_queue_zone_size =
-        m_options.max_client_limit * m_options.cxl_msg_queue_size * 2;
-    m_cxl_msg_queue_allocator.reset(
-        new SingleAllocator(total_msg_queue_zone_size, m_options.cxl_msg_queue_size));
+    cxl_memory_init(cxl_format, m_cxl_memory_addr, m_options.cxl_memory_size,
+                    m_options.cxl_msgq_size);
 
-    // 3. 确认page个数
-    void *cxl_page_start_addr =
-        reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(m_cxl_memory_addr) +
-                                 align_by(total_msg_queue_zone_size, page_size));
-    size_t total_page_size = m_options.cxl_memory_size - total_msg_queue_zone_size;
-    m_total_page_num = total_page_size / page_size;
+    // 2. 确认page个数
+    m_total_page_num = cxl_format.super_block->page_data_zone_size / page_size;
     m_max_swap_page_num = m_options.swap_zone_size / page_size;
     m_max_data_page_num = m_total_page_num - m_max_swap_page_num;
-    m_cxl_page_allocator.reset(new SingleAllocator(total_page_size, page_size));
+    m_cxl_page_allocator.reset(
+        new SingleAllocator(cxl_format.super_block->page_data_zone_size, page_size));
 
     m_current_used_page_num = 0;
     m_current_used_swap_page_num = 0;
 }
 
-void DaemonContext::connectWithMaster() {
+void DaemonContext::initRPCNexus() {
+    // 1. init erpc
     std::string server_uri = m_options.daemon_ip + ":" + std::to_string(m_options.daemon_port);
     m_erpc_ctx.nexus.reset(new erpc::NexusWrap(server_uri));
 
@@ -50,7 +46,26 @@ void DaemonContext::connectWithMaster() {
     auto rpc = erpc::IBRpcWrap(m_erpc_ctx.nexus.get(), nullptr, 0, smhw);
     m_erpc_ctx.rpc_set.push_back(rpc);
     DLOG_ASSERT(m_erpc_ctx.rpc_set.size() == 1);
-    rpc = get_erpc();
+
+    // 2. init msgq
+    msgq_manager.nexus.reset(new msgq::MsgQueueNexus(cxl_format.msgq_zone_start_addr));
+    msgq_manager.start_addr = cxl_format.msgq_zone_start_addr;
+    msgq_manager.msgq_allocator.reset(new SingleAllocator(m_options.cxl_msgq_size, msgq::MsgQueueManager::RING_ELEM_SIZE));
+
+    msgq::MsgQueue *public_q = msgq_manager.allocQueue();
+    DLOG_ASSERT(public_q == msgq_manager.nexus->public_msgq);
+
+    // 3. bind rpc function
+    using JoinRackRPC = RPC_TYPE_STRUCT(rpc_daemon::joinRack);
+    msgq_manager.nexus->register_req_func(JoinRackRPC::rpc_type,
+                                          bind_msgq_rpc_func<true>(rpc_daemon::joinRack));
+
+    msgq_manager.rpc.reset(new msgq::MsgQueueRPC(msgq_manager.nexus.get(), this));
+    msgq_manager.rpc->m_recv_queue = msgq_manager.nexus->public_msgq;
+}
+
+void DaemonContext::connectWithMaster() {
+    auto rpc = get_erpc();
 
     std::string master_uri = m_options.master_ip + ":" + std::to_string(m_options.master_port);
     m_erpc_ctx.master_session = rpc.create_session(master_uri, 0);
@@ -118,17 +133,22 @@ int main(int argc, char *argv[]) {
     options.cxl_memory_size = 10 << 20;
     options.swap_zone_size = 2 << 20;
     options.max_client_limit = 2;
-    options.cxl_msg_queue_size = 4 << 10;
+    options.cxl_msgq_size = 5 << 10;
 
     DaemonContext &daemon_ctx = DaemonContext::getInstance();
     daemon_ctx.m_options = options;
 
-    daemon_ctx.createCXLPool();
+    daemon_ctx.initCXLPool();
+    daemon_ctx.initRPCNexus();
     daemon_ctx.connectWithMaster();
 
     // TODO: 开始监听master的RRPC
 
     // TODO: 开始监听client的msg queue
+
+    while (true) {
+        daemon_ctx.msgq_manager.rpc->run_event_loop_once();
+    }
 
     getchar();
     getchar();

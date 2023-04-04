@@ -46,9 +46,8 @@ int main(int argc, char *argv[]) {
         master_ctx.m_options.master_ip + ":" + std::to_string(master_ctx.m_options.master_port);
     master_ctx.m_erpc_ctx.nexus.reset(new erpc::NexusWrap(master_uri));
 
-    using JoinDaemonRPC = RPC_TYPE_STRUCT(rpc_master::joinDaemon);
-
-    master_ctx.m_erpc_ctx.nexus->register_req_func(JoinDaemonRPC::rpc_type, bind_erpc_func<true>(rpc_master::joinDaemon));
+    master_ctx.m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_master::joinDaemon)::rpc_type, bind_erpc_func<true>(rpc_master::joinDaemon));
+    master_ctx.m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_master::joinClient)::rpc_type, bind_erpc_func<true>(rpc_master::joinClient));
 
     erpc::SMHandlerWrap smhw;
     smhw.set_null();
@@ -57,6 +56,8 @@ int main(int argc, char *argv[]) {
         erpc::IBRpcWrap(master_ctx.m_erpc_ctx.nexus.get(), &MasterContext::getInstance(), 0, smhw);
     master_ctx.m_erpc_ctx.rpc_set.push_back(rpc);
     DLOG_ASSERT(master_ctx.m_erpc_ctx.rpc_set.size() == 1);
+
+    DLOG("OK");
 
     master_ctx.m_erpc_ctx.running = true;
     while (master_ctx.m_erpc_ctx.running) {

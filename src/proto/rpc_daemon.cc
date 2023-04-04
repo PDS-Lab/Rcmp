@@ -1,6 +1,7 @@
 #include "proto/rpc_daemon.hpp"
 
 #include <chrono>
+#include <cstdint>
 #include <future>
 
 #include "common.hpp"
@@ -9,6 +10,7 @@
 #include "proto/rpc.hpp"
 #include "proto/rpc_adaptor.hpp"
 #include "proto/rpc_master.hpp"
+#include "udp_client.hpp"
 #include "utils.hpp"
 
 using namespace std::chrono_literals;
@@ -16,10 +18,14 @@ namespace rpc_daemon {
 
 JoinRackReply joinRack(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
                        JoinRackRequest& req) {
+    DLOG_ASSERT(req.rack_id == daemon_context.m_options.rack_id,
+                "Can't join different rack %d ---> %d", req.rack_id,
+                daemon_context.m_options.rack_id);
+
+    // 1. 通知master获取mac id
     auto rpc = daemon_context.get_erpc();
 
     using JoinClientRPC = RPC_TYPE_STRUCT(rpc_master::joinClient);
-
     auto req_raw = rpc.alloc_msg_buffer_or_die(sizeof(JoinClientRPC::RequestType));
     auto resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(JoinClientRPC::ResponseType));
 
@@ -43,6 +49,20 @@ JoinRackReply joinRack(DaemonContext& daemon_context, DaemonToClientConnection& 
 
     rpc.free_msg_buffer(req_raw);
     rpc.free_msg_buffer(resp_raw);
+
+    // 2. 分配msg queue
+    msgq::MsgQueue* q = daemon_context.msgq_manager.allocQueue();
+    client_connection.msgq_rpc =
+        new msgq::MsgQueueRPC(daemon_context.msgq_manager.nexus.get(), &daemon_context);
+    client_connection.msgq_rpc->m_recv_queue = daemon_context.msgq_manager.nexus->public_msgq;
+    client_connection.msgq_rpc->m_send_queue = q;
+
+    // 3. 通过UDP通知client创建msgq
+    msgq::MsgUDPConnPacket pkt;
+    pkt.recv_q_off = reinterpret_cast<uintptr_t>(q) -
+                     reinterpret_cast<uintptr_t>(daemon_context.m_cxl_memory_addr);
+    UDPClient<msgq::MsgUDPConnPacket> udp_cli;
+    udp_cli.send(std::string(req.client_ipv4), req.client_port, pkt);
 
     DLOG("Connect with client [rack:%d --- id:%d]", daemon_context.m_options.rack_id,
          client_connection.client_id);
@@ -93,7 +113,7 @@ AllocPageMemoryReply allocPageMemory(DaemonContext& daemon_context,
 AllocReply alloc(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
                  AllocRequest& req) {
     // alloc size aligned by cache line
-    size_t n = div_floor(req.n, min_slab_size);
+    size_t n = div_ceil(req.n, min_slab_size);
 
     size_t slab_cls = n / min_slab_size - 1;
     std::list<page_id_t>& slab_list = daemon_context.m_can_alloc_slab_class_lists[slab_cls];

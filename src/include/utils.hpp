@@ -10,13 +10,18 @@
 #define UNLIKELY __glibc_unlikely
 
 template <typename D>
-D div_floor(D x, uint64_t div) {
+D div_ceil(D x, uint64_t div) {
     return (x + div - 1) / div;
 }
 
 template <typename D>
 D align_by(D x, uint64_t aligned) {
-    return div_floor(x, aligned) * aligned;
+    return div_ceil(x, aligned) * aligned;
+}
+
+template <typename D>
+D align_floor_by(D x, uint64_t aligned) {
+    return (x / aligned) * aligned;
 }
 
 void threadBindCore(int core_id);
@@ -37,6 +42,6 @@ struct function_traits;
 template <typename R, typename... Args>
 struct function_traits<R(Args...)> : public function_traits_helper<R, Args...> {};
 template <typename R, typename... Args>
-struct function_traits<R(*)(Args...)> : public function_traits_helper<R, Args...> {};
+struct function_traits<R (*)(Args...)> : public function_traits_helper<R, Args...> {};
 template <typename R, typename... Args>
-struct function_traits<R(&)(Args...)> : public function_traits_helper<R, Args...> {};
+struct function_traits<R (&)(Args...)> : public function_traits_helper<R, Args...> {};

@@ -11,9 +11,9 @@ endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# set(erpc "third_party/eRPC/liberpc.a")
 link_directories("third_party/eRPC/")
 include_directories("include" "src/include" "third_party")
+add_subdirectory(src)
 
 # ##################################################
 #                         库
@@ -30,8 +30,6 @@ target_link_libraries(
 # ##################################################
 #                     可执行文件
 # ##################################################
-
-add_subdirectory(src)
 
 add_executable(
     master
@@ -50,3 +48,5 @@ target_link_libraries(
     daemon
     base
 )
+
+add_subdirectory(test)

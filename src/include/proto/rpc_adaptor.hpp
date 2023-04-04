@@ -4,6 +4,7 @@
 
 #include "eRPC/erpc.h"
 #include "log.hpp"
+#include "msg_queue.hpp"
 #include "utils.hpp"
 
 namespace detail {
@@ -51,6 +52,47 @@ bool ErpcFuncWrapper<RpcFunc>::registed = false;
 template <typename RpcFunc>
 RpcFunc ErpcFuncWrapper<RpcFunc>::func;
 
+template <typename EFW, bool ESTABLISH>
+void msgq_call_target(msgq::MsgBuffer &req_raw, msgq::MsgBuffer &resp_raw, void *ctx) {
+    auto self_ctx = reinterpret_cast<typename EFW::SelfContext *>(ctx);
+
+    auto req = reinterpret_cast<typename EFW::RequestType *>(req_raw.get_buf());
+
+    typename EFW::PeerContext *peer_connection = nullptr;
+    if (ESTABLISH) {
+        peer_connection = new typename EFW::PeerContext();
+        auto reply = EFW::func(*self_ctx, *peer_connection, *req);
+        auto rpc = peer_connection->msgq_rpc;
+        resp_raw = rpc->alloc_msg_buffer(sizeof(typename EFW::ResponseType));
+        auto resp = reinterpret_cast<typename EFW::ResponseType *>(resp_raw.get_buf());
+        *resp = reply;
+    } else {
+        peer_connection =
+            dynamic_cast<typename EFW::PeerContext *>(self_ctx->get_connection(req->mac_id));
+        auto rpc = peer_connection->msgq_rpc;
+        resp_raw = rpc->alloc_msg_buffer(sizeof(typename EFW::ResponseType));
+        auto resp = reinterpret_cast<typename EFW::ResponseType *>(resp_raw.get_buf());
+        *resp = EFW::func(*self_ctx, *peer_connection, *req);
+    }
+}
+
+template <typename RpcFunc>
+struct MsgqRpcFuncWrapper {
+    using FT = function_traits<RpcFunc>;
+    using SelfContext = typename std::remove_reference<typename FT::template args_type<0>>::type;
+    using PeerContext = typename std::remove_reference<typename FT::template args_type<1>>::type;
+    using RequestType = typename std::remove_reference<typename FT::template args_type<2>>::type;
+    using ResponseType = typename std::remove_reference<typename FT::result_type>::type;
+
+    static RpcFunc func;
+    static bool registed;
+};
+
+template <typename RpcFunc>
+bool MsgqRpcFuncWrapper<RpcFunc>::registed = false;
+template <typename RpcFunc>
+RpcFunc MsgqRpcFuncWrapper<RpcFunc>::func;
+
 }  // namespace detail
 
 /**
@@ -67,15 +109,27 @@ RpcFunc ErpcFuncWrapper<RpcFunc>::func;
  */
 template <bool ESTABLISH, typename RpcFunc>
 auto bind_erpc_func(RpcFunc func) {
-    DLOG_ASSERT(!detail::ErpcFuncWrapper<RpcFunc>::registed, "function %s has been registed", __func__);
+    DLOG_ASSERT(!detail::ErpcFuncWrapper<RpcFunc>::registed, "function %s has been registed",
+                __func__);
     detail::ErpcFuncWrapper<RpcFunc>::func = func;
     detail::ErpcFuncWrapper<RpcFunc>::registed = true;
     return detail::erpc_call_target<detail::ErpcFuncWrapper<RpcFunc>, ESTABLISH>;
 }
 
+template <bool ESTABLISH, typename RpcFunc>
+auto bind_msgq_rpc_func(RpcFunc func) {
+    DLOG_ASSERT(!detail::MsgqRpcFuncWrapper<RpcFunc>::registed, "function %s has been registed",
+                __func__);
+    detail::MsgqRpcFuncWrapper<RpcFunc>::func = func;
+    detail::MsgqRpcFuncWrapper<RpcFunc>::registed = true;
+    return detail::msgq_call_target<detail::MsgqRpcFuncWrapper<RpcFunc>, ESTABLISH>;
+}
+
 /**
  * @brief 作为通用的erpc回调函数
- * 
+ *
  * @param pr std::promise<void>
  */
 void erpc_general_promise_flag_cb(void *, void *pr);
+
+void msgq_general_promise_flag_cb(msgq::MsgBuffer &resp, void *arg);

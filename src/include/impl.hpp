@@ -2,15 +2,18 @@
 
 #include <list>
 #include <memory>
+#include <thread>
 #include <unordered_set>
 
 #include "allocator.hpp"
 #include "common.hpp"
 #include "concurrent_hashmap.hpp"
+#include "cxl.hpp"
 #include "eRPC/erpc.h"
 #include "log.hpp"
 #include "msg_queue.hpp"
 #include "options.hpp"
+#include "udp_server.hpp"
 
 /************************  Master   **********************/
 
@@ -90,8 +93,7 @@ struct DaemonToMasterConnection : public DaemonConnection {
 };
 
 struct DaemonToClientConnection : public DaemonConnection {
-    MsgQueue send_msg_queue;  // 发给client的msg queue
-    MsgQueue recv_msg_queue;  // 接收client消息的msg queue
+    msgq::MsgQueueRPC *msgq_rpc;
 
     mac_id_t client_id;
 };
@@ -124,10 +126,11 @@ struct DaemonContext {
     size_t m_current_used_page_num;       // 当前使用的数据页个数
     size_t m_current_used_swap_page_num;  // 当前正在swap的页个数
 
+    CXLMemFormat cxl_format;
+    msgq::MsgQueueManager msgq_manager;
     DaemonToMasterConnection m_master_connection;
     std::vector<DaemonToClientConnection *> m_client_connect_table;
     std::vector<DaemonToDaemonConnection *> m_other_daemon_connect_table;
-    std::unique_ptr<SingleAllocator> m_cxl_msg_queue_allocator;
     std::unique_ptr<SingleAllocator> m_cxl_page_allocator;
     ConcurrentHashMap<mac_id_t, DaemonConnection *> m_connect_table;
     ConcurrentHashMap<page_id_t, PageMetadata *> m_page_table;
@@ -149,7 +152,8 @@ struct DaemonContext {
 
     static DaemonContext &getInstance();
 
-    void createCXLPool();
+    void initCXLPool();
+    void initRPCNexus();
     void connectWithMaster();
 
     DaemonConnection *get_connection(mac_id_t mac_id);
@@ -170,8 +174,7 @@ struct ClientToMasterConnection : public ClientConnection {
 };
 
 struct ClientToDaemonConnection : public ClientConnection {
-    MsgQueue send_msg_queue;  // 发给daemon的msg queue
-    MsgQueue recv_msg_queue;  // 接收daemon消息的msg queue
+    msgq::MsgQueueRPC *msgq_rpc;
 
     rack_id_t rack_id;
     mac_id_t daemon_id;
@@ -185,6 +188,10 @@ struct ClientContext {
     int m_cxl_devdax_fd;
     void *m_cxl_memory_addr;
 
+    CXLMemFormat format;
+    std::unique_ptr<UDPServer<msgq::MsgUDPConnPacket>> udp_conn_recver;
+    std::unique_ptr<msgq::MsgQueueRPC> msgq_rpc;
+    std::unique_ptr<msgq::MsgQueueNexus> msgq_nexus;
     ClientToMasterConnection m_master_connection;
     ClientToDaemonConnection m_local_rack_daemon_connection;
     ConcurrentHashMap<mac_id_t, ClientToDaemonConnection *> m_other_rack_daemon_connection;

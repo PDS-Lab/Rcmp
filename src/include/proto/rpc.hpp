@@ -32,7 +32,7 @@ struct RpcCallerWrapper;
  * @brief 获取rpc绑定的的结构体
  *
  */
-#define RPC_TYPE_STRUCT(rpc_func) struct ::detail::RpcCallerWrapper<decltype(rpc_func)>
+#define RPC_TYPE_STRUCT(rpc_func) ::detail::RpcCallerWrapper<decltype(rpc_func)>
 
 }  // namespace detail
 

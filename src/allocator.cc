@@ -49,7 +49,7 @@ size_t IDGenerator::capacity() const { return m_capacity; }
 void IDGenerator::addCapacity(size_t n) {
     m_capacity += n;
     if (m_bset.capacity() * 64 < m_capacity) {
-        m_bset.resize(div_floor(m_capacity, 64));
+        m_bset.resize(div_ceil(m_capacity, 64));
     }
 }
 
