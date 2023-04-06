@@ -64,6 +64,8 @@ JoinRackReply joinRack(DaemonContext& daemon_context, DaemonToClientConnection& 
     UDPClient<msgq::MsgUDPConnPacket> udp_cli;
     udp_cli.send(std::string(req.client_ipv4), req.client_port, pkt);
 
+    daemon_context.m_connect_table.insert(client_connection.client_id, &client_connection);
+
     DLOG("Connect with client [rack:%d --- id:%d]", daemon_context.m_options.rack_id,
          client_connection.client_id);
 
@@ -86,7 +88,6 @@ GetPageRefReply getPageRef(DaemonContext& daemon_context,
     page_metadata->ref_client.insert(&client_connection);
 
     GetPageRefReply reply;
-    reply.local_get = true;
     reply.offset = page_metadata->cxl_memory_offset;
     return reply;
 }
@@ -105,6 +106,8 @@ AllocPageMemoryReply allocPageMemory(DaemonContext& daemon_context,
 
     daemon_context.m_page_table.insert(req.page_id, page_metadata);
 
+    DLOG("new page %ld ---> %lx", req.page_id, cxl_memory_offset);
+
     AllocPageMemoryReply reply;
     reply.ret = true;
     return reply;
@@ -113,12 +116,14 @@ AllocPageMemoryReply allocPageMemory(DaemonContext& daemon_context,
 AllocReply alloc(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
                  AllocRequest& req) {
     // alloc size aligned by cache line
-    size_t n = div_ceil(req.n, min_slab_size);
+    size_t aligned_size = align_by(req.size, min_slab_size);
 
-    size_t slab_cls = n / min_slab_size - 1;
+    size_t slab_cls = aligned_size / min_slab_size - 1;
     std::list<page_id_t>& slab_list = daemon_context.m_can_alloc_slab_class_lists[slab_cls];
 
     if (slab_list.empty()) {
+        DLOG("alloc a new page");
+
         size_t slab_size = (slab_cls + 1) * min_slab_size;
 
         // 向Master调用allocPage(slab_size)

@@ -104,7 +104,7 @@ struct DaemonToDaemonConnection : public DaemonConnection {
 };
 
 struct PageMetadata {
-    offset_t cxl_memory_offset;
+    offset_t cxl_memory_offset;  // 相对于format.page_data_start_addr
     SingleAllocator slab_allocator;
     std::unordered_set<DaemonToClientConnection *> ref_client;
 

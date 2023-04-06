@@ -24,13 +24,16 @@ JoinDaemonReply joinDaemon(MasterContext& master_context,
 
     master_context.m_cluster_manager.cluster_rack_table.insert(req.rack_id, rack_table);
     master_context.m_cluster_manager.connect_table.insert(daemon_connection.daemon_id,
-                                                        &daemon_connection);
+                                                          &daemon_connection);
+
+    master_context.m_page_id_allocator->addCapacity(rack_table->max_free_page_num);
+
+    DLOG("Connect with daemon [rack:%d --- id:%d]", daemon_connection.rack_id,
+         daemon_connection.daemon_id);
 
     JoinDaemonReply reply;
     reply.daemon_mac_id = mac_id;
     reply.master_mac_id = master_context.m_master_id;
-
-    DLOG("Connect with daemon [rack:%d --- id:%d]", daemon_connection.rack_id, daemon_connection.daemon_id);
     return reply;
 }
 
@@ -47,6 +50,9 @@ JoinClientReply joinClient(MasterContext& master_context,
 
     rack_table->client_connect_table.push_back(&client_connection);
 
+    DLOG("Connect with client [rack:%d --- id:%d]", client_connection.rack_id,
+         client_connection.client_id);
+
     JoinClientReply reply;
     reply.mac_id = mac_id;
     return reply;
@@ -54,19 +60,15 @@ JoinClientReply joinClient(MasterContext& master_context,
 
 AllocPageReply allocPage(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
                          AllocPageRequest& req) {
-    AllocPageReply reply;
-
     RackMacTable* rack_table;
     PageRackMetadata page_rack_metadata;
 
     bool ret = master_context.m_cluster_manager.cluster_rack_table.find(daemon_connection.rack_id,
-                                                                      &rack_table);
+                                                                        &rack_table);
     DLOG_ASSERT(ret, "Can't find this deamon");
 
     page_id_t new_page_id = master_context.m_page_id_allocator->gen();
     DLOG_ASSERT(new_page_id != invalid_page_id, "no unusable page");
-
-    reply.page_id = new_page_id;
 
     if (rack_table->current_allocated_page_num < rack_table->max_free_page_num) {
         // 采取就近原则分配page到daemon所在rack
@@ -78,7 +80,12 @@ AllocPageReply allocPage(MasterContext& master_context, MasterToDaemonConnection
         DLOG_FATAL("Not Support");
     }
 
+    DLOG("alloc page: %lu ---> rack %d", new_page_id, rack_table->daemon_connect->rack_id);
+
     master_context.m_page_directory.insert(new_page_id, new PageRackMetadata(page_rack_metadata));
+
+    AllocPageReply reply;
+    reply.page_id = new_page_id;
     return reply;
 }
 
@@ -88,7 +95,7 @@ FreePageReply freePage(MasterContext& master_context, MasterToDaemonConnection& 
     PageRackMetadata* page_rack_metadata;
 
     bool ret = master_context.m_cluster_manager.cluster_rack_table.find(daemon_connection.rack_id,
-                                                                      &rack_table);
+                                                                        &rack_table);
     DLOG_ASSERT(ret, "Can't find this deamon");
 
     ret = master_context.m_page_directory.find(req.page_id, &page_rack_metadata);

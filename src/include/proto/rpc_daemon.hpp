@@ -32,7 +32,6 @@ struct GetPageRefRequest : public RequestMsg {
     page_id_t page_id;
 };
 struct GetPageRefReply : public ResponseMsg {
-    bool local_get;
     offset_t offset;
     // union {
     // struct {
@@ -75,7 +74,7 @@ AllocPageMemoryReply allocPageMemory(DaemonContext& daemon_context,
                                      AllocPageMemoryRequest& req);
 
 struct AllocRequest : public RequestMsg {
-    size_t n;
+    size_t size;
 };
 struct AllocReply : public ResponseMsg {
     rchms::GAddr gaddr;

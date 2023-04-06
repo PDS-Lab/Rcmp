@@ -50,15 +50,19 @@ void DaemonContext::initRPCNexus() {
     // 2. init msgq
     msgq_manager.nexus.reset(new msgq::MsgQueueNexus(cxl_format.msgq_zone_start_addr));
     msgq_manager.start_addr = cxl_format.msgq_zone_start_addr;
-    msgq_manager.msgq_allocator.reset(new SingleAllocator(m_options.cxl_msgq_size, msgq::MsgQueueManager::RING_ELEM_SIZE));
+    msgq_manager.msgq_allocator.reset(
+        new SingleAllocator(m_options.cxl_msgq_size, msgq::MsgQueueManager::RING_ELEM_SIZE));
 
     msgq::MsgQueue *public_q = msgq_manager.allocQueue();
     DLOG_ASSERT(public_q == msgq_manager.nexus->m_public_msgq);
 
     // 3. bind rpc function
-    using JoinRackRPC = RPC_TYPE_STRUCT(rpc_daemon::joinRack);
-    msgq_manager.nexus->register_req_func(JoinRackRPC::rpc_type,
+    msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::joinRack)::rpc_type,
                                           bind_msgq_rpc_func<true>(rpc_daemon::joinRack));
+    msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::alloc)::rpc_type,
+                                          bind_msgq_rpc_func<false>(rpc_daemon::alloc));
+    msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::getPageRef)::rpc_type,
+                                          bind_msgq_rpc_func<false>(rpc_daemon::getPageRef));
 
     msgq_manager.rpc.reset(new msgq::MsgQueueRPC(msgq_manager.nexus.get(), this));
     msgq_manager.rpc->m_recv_queue = msgq_manager.nexus->m_public_msgq;

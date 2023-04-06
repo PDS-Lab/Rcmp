@@ -1,3 +1,5 @@
+#include <cassert>
+#include "log.hpp"
 #include "rchms.hpp"
 
 int main(int argc, char *argv[]) {
@@ -10,6 +12,14 @@ int main(int argc, char *argv[]) {
     options.with_cxl = true;
 
     rchms::PoolContext *pool = rchms::Open(options);
+
+    int n = 4;
+    rchms::GAddr g1 = pool->Alloc(sizeof(n));
+    DLOG("g1: %lx", g1);
+    pool->Write(g1, sizeof(n), &n);
+    n = 0;
+    pool->Read(g1, sizeof(n), &n);
+    DLOG_ASSERT(n == 4);
     
     getchar();
     getchar();
