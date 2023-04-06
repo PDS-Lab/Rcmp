@@ -33,7 +33,7 @@ PoolContext::PoolContext(ClientOptions options) {
 
     impl->msgq_nexus.reset(new msgq::MsgQueueNexus(impl->format.msgq_zone_start_addr));
     impl->msgq_rpc.reset(new msgq::MsgQueueRPC(impl->msgq_nexus.get(), impl));
-    impl->msgq_rpc->m_send_queue = impl->msgq_nexus->public_msgq;
+    impl->msgq_rpc->m_send_queue = impl->msgq_nexus->m_public_msgq;
 
     // 3. 发送join rack rpc
     using JoinRackRPC = RPC_TYPE_STRUCT(rpc_daemon::joinRack);
@@ -63,13 +63,13 @@ PoolContext::PoolContext(ClientOptions options) {
     msgq::MsgBuffer resp_raw = fu.get();
     auto resp = reinterpret_cast<JoinRackRPC::ResponseType *>(resp_raw.get_buf());
 
-    resp->client_mac_id = impl->m_client_id;
+    impl->m_client_id = resp->client_mac_id;
     impl->m_local_rack_daemon_connection.daemon_id = resp->daemon_mac_id;
 
     impl->msgq_rpc->free_msg_buffer(resp_raw);
 
-    DLOG("Connect with rack %d daemon %d success", impl->m_options.rack_id,
-         impl->m_local_rack_daemon_connection.daemon_id);
+    DLOG("Connect with rack %d daemon %d success, my id is %d", impl->m_options.rack_id,
+         impl->m_local_rack_daemon_connection.daemon_id, impl->m_client_id);
 }
 
 PoolContext::~PoolContext() {}

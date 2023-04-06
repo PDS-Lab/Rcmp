@@ -54,7 +54,7 @@ JoinRackReply joinRack(DaemonContext& daemon_context, DaemonToClientConnection& 
     msgq::MsgQueue* q = daemon_context.msgq_manager.allocQueue();
     client_connection.msgq_rpc =
         new msgq::MsgQueueRPC(daemon_context.msgq_manager.nexus.get(), &daemon_context);
-    client_connection.msgq_rpc->m_recv_queue = daemon_context.msgq_manager.nexus->public_msgq;
+    client_connection.msgq_rpc->m_recv_queue = daemon_context.msgq_manager.nexus->m_public_msgq;
     client_connection.msgq_rpc->m_send_queue = q;
 
     // 3. 通过UDP通知client创建msgq

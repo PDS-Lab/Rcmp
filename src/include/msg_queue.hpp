@@ -25,19 +25,33 @@ struct MsgUDPConnPacket {
     uintptr_t recv_q_off;
 };
 
-using msgq_handler_t = void (*)(MsgBuffer &req, MsgBuffer &resp, void *ctx);
+using msgq_handler_t = void (*)(MsgBuffer &req, void *ctx);
 using msgq_callback_t = void (*)(MsgBuffer &resp, void *arg);
 
 constexpr static uint8_t INVALID_PADDING_FLAG = 255;
 
 struct MsgHeader final {
-    uint8_t rpc_type;
+    union {
+        uint8_t rpc_type;
+        uint8_t invalid_flag;
+    };
     enum : uint8_t { REQ, RESP } msg_type;
     size_t size;  // 实际数据大小
     msgq_callback_t cb;
     void *arg;
 
     uint8_t data[0];
+};
+
+struct MsgDeqIter {
+    MsgHeader* operator*();
+    MsgDeqIter& operator++();
+    bool operator==(const MsgDeqIter &it);
+    bool operator!=(const MsgDeqIter &it);
+
+    MsgQueue *q;
+    MsgHeader* h;
+    size_t rest_len;
 };
 
 struct MsgBuffer {
@@ -55,9 +69,10 @@ struct MsgQueue final {
     MsgQueue();
     ~MsgQueue();
 
+    MsgDeqIter end();
     MsgHeader *alloc_msg_buffer(size_t size);
     void enqueue_msg(uint8_t rpc_type, MsgHeader *h, size_t size);
-    size_t dequeue_msg(MsgHeader **start_h);
+    MsgDeqIter dequeue_msg();
     void free_msg_buffer(MsgHeader *h, size_t size, bool tail_valid);
 
     struct msg_ring_headtail {
@@ -81,15 +96,49 @@ struct MsgQueueNexus {
     static msgq_handler_t __handlers[max_msgq_handler];
 
     void *m_msgq_zone_start_addr;
-    MsgQueue *public_msgq;
+    MsgQueue *m_public_msgq;
 };
 
 struct MsgQueueRPC {
     MsgQueueRPC(MsgQueueNexus *nexus, void *ctx);
 
+    /**
+     * @brief 申请发送buffer
+     *
+     * @param size
+     * @return MsgBuffer
+     */
     MsgBuffer alloc_msg_buffer(size_t size);
+
+    /**
+     * @brief 入队请求
+     *
+     * @param rpc_type
+     * @param msg_buf
+     * @param cb
+     * @param arg
+     */
     void enqueue_request(uint8_t rpc_type, MsgBuffer &msg_buf, msgq_callback_t cb, void *arg);
+
+    /**
+     * @brief 入队回复
+     *
+     * @param req_buf
+     * @param resp_buf
+     */
+    void enqueue_response(MsgBuffer &req_buf, MsgBuffer &resp_buf);
+
+    /**
+     * @brief rpc队列轮询
+     *
+     */
     void run_event_loop_once();
+
+    /**
+     * @brief 释放buffer
+     *
+     * @param msg_buf
+     */
     void free_msg_buffer(MsgBuffer &msg_buf);
 
     MsgQueueNexus *m_nexus;
@@ -99,19 +148,14 @@ struct MsgQueueRPC {
 };
 
 struct MsgQueueManager {
-    const static size_t MAX_RING_NUM = 4;
     const static size_t RING_BUF_LEN = 2048;
     const static size_t RING_ELEM_SIZE = sizeof(MsgQueue) + RING_BUF_LEN;
-    const static size_t RING_BUF_OFF = sizeof(MsgQueue);
-    const static size_t RING_BUF_END_OFF = sizeof(MsgQueue) + RING_BUF_LEN;
 
     void *start_addr;
     uint32_t ring_cnt;
     std::unique_ptr<SingleAllocator> msgq_allocator;
     std::unique_ptr<MsgQueueNexus> nexus;
     std::unique_ptr<MsgQueueRPC> rpc;
-
-    static uint32_t BUF_PLUS(uint32_t p, uint32_t len) { return (p + len) % RING_BUF_LEN; }
 
     MsgQueue *allocQueue();
     void freeQueue(MsgQueue *msgq);

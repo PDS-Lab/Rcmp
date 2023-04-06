@@ -53,7 +53,7 @@ void DaemonContext::initRPCNexus() {
     msgq_manager.msgq_allocator.reset(new SingleAllocator(m_options.cxl_msgq_size, msgq::MsgQueueManager::RING_ELEM_SIZE));
 
     msgq::MsgQueue *public_q = msgq_manager.allocQueue();
-    DLOG_ASSERT(public_q == msgq_manager.nexus->public_msgq);
+    DLOG_ASSERT(public_q == msgq_manager.nexus->m_public_msgq);
 
     // 3. bind rpc function
     using JoinRackRPC = RPC_TYPE_STRUCT(rpc_daemon::joinRack);
@@ -61,7 +61,7 @@ void DaemonContext::initRPCNexus() {
                                           bind_msgq_rpc_func<true>(rpc_daemon::joinRack));
 
     msgq_manager.rpc.reset(new msgq::MsgQueueRPC(msgq_manager.nexus.get(), this));
-    msgq_manager.rpc->m_recv_queue = msgq_manager.nexus->public_msgq;
+    msgq_manager.rpc->m_recv_queue = msgq_manager.nexus->m_public_msgq;
 }
 
 void DaemonContext::connectWithMaster() {
