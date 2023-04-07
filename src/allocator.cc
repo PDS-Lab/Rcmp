@@ -21,20 +21,20 @@ IDGenerator::id_t IDGenerator::gen() {
     }
 
     while (true) {
-        int idx = ffsl(~m_bset[m_gen_cur]);
+        int idx = ffsll(~m_bset[m_gen_cur]);
         if (idx == 0) {
             m_gen_cur = (m_gen_cur + 1) % m_bset.size();
         } else {
             ++m_size;
-            m_bset[m_gen_cur] |= (1 << (idx - 1));
+            m_bset[m_gen_cur] |= (1ul << (idx - 1));
             return m_gen_cur * 64 + idx - 1;
         }
     }
 }
 
 void IDGenerator::recycle(IDGenerator::id_t id) {
-    DLOG_ASSERT(m_bset[id / 64] & (1 << (id & 0x3F)), "IDGenerator double recycle");
-    m_bset[id / 64] ^= (1 << (id & 0x3F));
+    DLOG_ASSERT(m_bset[id / 64] & (1ul << (id & 0x3F)), "IDGenerator double recycle");
+    m_bset[id / 64] ^= (1ul << (id & 0x3F));
     --m_size;
 }
 
@@ -49,7 +49,7 @@ size_t IDGenerator::capacity() const { return m_capacity; }
 void IDGenerator::addCapacity(size_t n) {
     m_capacity += n;
     if (m_bset.capacity() * 64 < m_capacity) {
-        m_bset.resize(div_ceil(m_capacity, 64));
+        m_bset.resize(div_ceil(m_capacity, 64), 0);
     }
 }
 

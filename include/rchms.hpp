@@ -85,7 +85,7 @@ class PoolContext {
      * @param size
      * @return Status 
      */
-    Status DataSend(int *array, size_t size);
+    Status __TestDataSend1(int *array, size_t size);
 
     /**
      * @brief 测试数据发送
@@ -94,8 +94,7 @@ class PoolContext {
      * @param size
      * @return Status 
      */
-    Status DataSend1(int *array, size_t size);
-
+    Status __TestDataSend2(int *array, size_t size);
 
    private:
     PoolContextImpl *__impl;

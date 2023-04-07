@@ -22,8 +22,8 @@ constexpr static page_id_t invalid_page_id = -1;
 
 union GAddrCombineUnion {
     struct {
-        page_id_t p : page_id_bits;
         offset_t off : offset_bits;
+        page_id_t p : page_id_bits;
     };
     rchms::GAddr gaddr;
 };

@@ -84,6 +84,7 @@ struct MsgQueue final {
     msg_ring_headtail buf_tail;  // deq
 
     uint8_t ring_buf[0];
+
     void enqueue_invalid_msg(MsgHeader* h);
 };
 
@@ -105,6 +106,8 @@ struct MsgQueueRPC {
 
     /**
      * @brief 申请发送buffer
+     * 
+     * @warning 该操作是阻塞式调用
      *
      * @param size
      * @return MsgBuffer

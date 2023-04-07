@@ -38,12 +38,7 @@ PoolContext::PoolContext(ClientOptions options) {
 
     // 3. 发送join rack rpc
     using JoinRackRPC = RPC_TYPE_STRUCT(rpc_daemon::joinRack);
-    msgq::MsgBuffer req_raw;
-    do
-    {
-        req_raw = __impl->msgq_rpc->alloc_msg_buffer(sizeof(JoinRackRPC::RequestType));
-    } while (!req_raw.m_msg);
-    
+    msgq::MsgBuffer req_raw = __impl->msgq_rpc->alloc_msg_buffer(sizeof(JoinRackRPC::RequestType));
     auto req = reinterpret_cast<JoinRackRPC::RequestType *>(req_raw.get_buf());
     strcpy(req->client_ipv4, __impl->m_options.client_ip.c_str());
     req->client_port = __impl->m_options.client_port;
@@ -93,12 +88,7 @@ void Close(PoolContext *pool_ctx) {
 
 GAddr PoolContext::Alloc(size_t size) {
     using AllocRPC = RPC_TYPE_STRUCT(rpc_daemon::alloc);
-    msgq::MsgBuffer req_raw;
-    do
-    {
-        req_raw = __impl->msgq_rpc->alloc_msg_buffer(sizeof(AllocRPC::RequestType));
-    } while (!req_raw.m_msg);
-    
+    msgq::MsgBuffer req_raw = __impl->msgq_rpc->alloc_msg_buffer(sizeof(AllocRPC::RequestType));
     auto req = reinterpret_cast<AllocRPC::RequestType *>(req_raw.get_buf());
     req->mac_id = __impl->m_client_id;
     req->size = size;
@@ -124,6 +114,7 @@ GAddr PoolContext::Alloc(size_t size) {
 
 Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
     page_id_t page_id = GetPageID(gaddr);
+    offset_t in_page_offset = GetPageOffset(gaddr);
     offset_t offset;
     bool ret = __impl->m_page_table_cache.find(page_id, &offset);
     if (!ret) {
@@ -158,13 +149,14 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
 
     memcpy(buf,
            reinterpret_cast<const void *>(
-               reinterpret_cast<uintptr_t>(__impl->format.page_data_start_addr) + offset),
+               reinterpret_cast<uintptr_t>(__impl->format.page_data_start_addr) + offset + in_page_offset),
            size);
     return Status::OK;
 }
 
 Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
     page_id_t page_id = GetPageID(gaddr);
+    offset_t in_page_offset = GetPageOffset(gaddr);
     offset_t offset;
     bool ret = __impl->m_page_table_cache.find(page_id, &offset);
     if (!ret) {
@@ -198,32 +190,26 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
     }
 
     memcpy(reinterpret_cast<void *>(
-               reinterpret_cast<uintptr_t>(__impl->format.page_data_start_addr) + offset),
+               reinterpret_cast<uintptr_t>(__impl->format.page_data_start_addr) + offset + in_page_offset),
            buf, size);
     return Status::OK;
 }
 
 Status PoolContext::Free(GAddr gaddr, size_t size) { DLOG_FATAL("Not Support"); }
 
+/*********************** for test **************************/
 
-Status PoolContext::DataSend(int *array, size_t size) {
-    using DataSendRPC = RPC_TYPE_STRUCT(rpc_daemon::dataSend);
-    msgq::MsgBuffer req_raw;
-    do
-    {
-        req_raw = __impl->msgq_rpc->alloc_msg_buffer(sizeof(DataSendRPC::RequestType));
-    } while (!req_raw.m_msg);
-    
-    
+Status PoolContext::__TestDataSend1(int *array, size_t size) {
+    using DataSendRPC = RPC_TYPE_STRUCT(rpc_daemon::__testdataSend1);
+    msgq::MsgBuffer req_raw = __impl->msgq_rpc->alloc_msg_buffer(sizeof(DataSendRPC::RequestType));
     auto req = reinterpret_cast<DataSendRPC::RequestType *>(req_raw.get_buf());
     req->mac_id = __impl->m_client_id;
     req->size = size;
-    for (size_t i = 0; i < req->size; i++)
-    {
+    for (size_t i = 0; i < req->size; i++) {
         req->data[i] = i + req->mac_id;
     }
     memcpy(req->data, array, size * sizeof(int));
-    
+
     std::promise<msgq::MsgBuffer> pro;
     std::future<msgq::MsgBuffer> fu = pro.get_future();
     __impl->msgq_rpc->enqueue_request(DataSendRPC::rpc_type, req_raw, msgq_general_promise_flag_cb,
@@ -237,33 +223,25 @@ Status PoolContext::DataSend(int *array, size_t size) {
     auto resp = reinterpret_cast<DataSendRPC::ResponseType *>(resp_raw.get_buf());
     // check
     assert(resp->size == size);
-    for (size_t i = 0; i < resp->size; i++)
-    {
-        assert (resp->data[i] == array[i]);
+    for (size_t i = 0; i < resp->size; i++) {
+        assert(resp->data[i] == array[i]);
     }
     __impl->msgq_rpc->free_msg_buffer(resp_raw);
 
     return Status::OK;
 }
 
-Status PoolContext::DataSend1(int *array, size_t size) {
-    using DataSend1RPC = RPC_TYPE_STRUCT(rpc_daemon::dataSend1);
-    msgq::MsgBuffer req_raw;
-    do
-    {
-        req_raw = __impl->msgq_rpc->alloc_msg_buffer(sizeof(DataSend1RPC::RequestType));
-    } while (!req_raw.m_msg);
-    
-    
+Status PoolContext::__TestDataSend2(int *array, size_t size) {
+    using DataSend1RPC = RPC_TYPE_STRUCT(rpc_daemon::__testdataSend2);
+    msgq::MsgBuffer req_raw = __impl->msgq_rpc->alloc_msg_buffer(sizeof(DataSend1RPC::RequestType));
     auto req = reinterpret_cast<DataSend1RPC::RequestType *>(req_raw.get_buf());
     req->mac_id = __impl->m_client_id;
     req->size = size;
-    for (size_t i = 0; i < req->size; i++)
-    {
+    for (size_t i = 0; i < req->size; i++) {
         req->data[i] = i + req->mac_id;
     }
     memcpy(req->data, array, size * sizeof(int));
-    
+
     std::promise<msgq::MsgBuffer> pro;
     std::future<msgq::MsgBuffer> fu = pro.get_future();
     __impl->msgq_rpc->enqueue_request(DataSend1RPC::rpc_type, req_raw, msgq_general_promise_flag_cb,
@@ -276,11 +254,9 @@ Status PoolContext::DataSend1(int *array, size_t size) {
     msgq::MsgBuffer resp_raw = fu.get();
     auto resp = reinterpret_cast<DataSend1RPC::ResponseType *>(resp_raw.get_buf());
     // check
-    // assert(resp->size == size);
-    // for (size_t i = 0; i < resp->size; i++)
-    // {
-    //     assert (resp->data[i] == array[i]);
-    // }
+    for (size_t i = 0; i < resp->size; i++) {
+        assert(resp->data[i] == array[i]);
+    }
     __impl->msgq_rpc->free_msg_buffer(resp_raw);
 
     return Status::OK;

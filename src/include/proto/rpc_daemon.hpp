@@ -73,49 +73,6 @@ AllocPageMemoryReply allocPageMemory(DaemonContext& daemon_context,
                                      DaemonToMasterConnection& master_connection,
                                      AllocPageMemoryRequest& req);
 
-#define TEST_DATA_LEN 64
-#define TEST_DATA_LEN_1 72
-struct DataSendRequest : public RequestMsg {
-    size_t size;
-    int data[TEST_DATA_LEN];
-};
-struct DataSendReply : public ResponseMsg {
-    size_t size;
-    int data[TEST_DATA_LEN];
-};
-
-struct DataSend1Request : public RequestMsg {
-    size_t size;
-    int data[TEST_DATA_LEN_1];
-};
-struct DataSend1Reply : public ResponseMsg {
-    size_t size;
-    int data[TEST_DATA_LEN_1];
-};
-
-/**
- * @brief 发送数据测试
- *
- * @param daemon_context
- * @param client_connection
- * @param req
- * @return DataSendReply
- */
-DataSendReply dataSend(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
-                 DataSendRequest& req);
-
-/**
- * @brief 发送数据测试
- *
- * @param daemon_context
- * @param client_connection
- * @param req
- * @return DataSendReply
- */
-DataSend1Reply dataSend1(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
-                 DataSend1Request& req);
-
-
 struct AllocRequest : public RequestMsg {
     size_t size;
 };
@@ -150,5 +107,49 @@ struct FreeReply : public ResponseMsg {
  */
 FreeReply free(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
                FreeRequest& req);
+
+/************************* for test ***************************/
+
+struct __TestDataSend1Request : public RequestMsg {
+    size_t size;
+    int data[64];
+};
+struct __TestDataSend1Reply : public ResponseMsg {
+    size_t size;
+    int data[64];
+};
+
+struct __TestDataSend2Request : public RequestMsg {
+    size_t size;
+    int data[72];
+};
+struct __TestDataSend2Reply : public ResponseMsg {
+    size_t size;
+    int data[72];
+};
+
+/**
+ * @brief 发送数据测试1
+ *
+ * @param daemon_context
+ * @param client_connection
+ * @param req
+ * @return __TestDataSend1Reply
+ */
+__TestDataSend1Reply __testdataSend1(DaemonContext& daemon_context,
+                                     DaemonToClientConnection& client_connection,
+                                     __TestDataSend1Request& req);
+
+/**
+ * @brief 发送数据测试2
+ *
+ * @param daemon_context
+ * @param client_connection
+ * @param req
+ * @return __TestDataSend2Reply
+ */
+__TestDataSend2Reply __testdataSend2(DaemonContext& daemon_context,
+                                     DaemonToClientConnection& client_connection,
+                                     __TestDataSend2Request& req);
 
 }  // namespace rpc_daemon

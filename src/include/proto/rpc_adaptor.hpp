@@ -65,23 +65,15 @@ void msgq_call_target(msgq::MsgBuffer &req_raw, void *ctx) {
         peer_connection = new typename EFW::PeerContext();
         auto reply = EFW::func(*self_ctx, *peer_connection, *req);
         rpc = peer_connection->msgq_rpc;
-        
-        do
-        {
-            resp_raw = rpc->alloc_msg_buffer(sizeof(typename EFW::ResponseType));
-        } while (!resp_raw.m_msg);
-        
+        resp_raw = rpc->alloc_msg_buffer(sizeof(typename EFW::ResponseType));
         auto resp = reinterpret_cast<typename EFW::ResponseType *>(resp_raw.get_buf());
-        
+
         *resp = reply;
     } else {
         peer_connection =
             dynamic_cast<typename EFW::PeerContext *>(self_ctx->get_connection(req->mac_id));
         rpc = peer_connection->msgq_rpc;
-        do
-        {
-            resp_raw = rpc->alloc_msg_buffer(sizeof(typename EFW::ResponseType));
-        } while (!resp_raw.m_msg);
+        resp_raw = rpc->alloc_msg_buffer(sizeof(typename EFW::ResponseType));
         auto resp = reinterpret_cast<typename EFW::ResponseType *>(resp_raw.get_buf());
         *resp = EFW::func(*self_ctx, *peer_connection, *req);
     }

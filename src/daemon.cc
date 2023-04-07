@@ -63,10 +63,10 @@ void DaemonContext::initRPCNexus() {
                                           bind_msgq_rpc_func<false>(rpc_daemon::alloc));
     msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::getPageRef)::rpc_type,
                                           bind_msgq_rpc_func<false>(rpc_daemon::getPageRef));
-    msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::dataSend)::rpc_type,
-                                          bind_msgq_rpc_func<false>(rpc_daemon::dataSend));
-    msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::dataSend1)::rpc_type,
-                                          bind_msgq_rpc_func<false>(rpc_daemon::dataSend1));
+    msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::__testdataSend1)::rpc_type,
+                                          bind_msgq_rpc_func<false>(rpc_daemon::__testdataSend1));
+    msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::__testdataSend2)::rpc_type,
+                                          bind_msgq_rpc_func<false>(rpc_daemon::__testdataSend2));
 
     msgq_manager.rpc.reset(new msgq::MsgQueueRPC(msgq_manager.nexus.get(), this));
     msgq_manager.rpc->m_recv_queue = msgq_manager.nexus->m_public_msgq;
@@ -131,17 +131,17 @@ PageMetadata::PageMetadata(size_t slab_size) : slab_allocator(page_size, slab_si
 
 int main(int argc, char *argv[]) {
     rchms::DaemonOptions options;
-    options.master_ip = "192.168.1.88";
+    options.master_ip = "192.168.1.51";
     options.master_port = 31850;
-    options.daemon_ip = "192.168.1.88";
+    options.daemon_ip = "192.168.1.51";
     options.daemon_port = 31851;
     options.rack_id = 0;
     options.with_cxl = true;
     options.cxl_devdax_path = "testfile";
-    options.cxl_memory_size = 10 << 20;
+    options.cxl_memory_size = 20 << 20;
     options.swap_zone_size = 2 << 20;
-    options.max_client_limit = 2; // 暂时未使用
-    options.cxl_msgq_size = 20 << 10;
+    options.max_client_limit = 2;  // 暂时未使用
+    options.cxl_msgq_size = 5 << 10;
 
     DaemonContext &daemon_ctx = DaemonContext::getInstance();
     daemon_ctx.m_options = options;
