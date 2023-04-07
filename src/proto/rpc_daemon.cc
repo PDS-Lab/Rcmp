@@ -51,19 +51,21 @@ JoinRackReply joinRack(DaemonContext& daemon_context, DaemonToClientConnection& 
     rpc.free_msg_buffer(resp_raw);
 
     // 2. 分配msg queue
+    // printf("1\n");
     msgq::MsgQueue* q = daemon_context.msgq_manager.allocQueue();
+    // msgq::MsgQueue* q2 = daemon_context.msgq_manager.allocQueue();
     client_connection.msgq_rpc =
         new msgq::MsgQueueRPC(daemon_context.msgq_manager.nexus.get(), &daemon_context);
     client_connection.msgq_rpc->m_recv_queue = daemon_context.msgq_manager.nexus->m_public_msgq;
     client_connection.msgq_rpc->m_send_queue = q;
-
+    // printf("2\n");
     // 3. 通过UDP通知client创建msgq
     msgq::MsgUDPConnPacket pkt;
     pkt.recv_q_off = reinterpret_cast<uintptr_t>(q) -
                      reinterpret_cast<uintptr_t>(daemon_context.m_cxl_memory_addr);
     UDPClient<msgq::MsgUDPConnPacket> udp_cli;
     udp_cli.send(std::string(req.client_ipv4), req.client_port, pkt);
-
+    // printf("3\n");
     daemon_context.m_connect_table.insert(client_connection.client_id, &client_connection);
 
     DLOG("Connect with client [rack:%d --- id:%d]", daemon_context.m_options.rack_id,
@@ -110,6 +112,29 @@ AllocPageMemoryReply allocPageMemory(DaemonContext& daemon_context,
 
     AllocPageMemoryReply reply;
     reply.ret = true;
+    return reply;
+}
+
+DataSendReply dataSend(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
+                       DataSendRequest& req) 
+{
+    DataSendReply reply;
+    reply.size = req.size;
+    assert(req.size == 64);
+
+    memcpy(reply.data, req.data, reply.size * sizeof(int));
+    // printf("recv data 64\n");
+    return reply;
+}
+DataSend1Reply dataSend1(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
+                       DataSend1Request& req) 
+{
+    DataSend1Reply reply;
+    reply.size = req.size;
+    assert(req.size == 72);
+
+    memcpy(reply.data, req.data, reply.size * sizeof(int));
+    // printf("recv data 72\n");
     return reply;
 }
 

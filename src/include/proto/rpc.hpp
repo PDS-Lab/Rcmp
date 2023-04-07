@@ -47,6 +47,8 @@ BIND_RPC_TYPE_STRUCT(rpc_master::getRackDaemonByPageID);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::joinRack);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::getPageRef);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::allocPageMemory);
+BIND_RPC_TYPE_STRUCT(rpc_daemon::dataSend);
+BIND_RPC_TYPE_STRUCT(rpc_daemon::dataSend1);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::alloc);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::free);
 

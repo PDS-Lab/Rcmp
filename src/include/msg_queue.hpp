@@ -84,6 +84,7 @@ struct MsgQueue final {
     msg_ring_headtail buf_tail;  // deq
 
     uint8_t ring_buf[0];
+    void enqueue_invalid_msg(MsgHeader* h);
 };
 
 struct MsgQueueNexus {

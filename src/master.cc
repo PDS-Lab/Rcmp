@@ -24,7 +24,7 @@ erpc::IBRpcWrap MasterContext::get_erpc() { return m_erpc_ctx.rpc_set[0]; }
 
 int main(int argc, char *argv[]) {
     rchms::MasterOptions options;
-    options.master_ip = "192.168.1.51";
+    options.master_ip = "192.168.1.88";
     options.master_port = 31850;
     options.max_cluster_mac_num = 100;
 

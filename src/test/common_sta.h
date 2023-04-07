@@ -6,8 +6,8 @@
 
 #include "eRPC/erpc.h"
 
-static const std::string kServerHostname = "192.168.1.51";
-static const std::string kClientHostname = "192.168.1.51";
+static const std::string kServerHostname = "192.168.1.88";
+static const std::string kClientHostname = "192.168.1.88";
 
 static constexpr uint16_t kServerUDPPort = 31850;
 static constexpr uint16_t kClientUDPPort = 31851;

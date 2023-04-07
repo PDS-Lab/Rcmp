@@ -78,6 +78,25 @@ class PoolContext {
      */
     Status Free(GAddr gaddr, size_t size);
 
+    /**
+     * @brief 测试数据发送
+     * 
+     * @param array 
+     * @param size
+     * @return Status 
+     */
+    Status DataSend(int *array, size_t size);
+
+    /**
+     * @brief 测试数据发送
+     * 
+     * @param array 
+     * @param size
+     * @return Status 
+     */
+    Status DataSend1(int *array, size_t size);
+
+
    private:
     PoolContextImpl *__impl;
 };

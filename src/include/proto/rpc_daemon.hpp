@@ -73,6 +73,49 @@ AllocPageMemoryReply allocPageMemory(DaemonContext& daemon_context,
                                      DaemonToMasterConnection& master_connection,
                                      AllocPageMemoryRequest& req);
 
+#define TEST_DATA_LEN 64
+#define TEST_DATA_LEN_1 72
+struct DataSendRequest : public RequestMsg {
+    size_t size;
+    int data[TEST_DATA_LEN];
+};
+struct DataSendReply : public ResponseMsg {
+    size_t size;
+    int data[TEST_DATA_LEN];
+};
+
+struct DataSend1Request : public RequestMsg {
+    size_t size;
+    int data[TEST_DATA_LEN_1];
+};
+struct DataSend1Reply : public ResponseMsg {
+    size_t size;
+    int data[TEST_DATA_LEN_1];
+};
+
+/**
+ * @brief 发送数据测试
+ *
+ * @param daemon_context
+ * @param client_connection
+ * @param req
+ * @return DataSendReply
+ */
+DataSendReply dataSend(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
+                 DataSendRequest& req);
+
+/**
+ * @brief 发送数据测试
+ *
+ * @param daemon_context
+ * @param client_connection
+ * @param req
+ * @return DataSendReply
+ */
+DataSend1Reply dataSend1(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
+                 DataSend1Request& req);
+
+
 struct AllocRequest : public RequestMsg {
     size_t size;
 };

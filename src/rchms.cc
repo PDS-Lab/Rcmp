@@ -38,7 +38,12 @@ PoolContext::PoolContext(ClientOptions options) {
 
     // 3. 发送join rack rpc
     using JoinRackRPC = RPC_TYPE_STRUCT(rpc_daemon::joinRack);
-    msgq::MsgBuffer req_raw = __impl->msgq_rpc->alloc_msg_buffer(sizeof(JoinRackRPC::RequestType));
+    msgq::MsgBuffer req_raw;
+    do
+    {
+        req_raw = __impl->msgq_rpc->alloc_msg_buffer(sizeof(JoinRackRPC::RequestType));
+    } while (!req_raw.m_msg);
+    
     auto req = reinterpret_cast<JoinRackRPC::RequestType *>(req_raw.get_buf());
     strcpy(req->client_ipv4, __impl->m_options.client_ip.c_str());
     req->client_port = __impl->m_options.client_port;
@@ -88,7 +93,12 @@ void Close(PoolContext *pool_ctx) {
 
 GAddr PoolContext::Alloc(size_t size) {
     using AllocRPC = RPC_TYPE_STRUCT(rpc_daemon::alloc);
-    msgq::MsgBuffer req_raw = __impl->msgq_rpc->alloc_msg_buffer(sizeof(AllocRPC::RequestType));
+    msgq::MsgBuffer req_raw;
+    do
+    {
+        req_raw = __impl->msgq_rpc->alloc_msg_buffer(sizeof(AllocRPC::RequestType));
+    } while (!req_raw.m_msg);
+    
     auto req = reinterpret_cast<AllocRPC::RequestType *>(req_raw.get_buf());
     req->mac_id = __impl->m_client_id;
     req->size = size;
@@ -194,4 +204,86 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
 }
 
 Status PoolContext::Free(GAddr gaddr, size_t size) { DLOG_FATAL("Not Support"); }
+
+
+Status PoolContext::DataSend(int *array, size_t size) {
+    using DataSendRPC = RPC_TYPE_STRUCT(rpc_daemon::dataSend);
+    msgq::MsgBuffer req_raw;
+    do
+    {
+        req_raw = __impl->msgq_rpc->alloc_msg_buffer(sizeof(DataSendRPC::RequestType));
+    } while (!req_raw.m_msg);
+    
+    
+    auto req = reinterpret_cast<DataSendRPC::RequestType *>(req_raw.get_buf());
+    req->mac_id = __impl->m_client_id;
+    req->size = size;
+    for (size_t i = 0; i < req->size; i++)
+    {
+        req->data[i] = i + req->mac_id;
+    }
+    memcpy(req->data, array, size * sizeof(int));
+    
+    std::promise<msgq::MsgBuffer> pro;
+    std::future<msgq::MsgBuffer> fu = pro.get_future();
+    __impl->msgq_rpc->enqueue_request(DataSendRPC::rpc_type, req_raw, msgq_general_promise_flag_cb,
+                                      static_cast<void *>(&pro));
+
+    while (fu.wait_for(1ns) == std::future_status::timeout) {
+        __impl->msgq_rpc->run_event_loop_once();
+    }
+
+    msgq::MsgBuffer resp_raw = fu.get();
+    auto resp = reinterpret_cast<DataSendRPC::ResponseType *>(resp_raw.get_buf());
+    // check
+    assert(resp->size == size);
+    for (size_t i = 0; i < resp->size; i++)
+    {
+        assert (resp->data[i] == array[i]);
+    }
+    __impl->msgq_rpc->free_msg_buffer(resp_raw);
+
+    return Status::OK;
+}
+
+Status PoolContext::DataSend1(int *array, size_t size) {
+    using DataSend1RPC = RPC_TYPE_STRUCT(rpc_daemon::dataSend1);
+    msgq::MsgBuffer req_raw;
+    do
+    {
+        req_raw = __impl->msgq_rpc->alloc_msg_buffer(sizeof(DataSend1RPC::RequestType));
+    } while (!req_raw.m_msg);
+    
+    
+    auto req = reinterpret_cast<DataSend1RPC::RequestType *>(req_raw.get_buf());
+    req->mac_id = __impl->m_client_id;
+    req->size = size;
+    for (size_t i = 0; i < req->size; i++)
+    {
+        req->data[i] = i + req->mac_id;
+    }
+    memcpy(req->data, array, size * sizeof(int));
+    
+    std::promise<msgq::MsgBuffer> pro;
+    std::future<msgq::MsgBuffer> fu = pro.get_future();
+    __impl->msgq_rpc->enqueue_request(DataSend1RPC::rpc_type, req_raw, msgq_general_promise_flag_cb,
+                                      static_cast<void *>(&pro));
+
+    while (fu.wait_for(1ns) == std::future_status::timeout) {
+        __impl->msgq_rpc->run_event_loop_once();
+    }
+
+    msgq::MsgBuffer resp_raw = fu.get();
+    auto resp = reinterpret_cast<DataSend1RPC::ResponseType *>(resp_raw.get_buf());
+    // check
+    // assert(resp->size == size);
+    // for (size_t i = 0; i < resp->size; i++)
+    // {
+    //     assert (resp->data[i] == array[i]);
+    // }
+    __impl->msgq_rpc->free_msg_buffer(resp_raw);
+
+    return Status::OK;
+}
+
 }  // namespace rchms

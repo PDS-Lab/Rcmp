@@ -1,6 +1,7 @@
 #include "msg_queue.hpp"
 
 #include <cstdint>
+#include <iostream>
 
 #include "log.hpp"
 #include "utils.hpp"
@@ -56,6 +57,7 @@ void MsgQueueRPC::run_event_loop_once() {
         buf.m_msg = h;
         buf.m_size = h->size;
         if (h->msg_type == MsgHeader::REQ) {
+            // printf("run_event_loop_once: REQ it.rest_len = %d\n", it.rest_len);
             MsgQueueNexus::__handlers[h->rpc_type](buf, m_ctx);
         } else {
             h->cb(buf, h->arg);
@@ -110,8 +112,8 @@ MsgHeader* MsgQueue::alloc_msg_buffer(size_t size) {
                 entries = MsgQueueManager::RING_BUF_LEN - (head - buf_tail.tail);
             }
 
-            // printf("temp_len = %d, entries = %d, head = %d, buf_tail = %d\n",temp_len, entries,
-            // head, buf_tail.tail);
+            // printf("alloc_msg: temp_len = %d, entries = %d, head = %d, entries = %d\n", temp_len,
+            //        entries, head, entries);
 
             if (temp_len >= entries) {
                 return nullptr;
@@ -124,58 +126,62 @@ MsgHeader* MsgQueue::alloc_msg_buffer(size_t size) {
             head_next = (head + temp_len) % MsgQueueManager::RING_BUF_LEN;
 
             success = buf_head.head.compare_exchange_weak(head, head_next);
-            // printf("success = %d\n", success);
         } while (UNLIKELY(success == 0));
 
         MsgHeader* h = reinterpret_cast<MsgHeader*>(ring_buf + head);
         if (diff > 0) {
-            h->invalid_flag = INVALID_PADDING_FLAG;
+            // printf("INVALID_PADDING_FLAG alloc_msg_buffer\n");
+            enqueue_invalid_msg(h);
         } else {
             h->size = size;
+            // printf("alloc_msg finished: temp_len = %d, head = %d, head_next = %d, entries = %d, size = %ld\n",
+                // temp_len, head, head_next, entries, size);
             return h;
         }
     }
-    // printf("temp_len = %d, head = %d, head_next = %d, entries = %d\n", temp_len, head, head_next,
-    // entries); printf("msg_ring_get finished\n");
+
     return nullptr;
+}
+
+void MsgQueue::enqueue_invalid_msg(MsgHeader* h) {
+    h->invalid_flag = INVALID_PADDING_FLAG;
+    uint32_t head, head_next;
+    uintptr_t obj_off = (uintptr_t)h - (uintptr_t)ring_buf;
+
+    bool success = false;
+    do {
+        head = buf_head.tail;
+        head_next = 0;
+        if (head != obj_off) {
+            continue;
+        }
+
+        success = buf_head.tail.compare_exchange_weak(head, head_next);
+    } while (UNLIKELY(success == 0));
+
+    // printf("enqueue_invalid_msg finished!  head = %d, head_next = %d\n", head, head_next);
 }
 
 void MsgQueue::enqueue_msg(uint8_t rpc_type, MsgHeader* h, size_t size) {
     h->rpc_type = rpc_type;
-    h->size = size;
 
     size += sizeof(MsgHeader);
 
     uint32_t head, head_next;
     uintptr_t obj_off = (uintptr_t)h - (uintptr_t)ring_buf;
     uint32_t temp_len;
-    bool flag = true;
-
     bool success = false;
-    while (flag) {
-        do {
-            flag = true;
-            temp_len = size;
-            head = buf_head.tail;
-            head_next = (obj_off + size) % MsgQueueManager::RING_BUF_LEN;
-            if (head != obj_off) {
-                MsgHeader* _h = reinterpret_cast<MsgHeader*>(ring_buf + head);
-                // printf("invalid = %d\n", *invalid);
-                if (_h->invalid_flag == INVALID_PADDING_FLAG) {
-                    temp_len = MsgQueueManager::RING_BUF_LEN - head;
-                    head_next = 0;
-                } else  // 若不是填充，则等到相同为止
-                {
-                    continue;
-                }
-            } else {
-                flag = false;
-            }
+    do {
+        temp_len = size;
+        head = buf_head.tail;
+        head_next = (obj_off + size) % MsgQueueManager::RING_BUF_LEN;
+        if (head != obj_off) {
+            continue;
+        }
 
-            success = buf_head.tail.compare_exchange_weak(head, head_next);
-        } while (UNLIKELY(success == 0));
-    }
-    // printf("msg_ring_enq finished\n");
+        success = buf_head.tail.compare_exchange_weak(head, head_next);
+    } while (UNLIKELY(success == 0));
+    // printf("enqueue_msg finished! temp_len = %d, head = %d, head_next = %d\n", temp_len, head, head_next);
 }
 
 MsgDeqIter MsgQueue::dequeue_msg() {
@@ -187,25 +193,36 @@ MsgDeqIter MsgQueue::dequeue_msg() {
     bool flag = true;
 
     bool success;
+    // printf("enter dequeue_msg\n");
     while (flag) {
         do {
             flag = true;
             tail = buf_tail.head;
 
             entries = buf_head.tail - tail;
+
             if (entries < 0) {
-                entries = MsgQueueManager::RING_BUF_LEN - tail;
+                temp_len = MsgQueueManager::RING_BUF_LEN - tail;
+                // std::cout << "dequeue_msg: buf_head.tail = " << buf_head.tail
+                //           << ", buf_tail.head = " << buf_tail.head << std::endl;
+                // printf("dequeue_msg: entries < 0, temp_len = %d, RING_BUF_LEN = %d, tail = %d\n",
+                //        temp_len, MsgQueueManager::RING_BUF_LEN, tail);
             } else if (entries == 0) {
                 it.rest_len = 0;
                 return it;
             } else {
                 temp_len = entries;
+                // std::cout << "dequeue_msg: buf_head.tail = " << buf_head.tail
+                //           << ", buf_tail.head = " << buf_tail.head << std::endl;
+                // printf("dequeue_msg: entries > 0, temp_len = %d, RING_BUF_LEN = %d, tail = %d\n",
+                //        temp_len, MsgQueueManager::RING_BUF_LEN, tail);
             }
 
             tail_next = (tail + temp_len) % MsgQueueManager::RING_BUF_LEN;
 
             MsgHeader* _h = reinterpret_cast<MsgHeader*>(ring_buf + tail);
             if (_h->invalid_flag == INVALID_PADDING_FLAG) {
+                // printf("INVALID_PADDING_FLAG dequeue_msg\n");
                 temp_len = MsgQueueManager::RING_BUF_LEN - tail;
                 tail_next = 0;
             } else {
@@ -215,17 +232,18 @@ MsgDeqIter MsgQueue::dequeue_msg() {
         } while (UNLIKELY(success == 0));
     }
 
+    // printf("dequeue_msg: tail_next = %d, tail = %d temp_len = %u,  RING_BUF_LEN = %d\n", tail_next,
+    //        tail, temp_len, MsgQueueManager::RING_BUF_LEN);
+    // std::cout << "dequeue_msg: buf_head.tail = " << buf_head.tail
+    //           << ", buf_tail.head = " << buf_tail.head << std::endl;
     it.rest_len = temp_len;
     it.h = reinterpret_cast<MsgHeader*>(ring_buf + tail);
     return it;
-
-    // printf("tail_next = %d, tail = %d temp_len = %u, buf_head.tail = %d, RING_BUF_END_OFF =
-    // %d\n", tail_next, tail, temp_len, r->buf_head.tail, RING_BUF_END_OFF);
 }
 
 void MsgQueue::free_msg_buffer(MsgHeader* h, size_t size, bool tail_valid) {
     size += sizeof(MsgHeader);
-
+    size_t temp_size = size;
     uint32_t tail, tail_next;
     uintptr_t obj_off = (uintptr_t)h - (uintptr_t)ring_buf;
     bool flag = true;
@@ -233,28 +251,33 @@ void MsgQueue::free_msg_buffer(MsgHeader* h, size_t size, bool tail_valid) {
     bool success = false;
     while (flag) {
         do {
+            size = temp_size;
             flag = true;
             tail = buf_tail.tail;
             tail_next = (obj_off + size) % MsgQueueManager::RING_BUF_LEN;
-            // printf("tail = %d, tail_next = %d, obj_off = %d\n", tail, tail_next, obj_off);
+            // printf("Free: tail = %d, tail_next = %d, obj_off = %ld\n", tail, tail_next, obj_off);
             if (tail != obj_off) {
                 MsgHeader* _h = reinterpret_cast<MsgHeader*>(ring_buf + tail);
                 if (_h->invalid_flag == INVALID_PADDING_FLAG) {
+                    // printf("INVALID_PADDING_FLAG free_msg_buffer\n");
                     tail_next = 0;
+                    size = MsgQueueManager::RING_BUF_LEN - obj_off;
                 } else {
                     // 若不是填充，则等到相同为止
                     continue;
                 }
             } else {
                 if (!tail_valid) {
+                    // printf("!tail_valid, INVALID_PADDING_FLAG free_msg_buffer\n");
                     tail_next = 0;
+                    size = MsgQueueManager::RING_BUF_LEN - obj_off;
                 }
                 flag = false;
             }
 
             success = buf_tail.tail.compare_exchange_weak(tail, tail_next);
-            // printf("success = %d, RING_BUF_END_OFF = %d, RING_BUF_OFF = %d, tail = %d, tail_next
-            // = %d\n", success, RING_BUF_END_OFF, RING_BUF_OFF, tail, tail_next);
+            // printf("Free: success = %d, RING_BUF_OFF = %d, tail = %d, tail_next = %d,size = %ld\n",
+            //        success, MsgQueueManager::RING_BUF_LEN, tail, tail_next, size);
         } while (UNLIKELY(success == 0));
     }
     // printf("msg_ring_put finished\n");
@@ -263,24 +286,21 @@ void MsgQueue::free_msg_buffer(MsgHeader* h, size_t size, bool tail_valid) {
 bool MsgDeqIter::operator==(const MsgDeqIter& it) { return q == it.q && rest_len == it.rest_len; }
 bool MsgDeqIter::operator!=(const MsgDeqIter& it) { return q != it.q || rest_len != it.rest_len; }
 
-MsgHeader* MsgDeqIter::operator*() {
-    if (h->invalid_flag == INVALID_PADDING_FLAG) {
-        q->free_msg_buffer(h, 0, false);
-        rest_len -= MsgQueueManager::RING_BUF_LEN - reinterpret_cast<uintptr_t>(h);
-        h = reinterpret_cast<MsgHeader*>(q->ring_buf);
-    }
-    return h;
-}
+MsgHeader* MsgDeqIter::operator*() { return h; }
 
 MsgDeqIter& MsgDeqIter::operator++() {
-    if (h->invalid_flag == INVALID_PADDING_FLAG) {
+    rest_len -= h->size + sizeof(MsgHeader);
+    h = reinterpret_cast<MsgHeader*>(reinterpret_cast<uintptr_t>(h) + h->size + sizeof(MsgHeader));
+    if (rest_len != 0 && h->invalid_flag == INVALID_PADDING_FLAG) {
+        // fprintf(stderr,"operator++: rest_len = %ld, h->invalid_flag = %u, change h = %ld\n",
+        // rest_len, h->invalid_flag,
+        //        MsgQueueManager::RING_BUF_LEN -
+        //            (reinterpret_cast<uintptr_t>(h) - reinterpret_cast<uintptr_t>(q->ring_buf)));
         q->free_msg_buffer(h, 0, false);
-        rest_len -= MsgQueueManager::RING_BUF_LEN - reinterpret_cast<uintptr_t>(h);
+        rest_len -= MsgQueueManager::RING_BUF_LEN -
+                    (reinterpret_cast<uintptr_t>(h) - reinterpret_cast<uintptr_t>(q->ring_buf));
         h = reinterpret_cast<MsgHeader*>(q->ring_buf);
-    } else {
-        rest_len -= h->size + sizeof(MsgHeader);
-        h = reinterpret_cast<MsgHeader*>(reinterpret_cast<uintptr_t>(h) + h->size +
-                                         sizeof(MsgHeader));
+        // fprintf(stderr,"operator++: rest_len = %d\n", rest_len);
     }
     return *this;
 }
