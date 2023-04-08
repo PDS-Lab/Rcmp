@@ -1,10 +1,8 @@
 #pragma once
 
-#include <array>
 #include <atomic>
-#include <cstddef>
-#include <cstdint>
 #include <memory>
+#include <vector>
 
 #include "allocator.hpp"
 
@@ -28,30 +26,15 @@ struct MsgUDPConnPacket {
 using msgq_handler_t = void (*)(MsgBuffer &req, void *ctx);
 using msgq_callback_t = void (*)(MsgBuffer &resp, void *arg);
 
-constexpr static uint8_t INVALID_PADDING_FLAG = 255;
-
 struct MsgHeader final {
-    union {
-        uint8_t rpc_type;
-        uint8_t invalid_flag;
-    };
-    enum : uint8_t { REQ, RESP } msg_type;
-    size_t size;  // 实际数据大小
+    bool invalid_flag : 1;
+    enum : uint8_t { REQ, RESP } msg_type : 1;
+    uint8_t rpc_type;
+    size_t size : 32;  // 实际数据大小
     msgq_callback_t cb;
     void *arg;
 
     uint8_t data[0];
-};
-
-struct MsgDeqIter {
-    MsgHeader* operator*();
-    MsgDeqIter& operator++();
-    bool operator==(const MsgDeqIter &it);
-    bool operator!=(const MsgDeqIter &it);
-
-    MsgQueue *q;
-    MsgHeader* h;
-    size_t rest_len;
 };
 
 struct MsgBuffer {
@@ -64,32 +47,35 @@ struct MsgBuffer {
 };
 
 struct MsgQueue final {
-    constexpr static size_t RING_BUF_OFF = 16;
-
     MsgQueue();
     ~MsgQueue();
 
-    MsgDeqIter end();
     MsgHeader *alloc_msg_buffer(size_t size);
-    void enqueue_msg(uint8_t rpc_type, MsgHeader *h, size_t size);
-    MsgDeqIter dequeue_msg();
-    void free_msg_buffer(MsgHeader *h, size_t size, bool tail_valid);
+    void enqueue_msg();
+    void dequeue_msg(std::vector<MsgHeader *> &hv);
+    void free_msg_buffer();
 
-    struct msg_ring_headtail {
-        std::atomic<uint32_t> head; /**< prod/consumer head. */
-        std::atomic<uint32_t> tail; /**< prod/consumer tail. */
+    union po_val_t {
+        struct {
+            uint32_t pos;
+            uint32_t cnt;
+        };
+        uint64_t raw;
     };
 
-    msg_ring_headtail buf_head;  // enq
-    msg_ring_headtail buf_tail;  // deq
+    volatile po_val_t m_prod_head;
+    volatile po_val_t m_prod_tail;
+    volatile po_val_t m_cons_head;
+    volatile po_val_t m_cons_tail;
 
-    uint8_t ring_buf[0];
+    uint8_t m_ring[0];
 
-    void enqueue_invalid_msg(MsgHeader* h);
+    MsgHeader *at(size_t i);
+    static void update_ht(volatile po_val_t *ht, volatile po_val_t *ht_);
 };
 
 struct MsgQueueNexus {
-    constexpr static size_t max_msgq_handler = (1 << (sizeof(uint8_t) * 8)) - 1;
+    constexpr static size_t max_msgq_handler = (1 << (sizeof(uint8_t) * 8));
 
     MsgQueueNexus(void *msgq_zone_start_addr);
 
@@ -106,7 +92,7 @@ struct MsgQueueRPC {
 
     /**
      * @brief 申请发送buffer
-     * 
+     *
      * @warning 该操作是阻塞式调用
      *
      * @param size

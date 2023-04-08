@@ -144,7 +144,7 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
 
         __impl->m_page_table_cache.insert(page_id, offset);
 
-        DLOG("get ref: %ld --- %lx", page_id, offset);
+        DLOG("get ref: %ld --- %#x", page_id, offset);
     }
 
     memcpy(buf,
@@ -186,7 +186,7 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
 
         __impl->m_page_table_cache.insert(page_id, offset);
 
-        DLOG("get ref: %ld --- %lx", page_id, offset);
+        DLOG("get ref: %ld --- %#x", page_id, offset);
     }
 
     memcpy(reinterpret_cast<void *>(

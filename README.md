@@ -4,6 +4,10 @@ RCHMS应用程序在单个计算节点（CN）上运行，可以访问一个或�
 
 在物理层面构建内存池系统时，通常将计算物理机与存储物理机（包括CXL DRAM/AEP/SSD）分区放置，并通过CXL Switch在同一机柜内链接，这在该系统中视为一个机柜的管理。机柜内守护进程（Daemon）用于处理访问请求。各个机柜之间通过RDMA连接在一起，组成更大的网络结构。同时保留传统机柜（非CXL互联，包括DRAM/AEP/SSD/HDD）。
 
+## 依赖库
+
+* asio
+
 ## 主要部件
 
 ### 管理节点（MN）
@@ -47,8 +51,3 @@ RCHMS应用程序在单个计算节点（CN）上运行，可以访问一个或�
 * Page Table Cache：本地page缓存
 * Msg Queue：与Daemon通信的消息队列
 * RRPC：RDMA RPC通信模块
-
-
-# 注
-
-**千万不要修改`third_party`目录下的任何内容。**

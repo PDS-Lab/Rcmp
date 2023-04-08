@@ -6,7 +6,7 @@
 #include "rchms.hpp"
 
 using page_id_t = uint64_t;
-using offset_t = uint64_t;
+using offset_t = uint32_t;
 using mac_id_t = uint32_t;
 using rack_id_t = uint32_t;
 

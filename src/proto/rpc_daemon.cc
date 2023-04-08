@@ -105,7 +105,7 @@ AllocPageMemoryReply allocPageMemory(DaemonContext& daemon_context,
 
     daemon_context.m_page_table.insert(req.page_id, page_metadata);
 
-    DLOG("new page %ld ---> %lx", req.page_id, cxl_memory_offset);
+    DLOG("new page %ld ---> %#x", req.page_id, cxl_memory_offset);
 
     AllocPageMemoryReply reply;
     reply.ret = true;
@@ -115,7 +115,7 @@ AllocPageMemoryReply allocPageMemory(DaemonContext& daemon_context,
 AllocReply alloc(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
                  AllocRequest& req) {
     // alloc size aligned by cache line
-    size_t aligned_size = align_by(req.size, min_slab_size);
+    size_t aligned_size = align_ceil(req.size, min_slab_size);
 
     size_t slab_cls = aligned_size / min_slab_size - 1;
     std::list<page_id_t>& slab_list = daemon_context.m_can_alloc_slab_class_lists[slab_cls];

@@ -12,7 +12,7 @@ struct CXLSuperBlock {
 };
 
 /**
- * @brief 
+ * @brief cxl memory block format
  * 
  *      0     4096        4096+msgq    align(4096+msgq,psize)                 align(psize)     total
  *

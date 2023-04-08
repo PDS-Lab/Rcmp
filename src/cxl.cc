@@ -23,10 +23,10 @@ void cxl_memory_init(CXLMemFormat &format, void *cxl_memory_addr, size_t size,
     super_block->total_size = size;
     super_block->msgq_zone_size = msgq_zone_size;
     super_block->reserve_heap_size =
-        align_by(cxl_super_block_size + msgq_zone_size, page_size) - cxl_super_block_size -
+        align_ceil(cxl_super_block_size + msgq_zone_size, page_size) - cxl_super_block_size -
         msgq_zone_size;
     super_block->page_data_zone_size =
-        align_floor_by(size - msgq_zone_size - super_block->reserve_heap_size, page_size);
+        align_floor(size - msgq_zone_size - super_block->reserve_heap_size, page_size);
 
     cxl_memory_open(format, cxl_memory_addr);
 }

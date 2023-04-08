@@ -15,12 +15,17 @@ D div_ceil(D x, uint64_t div) {
 }
 
 template <typename D>
-D align_by(D x, uint64_t aligned) {
+D div_floor(D x, uint64_t div) {
+    return x / div;
+}
+
+template <typename D>
+D align_ceil(D x, uint64_t aligned) {
     return div_ceil(x, aligned) * aligned;
 }
 
 template <typename D>
-D align_floor_by(D x, uint64_t aligned) {
+D align_floor(D x, uint64_t aligned) {
     return (x / aligned) * aligned;
 }
 
