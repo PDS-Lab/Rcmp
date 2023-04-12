@@ -5,11 +5,12 @@
 #include "log.hpp"
 #include "rchms.hpp"
 #include "rpc_base.hpp"
+#include "utils.hpp"
 
 namespace rpc_daemon {
 
 struct JoinRackRequest : public RequestMsg {
-    char client_ipv4[16];
+    IPv4String client_ipv4;
     uint16_t client_port;
     rack_id_t rack_id;
 };

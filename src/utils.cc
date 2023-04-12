@@ -5,6 +5,7 @@
 #include <sys/time.h>
 
 #include <cstdlib>
+#include <cstring>
 
 #include "log.hpp"
 
@@ -25,3 +26,10 @@ uint64_t getTimestamp() {
     gettimeofday(&tv, nullptr);
     return ((uint64_t)tv.tv_sec << 32) | tv.tv_usec;
 }
+
+IPv4String::IPv4String(const std::string &ip) { strcpy(raw.ipstr, ip.c_str()); }
+IPv4String &IPv4String::operator=(const std::string &ip) {
+    strcpy(raw.ipstr, ip.c_str());
+    return *this;
+}
+std::string IPv4String::get_string() const { return std::string(raw.ipstr); }

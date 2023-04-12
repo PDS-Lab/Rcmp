@@ -47,7 +47,7 @@ void MsgQueueRPC::enqueue_response(MsgBuffer& req_buf, MsgBuffer& resp_buf) {
 }
 
 void MsgQueueRPC::run_event_loop_once() {
-    std::vector<MsgHeader*> hv;
+    static thread_local std::vector<MsgHeader*> hv;
     m_recv_queue->dequeue_msg(hv);
     for (auto& h : hv) {
         MsgBuffer buf;

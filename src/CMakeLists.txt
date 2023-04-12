@@ -7,6 +7,6 @@ list(FILTER LIB_SRCS EXCLUDE REGEX "/test/")
 
 add_definitions(-fPIC)
 add_library(base STATIC ${LIB_SRCS})
-target_link_libraries(base pthread erpc ibverbs numa)
+target_link_libraries(base pthread erpc ibverbs numa rdmacm)
 
 add_subdirectory(test)

@@ -40,7 +40,7 @@ PoolContext::PoolContext(ClientOptions options) {
     using JoinRackRPC = RPC_TYPE_STRUCT(rpc_daemon::joinRack);
     msgq::MsgBuffer req_raw = __impl->msgq_rpc->alloc_msg_buffer(sizeof(JoinRackRPC::RequestType));
     auto req = reinterpret_cast<JoinRackRPC::RequestType *>(req_raw.get_buf());
-    strcpy(req->client_ipv4, __impl->m_options.client_ip.c_str());
+    req->client_ipv4 =  __impl->m_options.client_ip;
     req->client_port = __impl->m_options.client_port;
     req->rack_id = __impl->m_options.rack_id;
 

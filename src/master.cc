@@ -6,6 +6,7 @@
 #include "log.hpp"
 #include "proto/rpc.hpp"
 #include "proto/rpc_adaptor.hpp"
+#include "rdma_rc.hpp"
 
 MasterContext &MasterContext::getInstance() {
     static MasterContext master_ctx;
@@ -25,6 +26,7 @@ erpc::IBRpcWrap MasterContext::get_erpc() { return m_erpc_ctx.rpc_set[0]; }
 int main(int argc, char *argv[]) {
     rchms::MasterOptions options;
     options.master_ip = "192.168.1.51";
+    options.master_rdma_ip = "192.168.200.51";
     options.master_port = 31850;
     options.max_cluster_mac_num = 100;
 
@@ -66,6 +68,10 @@ int main(int argc, char *argv[]) {
         erpc::IBRpcWrap(master_ctx.m_erpc_ctx.nexus.get(), &MasterContext::getInstance(), 0, smhw);
     master_ctx.m_erpc_ctx.rpc_set.push_back(rpc);
     DLOG_ASSERT(master_ctx.m_erpc_ctx.rpc_set.size() == 1);
+
+    rdma_rc::RDMAEnv::init();
+
+    master_ctx.listen_conn.listen(master_ctx.m_options.master_rdma_ip);
 
     DLOG("OK");
 

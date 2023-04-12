@@ -14,7 +14,9 @@ struct CXLSuperBlock {
 /**
  * @brief cxl memory block format
  * 
- *      0     4096        4096+msgq    align(4096+msgq,psize)                 align(psize)     total
+ *   2GB align                               2GB align
+ *
+ *      0     4096        4096+msgq    align(4096+msgq,2GB)                 align(psize)     total
  *
  *      [sp blk][    msgq    ][     reserve     ][             page data           ][   unused   ]
  */

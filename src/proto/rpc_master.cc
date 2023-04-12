@@ -31,9 +31,13 @@ JoinDaemonReply joinDaemon(MasterContext& master_context,
     DLOG("Connect with daemon [rack:%d --- id:%d]", daemon_connection.rack_id,
          daemon_connection.daemon_id);
 
+    auto local_addr = master_context.listen_conn.get_local_addr();
+
     JoinDaemonReply reply;
     reply.daemon_mac_id = mac_id;
     reply.master_mac_id = master_context.m_master_id;
+    reply.rdma_ipv4 = local_addr.first;
+    reply.rdma_port = local_addr.second;
     return reply;
 }
 

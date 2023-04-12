@@ -3,6 +3,7 @@
 #include "common.hpp"
 #include "impl.hpp"
 #include "rpc_base.hpp"
+#include "utils.hpp"
 
 namespace rpc_master {
 
@@ -14,6 +15,8 @@ struct JoinDaemonRequest : public RequestMsg {
 struct JoinDaemonReply : public ResponseMsg {
     mac_id_t daemon_mac_id;
     mac_id_t master_mac_id;
+    IPv4String rdma_ipv4;
+    uint16_t rdma_port;
 };
 /**
  * @brief 将daemon加入到集群中。在建立连接时调用。
@@ -82,7 +85,7 @@ struct GetRackDaemonByPageIDRequest : public RequestMsg {
     page_id_t page_id;
 };
 struct GetRackDaemonByPageIDReply : public ResponseMsg {
-    char dest_daemon_ipv4[16];
+    IPv4String dest_daemon_ipv4;
     uint16_t dest_daemon_port;
     rack_id_t rack_id;
 };

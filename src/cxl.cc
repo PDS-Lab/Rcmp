@@ -4,6 +4,7 @@
 #include <sys/mman.h>
 
 #include <cstdint>
+#include <cstdlib>
 
 #include "config.hpp"
 #include "log.hpp"
@@ -12,7 +13,10 @@
 void *cxl_open_simulate(std::string file, size_t size, int *fd) {
     *fd = open(file.c_str(), O_RDWR | O_CREAT, 0666);
     DLOG_ASSERT(*fd != -1, "Failed to open cxl dev: %s", file.c_str());
-    void *addr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, *fd, 0);
+    // 分配2GB对齐内存地址
+    void *addr = aligned_alloc(mem_region_aligned_size, size);
+    free(addr);
+    addr = mmap(addr, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED | MAP_LOCKED, *fd, 0);
     DLOG_ASSERT(addr != MAP_FAILED, "Failed to mmap cxl dev: %s", file.c_str());
     return addr;
 }
@@ -23,10 +27,10 @@ void cxl_memory_init(CXLMemFormat &format, void *cxl_memory_addr, size_t size,
     super_block->total_size = size;
     super_block->msgq_zone_size = msgq_zone_size;
     super_block->reserve_heap_size =
-        align_ceil(cxl_super_block_size + msgq_zone_size, page_size) - cxl_super_block_size -
-        msgq_zone_size;
-    super_block->page_data_zone_size =
-        align_floor(size - msgq_zone_size - super_block->reserve_heap_size, page_size);
+        align_ceil(cxl_super_block_size + msgq_zone_size, mem_region_aligned_size) -
+        (cxl_super_block_size + msgq_zone_size);
+    super_block->page_data_zone_size = align_floor(
+        size - cxl_super_block_size - msgq_zone_size - super_block->reserve_heap_size, page_size);
 
     cxl_memory_open(format, cxl_memory_addr);
 }

@@ -13,6 +13,8 @@
 #include "log.hpp"
 #include "msg_queue.hpp"
 #include "options.hpp"
+#include "rdma_rc.hpp"
+#include "stats.hpp"
 #include "udp_server.hpp"
 
 /************************  Master   **********************/
@@ -68,6 +70,8 @@ struct MasterContext {
         std::vector<erpc::IBRpcWrap> rpc_set;
     } m_erpc_ctx;
 
+    rdma_rc::RDMAConnection listen_conn;
+
     MasterContext() = default;
     MasterContext(MasterContext &) = delete;
     MasterContext(MasterContext &&) = delete;
@@ -83,13 +87,15 @@ struct MasterContext {
 
 struct DaemonConnection {
     std::string ip;
-    uint16_t port;
+    uint16_t port;   // erpc port
 
     virtual ~DaemonConnection() = default;
 };
 
 struct DaemonToMasterConnection : public DaemonConnection {
     mac_id_t master_id;
+
+    rdma_rc::RDMAConnection rdma_conn;
 };
 
 struct DaemonToClientConnection : public DaemonConnection {
@@ -134,6 +140,9 @@ struct DaemonContext {
     std::unique_ptr<SingleAllocator> m_cxl_page_allocator;
     ConcurrentHashMap<mac_id_t, DaemonConnection *> m_connect_table;
     ConcurrentHashMap<page_id_t, PageMetadata *> m_page_table;
+    ConcurrentHashMap<page_id_t, FreqStats *> m_hot_stats;
+
+    rdma_rc::RDMAConnection listen_conn;
 
     std::array<std::list<page_id_t>, page_size / min_slab_size> m_can_alloc_slab_class_lists;
 
@@ -154,6 +163,7 @@ struct DaemonContext {
 
     void initCXLPool();
     void initRPCNexus();
+    void initRDMARC();
     void connectWithMaster();
 
     DaemonConnection *get_connection(mac_id_t mac_id);
@@ -163,9 +173,6 @@ struct DaemonContext {
 /************************  Client   **********************/
 
 struct ClientConnection {
-    std::string ip;
-    uint16_t port;
-
     virtual ~ClientConnection() = default;
 };
 

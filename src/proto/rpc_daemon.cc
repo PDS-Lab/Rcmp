@@ -10,6 +10,7 @@
 #include "proto/rpc.hpp"
 #include "proto/rpc_adaptor.hpp"
 #include "proto/rpc_master.hpp"
+#include "stats.hpp"
 #include "udp_client.hpp"
 #include "utils.hpp"
 
@@ -62,7 +63,7 @@ JoinRackReply joinRack(DaemonContext& daemon_context, DaemonToClientConnection& 
     pkt.recv_q_off = reinterpret_cast<uintptr_t>(q) -
                      reinterpret_cast<uintptr_t>(daemon_context.m_cxl_memory_addr);
     UDPClient<msgq::MsgUDPConnPacket> udp_cli;
-    udp_cli.send(std::string(req.client_ipv4), req.client_port, pkt);
+    udp_cli.send(req.client_ipv4.get_string(), req.client_port, pkt);
     daemon_context.m_connect_table.insert(client_connection.client_id, &client_connection);
 
     DLOG("Connect with client [rack:%d --- id:%d]", daemon_context.m_options.rack_id,
@@ -80,6 +81,45 @@ GetPageRefReply getPageRef(DaemonContext& daemon_context,
     bool ret = daemon_context.m_page_table.find(req.page_id, &page_metadata);
 
     if (!ret) {
+        FreqStats* stats;
+        ret = daemon_context.m_hot_stats.find(req.page_id, &stats);
+
+        if (ret && stats->freq() >= page_hot_dio_swap_watermark) {
+            // TODO: page swap
+
+            /**
+             * 1. 向mn发送PageFault(page_id, swap_tag, my_page_addr, my_rkey, my_swap_addr,
+             * my_swap_rkey)
+             *      1.1 如果本地page少，则给swap_tag=false
+             * 2. mn向daemon发送MigratePage(page_id, who_daemon, swap_tag, page_addr, rkey, swap_addr,
+             * swap_rkey)
+             * 3. 与自己建立RDMA RC连接
+             * 4. daemonRDMA单边读将page_addr读过来、daemonRDMA单边写将自己page写过去swap_addr
+             *      4.1 如果swap_tag=false，则不写
+             * 5. daemon删除page meta，返回RPC
+             * 6. mn更改page dir，返回RPC
+             * 7. 更改page meta
+             */
+
+        } else {
+            if (!ret) {
+                stats = new FreqStats(page_hot_dio_swap_watermark * 2);
+                daemon_context.m_hot_stats.insert(req.page_id, stats);
+            }
+
+            // TODO: DIO
+
+            /**
+             * 1. 向mn发送LatchPageRack(page_id)，获取mn上page的daemon，并锁定该page
+             * 2. 与该daemon建立RDMA RC连接
+             * 3. 发送daemon请求DirectIO(page_id, my_buf_addr, my_size, my_rkey)
+             * 4. 读时，daemon单边写；写时，daemon单边读
+             * 5. RPC返回后，给mn发送UnLatchPageRack(page_id)解锁
+             */
+
+            stats->add(rdtsc());
+        }
+
         // TODO: 本地缺页
         DLOG_FATAL("Not Support");
     }

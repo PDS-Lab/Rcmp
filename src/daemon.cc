@@ -8,6 +8,7 @@
 #include "msg_queue.hpp"
 #include "proto/rpc.hpp"
 #include "proto/rpc_adaptor.hpp"
+#include "rdma_rc.hpp"
 
 using namespace std::chrono_literals;
 
@@ -72,6 +73,18 @@ void DaemonContext::initRPCNexus() {
     msgq_manager.rpc->m_recv_queue = msgq_manager.nexus->m_public_msgq;
 }
 
+void DaemonContext::initRDMARC() {
+    rdma_rc::RDMAEnv::init();
+
+    rdma_rc::RDMAConnection::register_connect_hook([](rdma_rc::RDMAConnection *conn) {
+        DLOG("[RDMA_RC] Get New Connect: %s", conn->get_peer_addr().first.c_str());
+    });
+    rdma_rc::RDMAConnection::register_disconnect_hook([](rdma_rc::RDMAConnection *conn) {
+        DLOG("[RDMA_RC] Disconnect: %s", conn->get_peer_addr().first.c_str());
+    });
+    listen_conn.listen(m_options.daemon_rdma_ip);
+}
+
 void DaemonContext::connectWithMaster() {
     auto rpc = get_erpc();
 
@@ -104,11 +117,16 @@ void DaemonContext::connectWithMaster() {
     m_master_connection.master_id = resp->master_mac_id;
     m_daemon_id = resp->daemon_mac_id;
 
+    std::string peer_ip(resp->rdma_ipv4.get_string());
+    uint16_t peer_port(resp->rdma_port);
+
     rpc.free_msg_buffer(req_raw);
     rpc.free_msg_buffer(resp_raw);
 
     DLOG_ASSERT(m_master_connection.master_id == master_id, "Fail to get master id");
     DLOG_ASSERT(m_daemon_id != master_id, "Fail to get daemon id");
+
+    m_master_connection.rdma_conn.connect(peer_ip, peer_port);
 
     DLOG("Connection with master OK, my id is %d", m_daemon_id);
 }
@@ -134,11 +152,12 @@ int main(int argc, char *argv[]) {
     options.master_ip = "192.168.1.51";
     options.master_port = 31850;
     options.daemon_ip = "192.168.1.51";
+    options.daemon_rdma_ip = "192.168.200.51";
     options.daemon_port = 31851;
     options.rack_id = 0;
     options.with_cxl = true;
-    options.cxl_devdax_path = "testfile";
-    options.cxl_memory_size = 20 << 20;
+    options.cxl_devdax_path = "/dev/shm/cxlsim";
+    options.cxl_memory_size = 4ul << 30;
     options.swap_zone_size = 2 << 20;
     options.max_client_limit = 2;  // 暂时未使用
     options.cxl_msgq_size = 5 << 10;
@@ -147,6 +166,7 @@ int main(int argc, char *argv[]) {
     daemon_ctx.m_options = options;
 
     daemon_ctx.initCXLPool();
+    daemon_ctx.initRDMARC();
     daemon_ctx.initRPCNexus();
     daemon_ctx.connectWithMaster();
 
