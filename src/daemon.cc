@@ -62,8 +62,8 @@ void DaemonContext::initRPCNexus() {
                                           bind_msgq_rpc_func<true>(rpc_daemon::joinRack));
     msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::alloc)::rpc_type,
                                           bind_msgq_rpc_func<false>(rpc_daemon::alloc));
-    msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::getPageRef)::rpc_type,
-                                          bind_msgq_rpc_func<false>(rpc_daemon::getPageRef));
+    msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::getPageRefOrProxy)::rpc_type,
+                                          bind_msgq_rpc_func<false>(rpc_daemon::getPageRefOrProxy));
     msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::__testdataSend1)::rpc_type,
                                           bind_msgq_rpc_func<false>(rpc_daemon::__testdataSend1));
     msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::__testdataSend2)::rpc_type,

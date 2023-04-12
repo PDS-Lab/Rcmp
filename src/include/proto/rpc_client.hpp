@@ -21,4 +21,23 @@ RemovePageCacheReply removePageCache(ClientContext& client_context,
                                      ClientToDaemonConnection& daemon_connection,
                                      RemovePageCacheRequest& req);
 
+struct GetCurrentWriteDataRequest : public RequestMsg {
+    void* dio_write_buf;
+    size_t dio_write_size;
+};
+struct GetCurrentWriteDataReply : public ResponseMsg {
+    uint8_t data[0];
+};
+GetCurrentWriteDataReply getCurrentWriteData(ClientContext& client_context,
+                                             ClientToDaemonConnection& daemon_connection,
+                                             GetCurrentWriteDataReply& req);
+
+struct GetPagePastAccessFreqRequest : public RequestMsg {};
+struct GetPagePastAccessFreqReply : public ResponseMsg {
+    uint64_t last_access_ts;
+};
+GetPagePastAccessFreqReply getPagePastAccessFreq(ClientContext& client_context,
+                                                 ClientToDaemonConnection& daemon_connection,
+                                                 GetPagePastAccessFreqRequest& req);
+
 }  // namespace rpc_client

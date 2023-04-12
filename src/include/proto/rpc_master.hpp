@@ -101,4 +101,57 @@ GetRackDaemonByPageIDReply getRackDaemonByPageID(MasterContext& master_context,
                                                  MasterToDaemonConnection& daemon_connection,
                                                  GetRackDaemonByPageIDRequest& req);
 
+struct LatchRemotePageRequest : public RequestMsg {
+    page_id_t page_id;
+};
+struct LatchRemotePageReply : public ResponseMsg {
+    rack_id_t dest_rack_id;
+    IPv4String dest_daemon_rdma_ipv4;
+    uint16_t dest_daemon_rdma_port;
+};
+/**
+ * @brief 获取并锁定远端page不被swap
+ *
+ * @param master_context
+ * @param daemon_connection
+ * @param req
+ * @return LatchRemotePageReply 返回目标daemon的rdma ip与port，以供建立连接
+ */
+LatchRemotePageReply latchRemotePage(MasterContext& master_context,
+                                     MasterToDaemonConnection& daemon_connection,
+                                     LatchRemotePageRequest& req);
+
+struct UnLatchRemotePageRequest : public RequestMsg {
+    page_id_t page_id;
+};
+struct UnLatchRemotePageReply : public ResponseMsg {};
+/**
+ * @brief 解锁远端page
+ *
+ * @param master_context
+ * @param daemon_connection
+ * @param req
+ * @return UnLatchRemotePageReply 返回目标daemon的rdma ip与port，以供建立连接
+ */
+UnLatchRemotePageReply unLatchRemotePage(MasterContext& master_context,
+                                         MasterToDaemonConnection& daemon_connection,
+                                         UnLatchRemotePageRequest& req);
+
+struct UnLatchPageAndBalanceRequest : public RequestMsg {
+    page_id_t page_id;
+    rack_id_t from_rack_id;
+};
+struct UnLatchPageAndBalanceReply : public ResponseMsg {};
+/**
+ * @brief 解锁远端page，并将该page转移至该daemon手中
+ *
+ * @param master_context
+ * @param daemon_connection
+ * @param req
+ * @return UnLatchPageAndBalanceReply 返回目标daemon的rdma ip与port，以供建立连接
+ */
+UnLatchPageAndBalanceReply unLatchPageAndBalance(MasterContext& master_context,
+                                                 MasterToDaemonConnection& daemon_connection,
+                                                 UnLatchPageAndBalanceRequest& req);
+
 }  // namespace rpc_master

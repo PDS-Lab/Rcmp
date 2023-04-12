@@ -40,7 +40,7 @@ PoolContext::PoolContext(ClientOptions options) {
     using JoinRackRPC = RPC_TYPE_STRUCT(rpc_daemon::joinRack);
     msgq::MsgBuffer req_raw = __impl->msgq_rpc->alloc_msg_buffer(sizeof(JoinRackRPC::RequestType));
     auto req = reinterpret_cast<JoinRackRPC::RequestType *>(req_raw.get_buf());
-    req->client_ipv4 =  __impl->m_options.client_ip;
+    req->client_ipv4 = __impl->m_options.client_ip;
     req->client_port = __impl->m_options.client_port;
     req->rack_id = __impl->m_options.rack_id;
 
@@ -120,16 +120,18 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
     if (!ret) {
         // TODO: locally get ref?
 
-        using GetPageRefRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageRef);
+        using GetPageRefOrProxyRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageRefOrProxy);
         msgq::MsgBuffer req_raw =
-            __impl->msgq_rpc->alloc_msg_buffer(sizeof(GetPageRefRPC::RequestType));
-        auto req = reinterpret_cast<GetPageRefRPC::RequestType *>(req_raw.get_buf());
+            __impl->msgq_rpc->alloc_msg_buffer(sizeof(GetPageRefOrProxyRPC::RequestType));
+        auto req = reinterpret_cast<GetPageRefOrProxyRPC::RequestType *>(req_raw.get_buf());
         req->mac_id = __impl->m_client_id;
-        req->page_id = page_id;
+        req->type = req->READ;
+        req->gaddr = gaddr;
+        req->cn_read_size = size;
 
         std::promise<msgq::MsgBuffer> pro;
         std::future<msgq::MsgBuffer> fu = pro.get_future();
-        __impl->msgq_rpc->enqueue_request(GetPageRefRPC::rpc_type, req_raw,
+        __impl->msgq_rpc->enqueue_request(GetPageRefOrProxyRPC::rpc_type, req_raw,
                                           msgq_general_promise_flag_cb, static_cast<void *>(&pro));
 
         while (fu.wait_for(1ns) == std::future_status::timeout) {
@@ -137,7 +139,9 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
         }
 
         msgq::MsgBuffer resp_raw = fu.get();
-        auto resp = reinterpret_cast<GetPageRefRPC::ResponseType *>(resp_raw.get_buf());
+        auto resp = reinterpret_cast<GetPageRefOrProxyRPC::ResponseType *>(resp_raw.get_buf());
+
+        // TODO: ref
 
         offset = resp->offset;
         __impl->msgq_rpc->free_msg_buffer(resp_raw);
@@ -149,7 +153,8 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
 
     memcpy(buf,
            reinterpret_cast<const void *>(
-               reinterpret_cast<uintptr_t>(__impl->format.page_data_start_addr) + offset + in_page_offset),
+               reinterpret_cast<uintptr_t>(__impl->format.page_data_start_addr) + offset +
+               in_page_offset),
            size);
     return Status::OK;
 }
@@ -162,16 +167,19 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
     if (!ret) {
         // TODO: locally get ref?
 
-        using GetPageRefRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageRef);
+        using GetPageRefOrProxyRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageRefOrProxy);
         msgq::MsgBuffer req_raw =
-            __impl->msgq_rpc->alloc_msg_buffer(sizeof(GetPageRefRPC::RequestType));
-        auto req = reinterpret_cast<GetPageRefRPC::RequestType *>(req_raw.get_buf());
+            __impl->msgq_rpc->alloc_msg_buffer(sizeof(GetPageRefOrProxyRPC::RequestType));
+        auto req = reinterpret_cast<GetPageRefOrProxyRPC::RequestType *>(req_raw.get_buf());
         req->mac_id = __impl->m_client_id;
-        req->page_id = page_id;
+        req->type = req->WRITE;
+        req->gaddr = gaddr;
+        req->cn_write_buf = buf;
+        req->cn_write_size = size;
 
         std::promise<msgq::MsgBuffer> pro;
         std::future<msgq::MsgBuffer> fu = pro.get_future();
-        __impl->msgq_rpc->enqueue_request(GetPageRefRPC::rpc_type, req_raw,
+        __impl->msgq_rpc->enqueue_request(GetPageRefOrProxyRPC::rpc_type, req_raw,
                                           msgq_general_promise_flag_cb, static_cast<void *>(&pro));
 
         while (fu.wait_for(1ns) == std::future_status::timeout) {
@@ -179,7 +187,9 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
         }
 
         msgq::MsgBuffer resp_raw = fu.get();
-        auto resp = reinterpret_cast<GetPageRefRPC::ResponseType *>(resp_raw.get_buf());
+        auto resp = reinterpret_cast<GetPageRefOrProxyRPC::ResponseType *>(resp_raw.get_buf());
+
+        // TODO: ref
 
         offset = resp->offset;
         __impl->msgq_rpc->free_msg_buffer(resp_raw);
@@ -189,9 +199,10 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
         DLOG("get ref: %ld --- %#x", page_id, offset);
     }
 
-    memcpy(reinterpret_cast<void *>(
-               reinterpret_cast<uintptr_t>(__impl->format.page_data_start_addr) + offset + in_page_offset),
-           buf, size);
+    memcpy(
+        reinterpret_cast<void *>(reinterpret_cast<uintptr_t>(__impl->format.page_data_start_addr) +
+                                 offset + in_page_offset),
+        buf, size);
     return Status::OK;
 }
 

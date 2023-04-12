@@ -29,31 +29,45 @@ struct JoinRackReply : public ResponseMsg {
 JoinRackReply joinRack(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
                        JoinRackRequest& req);
 
-struct GetPageRefRequest : public RequestMsg {
-    page_id_t page_id;
+struct GetPageRefOrProxyRequest : public RequestMsg {
+    enum {
+        READ,
+        WRITE,
+    } type;
+    rchms::GAddr gaddr;
+    union {
+        struct {  // type == READ
+            size_t cn_read_size;
+        };
+        struct {  // type == WRITE
+            void* cn_write_buf;
+            size_t cn_write_size;
+        };
+    };
 };
-struct GetPageRefReply : public ResponseMsg {
-    offset_t offset;
-    // union {
-    // struct {
-    //     char dest_daemon_ipv4[16];
-    //     uint16_t dest_daemon_port;
-    // };
-    // };
+struct GetPageRefOrProxyReply : public ResponseMsg {
+    bool refs;
+    union {
+        struct {  // refs == true
+            offset_t offset;
+        };
+        struct {  // refs == false
+            uint8_t read_data[0];
+        };
+    };
 };
 /**
  * @brief 获取page的引用。如果本地Page Table没有该page
  * id，则会触发远程调用。
  *
- * // 如果是直接内存访问，则返回-1，让client自己调用master的
- *
  * @param daemon_context
  * @param client_connection
  * @param req
- * @return GetPageRefReply
+ * @return GetPageRefOrProxyReply
  */
-GetPageRefReply getPageRef(DaemonContext& daemon_context,
-                           DaemonToClientConnection& client_connection, GetPageRefRequest& req);
+GetPageRefOrProxyReply getPageRefOrProxy(DaemonContext& daemon_context,
+                                         DaemonToClientConnection& client_connection,
+                                         GetPageRefOrProxyRequest& req);
 
 struct AllocPageMemoryRequest : public RequestMsg {
     page_id_t page_id;
@@ -108,6 +122,44 @@ struct FreeReply : public ResponseMsg {
  */
 FreeReply free(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
                FreeRequest& req);
+
+struct RdmaIODirectRequest : public RequestMsg {
+    enum {
+        READ,
+        WRITE,
+    } type;
+    rchms::GAddr gaddr;
+    uintptr_t buf_addr;
+    size_t buf_size;
+    uint32_t buf_rkey;
+};
+struct RdmaIODirectReply : public ResponseMsg {};
+/**
+ * @brief 进行远程直接操作
+ *
+ * @param daemon_context
+ * @param daemon_connection
+ * @param req
+ * @return RdmaIODirectReply
+ */
+RdmaIODirectReply rdmaIODirect(DaemonContext& daemon_context,
+                               DaemonToDaemonConnection& daemon_connection,
+                               RdmaIODirectRequest& req);
+
+struct TryMigratePageRequest : public RequestMsg {
+    page_id_t page_id;
+    uint64_t score;
+    uintptr_t swapout_page_addr;  // 当swapout_page_addr == 0且swapout_page_rkey == 0时代表不换出页
+    uintptr_t swapin_page_addr;
+    uint32_t swapout_page_rkey;
+    uint32_t swapin_page_rkey;
+};
+struct TryMigratePageReply : public ResponseMsg {
+    bool swaped;
+};
+TryMigratePageReply tryMigratePage(DaemonContext& daemon_context,
+                                   DaemonToDaemonConnection& daemon_connection,
+                                   TryMigratePageRequest& req);
 
 /************************* for test ***************************/
 

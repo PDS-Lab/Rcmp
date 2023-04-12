@@ -75,49 +75,51 @@ JoinRackReply joinRack(DaemonContext& daemon_context, DaemonToClientConnection& 
     return reply;
 }
 
-GetPageRefReply getPageRef(DaemonContext& daemon_context,
-                           DaemonToClientConnection& client_connection, GetPageRefRequest& req) {
+GetPageRefOrProxyReply getPageRefOrProxy(DaemonContext& daemon_context,
+                           DaemonToClientConnection& client_connection, GetPageRefOrProxyRequest& req) {
     PageMetadata* page_metadata;
-    bool ret = daemon_context.m_page_table.find(req.page_id, &page_metadata);
+    page_id_t page_id = GetPageID(req.gaddr);
+    bool ret = daemon_context.m_page_table.find(page_id, &page_metadata);
 
     if (!ret) {
         FreqStats* stats;
-        ret = daemon_context.m_hot_stats.find(req.page_id, &stats);
+        ret = daemon_context.m_hot_stats.find(page_id, &stats);
 
-        if (ret && stats->freq() >= page_hot_dio_swap_watermark) {
-            // TODO: page swap
-
-            /**
-             * 1. 向mn发送PageFault(page_id, swap_tag, my_page_addr, my_rkey, my_swap_addr,
-             * my_swap_rkey)
-             *      1.1 如果本地page少，则给swap_tag=false
-             * 2. mn向daemon发送MigratePage(page_id, who_daemon, swap_tag, page_addr, rkey, swap_addr,
-             * swap_rkey)
-             * 3. 与自己建立RDMA RC连接
-             * 4. daemonRDMA单边读将page_addr读过来、daemonRDMA单边写将自己page写过去swap_addr
-             *      4.1 如果swap_tag=false，则不写
-             * 5. daemon删除page meta，返回RPC
-             * 6. mn更改page dir，返回RPC
-             * 7. 更改page meta
-             */
-
-        } else {
+        if (!ret || stats->freq() < page_hot_dio_swap_watermark) {
             if (!ret) {
                 stats = new FreqStats(page_hot_dio_swap_watermark * 2);
-                daemon_context.m_hot_stats.insert(req.page_id, stats);
+                daemon_context.m_hot_stats.insert(page_id, stats);
             }
 
             // TODO: DIO
 
             /**
-             * 1. 向mn发送LatchPageRack(page_id)，获取mn上page的daemon，并锁定该page
+             * 1. 向mn发送LatchPage(page_id)，获取mn上page的daemon，并锁定该page
              * 2. 与该daemon建立RDMA RC连接
-             * 3. 发送daemon请求DirectIO(page_id, my_buf_addr, my_size, my_rkey)
+             *      2.1 若是write，与此同时向cn发送
+             * 3. 发送daemon请求rdmaIODirect(page_id, my_buf_addr, my_size, my_rkey)
              * 4. 读时，daemon单边写；写时，daemon单边读
-             * 5. RPC返回后，给mn发送UnLatchPageRack(page_id)解锁
+             * 5. RPC返回后，给mn发送UnLatchPage(page_id)解锁
              */
 
-            stats->add(rdtsc());
+            stats->add(getTimestamp());
+        } else {
+            // TODO: page swap
+
+            /**
+             * 1. 向mn发送LatchPage(page_id)，获取mn上page的daemon，并锁定该page
+             *      1.1 如果本地page不够，与此同时向所有cn发起getPagePastAccessFreq()获取最久远的swapout page
+             * 2. 与自己建立RDMA RC连接
+             * 3. mn向daemon发送tryMigratePage(page_id, swapout meta, swapin meta)
+             *      3.1 如果本地page少，则无swapout meta
+             * 4. daemonRDMA单边读将page_addr读过来、daemonRDMA单边写将自己page写过去swap_addr
+             *      4.1 如果无swapout meta，则不写
+             *      4.2 如果拒绝，则自己需要DIO访问
+             * 5. daemon删除page meta，返回RPC
+             * 6. 向mn发送unLatchPageAndBalance，更改page dir，返回RPC
+             * 7. 更改page meta
+             * 8. 返回ref
+             */
         }
 
         // TODO: 本地缺页
@@ -126,7 +128,7 @@ GetPageRefReply getPageRef(DaemonContext& daemon_context,
 
     page_metadata->ref_client.insert(&client_connection);
 
-    GetPageRefReply reply;
+    GetPageRefOrProxyReply reply;
     reply.offset = page_metadata->cxl_memory_offset;
     return reply;
 }
@@ -159,6 +161,8 @@ AllocReply alloc(DaemonContext& daemon_context, DaemonToClientConnection& client
 
     size_t slab_cls = aligned_size / min_slab_size - 1;
     std::list<page_id_t>& slab_list = daemon_context.m_can_alloc_slab_class_lists[slab_cls];
+
+    // TODO: 不再做slab分配
 
     if (slab_list.empty()) {
         DLOG("alloc a new page");
