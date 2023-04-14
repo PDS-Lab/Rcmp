@@ -174,6 +174,12 @@ int RDMAConnection::listen(const std::string &ip) {
 
     DLOG("%s:%d", get_local_addr().first.c_str(), get_local_addr().second);
 
+    m_pd_ = RDMAEnv::get_instance().m_pd_map_[m_cm_id_->verbs];
+    if (!m_pd_) {
+        DLOG_ERROR("ibv_alloc_pd fail");
+        return -1;
+    }
+
     m_conn_handler_ = new std::thread(&RDMAConnection::m_handle_connection_, this);
     if (!m_conn_handler_) {
         DLOG_ERROR("rdma connect fail");
@@ -288,9 +294,8 @@ void RDMAConnection::m_handle_connection_() {
         if (event->event == RDMA_CM_EVENT_CONNECT_REQUEST) {
             struct rdma_cm_id *cm_id = event->id;
 
-            uint8_t param_buf[1ul << (sizeof(cm_id->event->param.conn.private_data_len) * 8)];
-            memcpy(param_buf, cm_id->event->param.conn.private_data,
-                   cm_id->event->param.conn.private_data_len);
+            uint8_t param_buf[1ul << (sizeof(event->param.conn.private_data_len) * 8)];
+            memcpy(param_buf, event->param.conn.private_data, event->param.conn.private_data_len);
 
             rdma_ack_cm_event(event);
 

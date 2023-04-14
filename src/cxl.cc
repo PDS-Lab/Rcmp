@@ -21,6 +21,11 @@ void *cxl_open_simulate(std::string file, size_t size, int *fd) {
     return addr;
 }
 
+void cxl_close_simulate(int fd, CXLMemFormat &format) {
+    munmap(const_cast<void *>(format.start_addr), format.super_block->total_size);
+    close(fd);
+}
+
 void cxl_memory_init(CXLMemFormat &format, void *cxl_memory_addr, size_t size,
                      size_t msgq_zone_size) {
     CXLSuperBlock *super_block = reinterpret_cast<CXLSuperBlock *>(cxl_memory_addr);
@@ -36,6 +41,7 @@ void cxl_memory_init(CXLMemFormat &format, void *cxl_memory_addr, size_t size,
 }
 
 void cxl_memory_open(CXLMemFormat &format, void *cxl_memory_addr) {
+    format.start_addr = cxl_memory_addr;
     format.super_block = reinterpret_cast<CXLSuperBlock *>(cxl_memory_addr);
     format.msgq_zone_start_addr = reinterpret_cast<void *>(
         (reinterpret_cast<uintptr_t>(cxl_memory_addr) + cxl_super_block_size));
@@ -45,6 +51,9 @@ void cxl_memory_open(CXLMemFormat &format, void *cxl_memory_addr) {
     format.page_data_start_addr =
         reinterpret_cast<void *>((reinterpret_cast<uintptr_t>(format.reserve_zone_addr) +
                                   format.super_block->reserve_heap_size));
+    format.end_addr =
+        reinterpret_cast<void *>((reinterpret_cast<uintptr_t>(format.page_data_start_addr) +
+                                  format.super_block->page_data_zone_size));
 
     DLOG("super_block: %p", format.super_block);
     DLOG("msgq_zone_start_addr: %p", format.msgq_zone_start_addr);

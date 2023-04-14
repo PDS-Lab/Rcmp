@@ -1,4 +1,5 @@
 #include <cassert>
+#include <cstdint>
 #include <vector>
 
 #include "cmdline.h"
@@ -14,7 +15,8 @@ int main(int argc, char *argv[]) {
     cmd.add<uint32_t>("rack_id");
     cmd.add<std::string>("cxl_devdax_path");
     cmd.add<size_t>("cxl_memory_size");
-    cmd.parse(argc, argv);
+    bool ret = cmd.parse(argc, argv);
+    DLOG_ASSERT(ret);
 
     rchms::ClientOptions options;
     options.client_ip = cmd.get<std::string>("client_ip");
@@ -26,20 +28,28 @@ int main(int argc, char *argv[]) {
 
     rchms::PoolContext *pool = rchms::Open(options);
 
-    vector<rchms::GAddr> v;
-    for (int i = 0; i < 100000; ++i) {
-        v.push_back(pool->Alloc(sizeof(int)));
+    while (1) {
+        std::string cmdstr;
+        cout << "> ";
+        cin >> cmdstr;
+        if (cmdstr == "alloc") {
+            rchms::GAddr gaddr = pool->Alloc(8);
+            cout << gaddr << endl;
+        } else if (cmdstr == "read") {
+            rchms::GAddr gaddr;
+            cin >> gaddr;
+            uint64_t n;
+            pool->Read(gaddr, 8, &n);
+            cout << n << endl;
+        } else if (cmdstr == "write") {
+            rchms::GAddr gaddr;
+            uint64_t n;
+            cin >> gaddr >> n;
+            pool->Write(gaddr, 8, &n);
+        } else {
+            cout << "Illegal Operation" << endl;
+        }
     }
-    for (int i = 0; i < v.size(); ++i) {
-        pool->Write(v[i], sizeof(int), &i);
-    }
-    for (int i = 0; i < v.size(); ++i) {
-        int n;
-        pool->Read(v[i], sizeof(int), &n);
-        DLOG_EXPR(n, ==, i);
-    }
-
-    DLOG("OK");
 
     return 0;
 }

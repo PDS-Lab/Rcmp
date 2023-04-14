@@ -37,7 +37,7 @@ JoinRackReply joinRack(DaemonContext& daemon_context, DaemonToClientConnection& 
 
     std::promise<void> pro;
     std::future<void> fu = pro.get_future();
-    rpc.enqueue_request(daemon_context.m_master_connection.master_session, JoinClientRPC::rpc_type,
+    rpc.enqueue_request(daemon_context.m_master_connection.peer_session, JoinClientRPC::rpc_type,
                         req_raw, resp_raw, erpc_general_promise_flag_cb, static_cast<void*>(&pro));
 
     while (fu.wait_for(1ns) == std::future_status::timeout) {
@@ -55,10 +55,10 @@ JoinRackReply joinRack(DaemonContext& daemon_context, DaemonToClientConnection& 
     rpc.free_msg_buffer(resp_raw);
 
     // 2. 分配msg queue
-    msgq::MsgQueue* q = daemon_context.msgq_manager.allocQueue();
+    msgq::MsgQueue* q = daemon_context.m_msgq_manager.allocQueue();
     client_connection.msgq_rpc =
-        new msgq::MsgQueueRPC(daemon_context.msgq_manager.nexus.get(), &daemon_context);
-    client_connection.msgq_rpc->m_recv_queue = daemon_context.msgq_manager.nexus->m_public_msgq;
+        new msgq::MsgQueueRPC(daemon_context.m_msgq_manager.nexus.get(), &daemon_context);
+    client_connection.msgq_rpc->m_recv_queue = daemon_context.m_msgq_manager.nexus->m_public_msgq;
     client_connection.msgq_rpc->m_send_queue = q;
 
     // 3. 通过UDP通知client创建msgq
@@ -150,14 +150,13 @@ retry:
 
         std::promise<void> pro;
         std::future<void> fu = pro.get_future();
-        rpc.enqueue_request(daemon_context.m_master_connection.master_session,
+        rpc.enqueue_request(daemon_context.m_master_connection.peer_session,
                             LatchRemotePageRPC::rpc_type, req_raw, resp_raw,
                             erpc_general_promise_flag_cb, static_cast<void*>(&pro));
 
         switch (req.type) {
             case GetPageRefOrProxyRequest::WRITE: {
                 // 1.1 如果是写操作，则并行获取cn的write buf
-                DLOG_FATAL("Not Support");
 
                 using GetCurrentWriteDataRPC = RPC_TYPE_STRUCT(rpc_client::getCurrentWriteData);
                 auto wd_req_raw = client_connection.msgq_rpc->alloc_msg_buffer(
@@ -182,8 +181,10 @@ retry:
                 auto wd_resp =
                     reinterpret_cast<GetCurrentWriteDataRPC::ResponseType*>(wd_resp_raw.get_buf());
 
+                ibv_mr* mr = daemon_context.get_mr(wd_resp->data);
+
                 my_data_buf = reinterpret_cast<uintptr_t>(wd_resp->data);
-                my_rkey = 0;  // TODO: msgq ring mr rkey
+                my_rkey = mr->rkey;
                 my_size = req.cn_write_size;
 
                 client_connection.msgq_rpc->free_msg_buffer(wd_resp_raw);
@@ -192,8 +193,11 @@ retry:
             case GetPageRefOrProxyRequest::READ: {
                 // 1.2 如果是读操作，则动态申请读取resp buf
                 reply_ptr = req.alloc_flex_resp(req.cn_read_size);
+
+                ibv_mr* mr = daemon_context.get_mr(reply_ptr->read_data);
+
                 my_data_buf = reinterpret_cast<uintptr_t>(reply_ptr->read_data);
-                my_rkey = 0;  // TODO: msgq ring mr rkey
+                my_rkey = mr->rkey;
                 my_size = req.cn_read_size;
                 break;
             }
@@ -210,13 +214,13 @@ retry:
         DaemonConnection* dest_daemon_conn_tmp;
         ret = daemon_context.m_connect_table.find(resp->dest_daemon_id, &dest_daemon_conn_tmp);
         if (!ret) {
-            // TODO: 与该daemon建立erpc与RDMA RC
+            // 与该daemon建立erpc与RDMA RC
 
             DaemonToDaemonConnection* dd_conn = new DaemonToDaemonConnection();
             dest_daemon_conn_tmp = dd_conn;
             std::string server_uri = resp->dest_daemon_ipv4.get_string() + ":" +
                                      std::to_string(resp->dest_daemon_erpc_port);
-            dd_conn->daemon_session = rpc.create_session(server_uri, 0);
+            dd_conn->peer_session = rpc.create_session(server_uri, 0);
             dd_conn->daemon_id = resp->dest_rack_id;
             dd_conn->rack_id = resp->dest_rack_id;
             dd_conn->ip = resp->dest_daemon_ipv4.get_string();
@@ -235,7 +239,7 @@ retry:
 
             std::promise<void> pro;
             std::future<void> fu = pro.get_future();
-            rpc.enqueue_request(dd_conn->daemon_session, CrossRackConnectRPC::rpc_type, req_raw,
+            rpc.enqueue_request(dd_conn->peer_session, CrossRackConnectRPC::rpc_type, req_raw,
                                 resp_raw, erpc_general_promise_flag_cb, static_cast<void*>(&pro));
 
             while (fu.wait_for(1ns) == std::future_status::timeout) {
@@ -269,6 +273,7 @@ retry:
         // 3. 调用dio读写远端内存
         {
             using RDMAIODirectRPC = RPC_TYPE_STRUCT(rpc_daemon::rdmaIODirect);
+
             auto req_raw = rpc.alloc_msg_buffer_or_die(sizeof(RDMAIODirectRPC::RequestType));
             auto resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(RDMAIODirectRPC::ResponseType));
 
@@ -288,7 +293,7 @@ retry:
 
             std::promise<void> pro;
             std::future<void> fu = pro.get_future();
-            rpc.enqueue_request(dest_daemon_conn->daemon_session, RDMAIODirectRPC::rpc_type,
+            rpc.enqueue_request(dest_daemon_conn->peer_session, RDMAIODirectRPC::rpc_type,
                                 req_raw, resp_raw, erpc_general_promise_flag_cb,
                                 static_cast<void*>(&pro));
 
@@ -313,7 +318,7 @@ retry:
 
             std::promise<void> pro;
             std::future<void> fu = pro.get_future();
-            rpc.enqueue_request(daemon_context.m_master_connection.master_session,
+            rpc.enqueue_request(daemon_context.m_master_connection.peer_session,
                                 UnLatchRemotePageRPC::rpc_type, req_raw, resp_raw,
                                 erpc_general_promise_flag_cb, static_cast<void*>(&pro));
 
@@ -367,7 +372,7 @@ AllocPageMemoryReply allocPageMemory(DaemonContext& daemon_context,
 
     daemon_context.m_page_table.insert(req.page_id, page_metadata);
 
-    DLOG("new page %ld ---> %#x", req.page_id, cxl_memory_offset);
+    DLOG("new page %ld ---> %#lx", req.page_id, cxl_memory_offset);
 
     AllocPageMemoryReply reply;
     reply.ret = true;
@@ -403,7 +408,7 @@ AllocReply alloc(DaemonContext& daemon_context, DaemonToClientConnection& client
 
         std::promise<void> pro;
         std::future<void> fu = pro.get_future();
-        rpc.enqueue_request(daemon_context.m_master_connection.master_session,
+        rpc.enqueue_request(daemon_context.m_master_connection.peer_session,
                             PageAllocRPC::rpc_type, req_raw, resp_raw, erpc_general_promise_flag_cb,
                             static_cast<void*>(&pro));
 
@@ -462,23 +467,22 @@ RdmaIODirectReply rdmaIODirect(DaemonContext& daemon_context,
     bool ret = daemon_context.m_page_table.find(page_id, &page_meta);
     DLOG_ASSERT(ret, "Can't find page %lu", page_id);
 
-    ibv_mr& mr = daemon_context.m_rdma_page_mr_table[page_meta->cxl_memory_offset / page_size];
-
-    DLOG_ASSERT(mr.addr != nullptr, "The page %lu isn't registered to rdma memory", page_id);
-
     uintptr_t local_addr =
-        reinterpret_cast<uintptr_t>(daemon_context.cxl_format.page_data_start_addr) +
+        reinterpret_cast<uintptr_t>(daemon_context.m_cxl_format.page_data_start_addr) +
         page_meta->cxl_memory_offset + page_offset;
+    ibv_mr* mr = daemon_context.get_mr(reinterpret_cast<void*>(local_addr));
+
+    DLOG_ASSERT(mr->addr != nullptr, "The page %lu isn't registered to rdma memory", page_id);
 
     rdma_rc::RDMABatch ba;
     switch (req.type) {
         case RdmaIODirectRequest::READ:
-            daemon_connection.rdma_conn->prep_write(ba, local_addr, mr.lkey, req.buf_size,
+            daemon_connection.rdma_conn->prep_write(ba, local_addr, mr->lkey, req.buf_size,
                                                     req.buf_addr, req.buf_rkey, false);
             break;
 
         case RdmaIODirectRequest::WRITE:
-            daemon_connection.rdma_conn->prep_read(ba, local_addr, mr.lkey, req.buf_size,
+            daemon_connection.rdma_conn->prep_read(ba, local_addr, mr->lkey, req.buf_size,
                                                    req.buf_addr, req.buf_rkey, false);
             break;
     }

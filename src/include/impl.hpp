@@ -5,6 +5,7 @@
 #include <list>
 #include <memory>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "allocator.hpp"
@@ -78,7 +79,7 @@ struct MasterContext {
         std::vector<erpc::IBRpcWrap> rpc_set;
     } m_erpc_ctx;
 
-    rdma_rc::RDMAConnection listen_conn;
+    rdma_rc::RDMAConnection m_listen_conn;
 
     MasterContext() = default;
     MasterContext(MasterContext &) = delete;
@@ -103,8 +104,8 @@ struct DaemonConnection {
 struct DaemonToMasterConnection : public DaemonConnection {
     mac_id_t master_id;
 
-    int master_session;
-    rdma_rc::RDMAConnection rdma_conn;
+    int peer_session;
+    rdma_rc::RDMAConnection *rdma_conn;
 };
 
 struct DaemonToClientConnection : public DaemonConnection {
@@ -117,7 +118,7 @@ struct DaemonToDaemonConnection : public DaemonConnection {
     rack_id_t rack_id;
     mac_id_t daemon_id;
 
-    int daemon_session;
+    int peer_session;
     rdma_rc::RDMAConnection *rdma_conn;
 };
 
@@ -144,8 +145,8 @@ struct DaemonContext {
     size_t m_current_used_page_num;       // 当前使用的数据页个数
     size_t m_current_used_swap_page_num;  // 当前正在swap的页个数
 
-    CXLMemFormat cxl_format;
-    msgq::MsgQueueManager msgq_manager;
+    CXLMemFormat m_cxl_format;
+    msgq::MsgQueueManager m_msgq_manager;
     DaemonToMasterConnection m_master_connection;
     std::vector<DaemonToClientConnection *> m_client_connect_table;
     std::vector<DaemonToDaemonConnection *> m_other_daemon_connect_table;
@@ -155,7 +156,8 @@ struct DaemonContext {
     ConcurrentHashMap<page_id_t, FreqStats *> m_hot_stats;
 
     rdma_rc::RDMAConnection m_listen_conn;
-    std::vector<ibv_mr> m_rdma_page_mr_table;
+    std::vector<ibv_mr*> m_rdma_page_mr_table;   // 为cxl注册的mr，初始化长度后不可更改
+    std::unordered_map<void*, ibv_mr*> m_rdma_mr_table;
 
     std::array<std::list<page_id_t>, page_size / min_slab_size> m_can_alloc_slab_class_lists;
 
@@ -177,9 +179,11 @@ struct DaemonContext {
     void initRPCNexus();
     void initRDMARC();
     void connectWithMaster();
+    void registerCXLMR();
 
     DaemonConnection *get_connection(mac_id_t mac_id);
     erpc::IBRpcWrap get_erpc();
+    ibv_mr *get_mr(void *p);
 };
 
 /************************  Client   **********************/
@@ -207,14 +211,17 @@ struct ClientContext {
     int m_cxl_devdax_fd;
     void *m_cxl_memory_addr;
 
-    CXLMemFormat format;
-    std::unique_ptr<UDPServer<msgq::MsgUDPConnPacket>> udp_conn_recver;
-    std::unique_ptr<msgq::MsgQueueRPC> msgq_rpc;
-    std::unique_ptr<msgq::MsgQueueNexus> msgq_nexus;
+    CXLMemFormat m_cxl_format;
+    std::unique_ptr<UDPServer<msgq::MsgUDPConnPacket>> m_udp_conn_recver;
+    std::unique_ptr<msgq::MsgQueueRPC> m_msgq_rpc;
+    std::unique_ptr<msgq::MsgQueueNexus> m_msgq_nexus;
     ClientToMasterConnection m_master_connection;
     ClientToDaemonConnection m_local_rack_daemon_connection;
     ConcurrentHashMap<mac_id_t, ClientToDaemonConnection *> m_other_rack_daemon_connection;
     ConcurrentHashMap<page_id_t, offset_t> m_page_table_cache;
+
+    volatile bool m_msgq_stop;
+    std::thread m_msgq_worker;
 
     ClientConnection *get_connection(mac_id_t mac_id);
 };

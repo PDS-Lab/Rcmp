@@ -1,7 +1,10 @@
 #include <chrono>
+#include <cstdint>
 #include <future>
 
+#include "cmdline.h"
 #include "common.hpp"
+#include "config.hpp"
 #include "cxl.hpp"
 #include "impl.hpp"
 #include "log.hpp"
@@ -9,6 +12,7 @@
 #include "proto/rpc.hpp"
 #include "proto/rpc_adaptor.hpp"
 #include "rdma_rc.hpp"
+#include "utils.hpp"
 
 using namespace std::chrono_literals;
 
@@ -22,15 +26,15 @@ void DaemonContext::initCXLPool() {
     m_cxl_memory_addr =
         cxl_open_simulate(m_options.cxl_devdax_path, m_options.cxl_memory_size, &m_cxl_devdax_fd);
 
-    cxl_memory_init(cxl_format, m_cxl_memory_addr, m_options.cxl_memory_size,
+    cxl_memory_init(m_cxl_format, m_cxl_memory_addr, m_options.cxl_memory_size,
                     m_options.cxl_msgq_size);
 
     // 2. 确认page个数
-    m_total_page_num = cxl_format.super_block->page_data_zone_size / page_size;
+    m_total_page_num = m_cxl_format.super_block->page_data_zone_size / page_size;
     m_max_swap_page_num = m_options.swap_zone_size / page_size;
     m_max_data_page_num = m_total_page_num - m_max_swap_page_num;
     m_cxl_page_allocator.reset(
-        new SingleAllocator(cxl_format.super_block->page_data_zone_size, page_size));
+        new SingleAllocator(m_cxl_format.super_block->page_data_zone_size, page_size));
 
     m_current_used_page_num = 0;
     m_current_used_swap_page_num = 0;
@@ -41,6 +45,11 @@ void DaemonContext::initRPCNexus() {
     std::string server_uri = m_options.daemon_ip + ":" + std::to_string(m_options.daemon_port);
     m_erpc_ctx.nexus.reset(new erpc::NexusWrap(server_uri));
 
+    m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::crossRackConnect)::rpc_type,
+                                        bind_erpc_func<true>(rpc_daemon::crossRackConnect));
+    m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::rdmaIODirect)::rpc_type,
+                                        bind_erpc_func<true>(rpc_daemon::rdmaIODirect));
+
     erpc::SMHandlerWrap smhw;
     smhw.set_empty();
 
@@ -49,28 +58,30 @@ void DaemonContext::initRPCNexus() {
     DLOG_ASSERT(m_erpc_ctx.rpc_set.size() == 1);
 
     // 2. init msgq
-    msgq_manager.nexus.reset(new msgq::MsgQueueNexus(cxl_format.msgq_zone_start_addr));
-    msgq_manager.start_addr = cxl_format.msgq_zone_start_addr;
-    msgq_manager.msgq_allocator.reset(
+    m_msgq_manager.nexus.reset(new msgq::MsgQueueNexus(m_cxl_format.msgq_zone_start_addr));
+    m_msgq_manager.start_addr = m_cxl_format.msgq_zone_start_addr;
+    m_msgq_manager.msgq_allocator.reset(
         new SingleAllocator(m_options.cxl_msgq_size, msgq::MsgQueueManager::RING_ELEM_SIZE));
 
-    msgq::MsgQueue *public_q = msgq_manager.allocQueue();
-    DLOG_ASSERT(public_q == msgq_manager.nexus->m_public_msgq);
+    msgq::MsgQueue *public_q = m_msgq_manager.allocQueue();
+    DLOG_ASSERT(public_q == m_msgq_manager.nexus->m_public_msgq);
+
+    m_msgq_manager.rpc.reset(new msgq::MsgQueueRPC(m_msgq_manager.nexus.get(), this));
+    m_msgq_manager.rpc->m_recv_queue = m_msgq_manager.nexus->m_public_msgq;
 
     // 3. bind rpc function
-    msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::joinRack)::rpc_type,
-                                          bind_msgq_rpc_func<true>(rpc_daemon::joinRack));
-    msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::alloc)::rpc_type,
-                                          bind_msgq_rpc_func<false>(rpc_daemon::alloc));
-    msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::getPageRefOrProxy)::rpc_type,
-                                          bind_msgq_rpc_func<false>(rpc_daemon::getPageRefOrProxy));
-    msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::__testdataSend1)::rpc_type,
-                                          bind_msgq_rpc_func<false>(rpc_daemon::__testdataSend1));
-    msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::__testdataSend2)::rpc_type,
-                                          bind_msgq_rpc_func<false>(rpc_daemon::__testdataSend2));
+    m_msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::joinRack)::rpc_type,
+                                            bind_msgq_rpc_func<true>(rpc_daemon::joinRack));
+    m_msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::alloc)::rpc_type,
+                                            bind_msgq_rpc_func<false>(rpc_daemon::alloc));
+    m_msgq_manager.nexus->register_req_func(
+        RPC_TYPE_STRUCT(rpc_daemon::getPageRefOrProxy)::rpc_type,
+        bind_msgq_rpc_func<false>(rpc_daemon::getPageRefOrProxy));
 
-    msgq_manager.rpc.reset(new msgq::MsgQueueRPC(msgq_manager.nexus.get(), this));
-    msgq_manager.rpc->m_recv_queue = msgq_manager.nexus->m_public_msgq;
+    m_msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::__testdataSend1)::rpc_type,
+                                            bind_msgq_rpc_func<false>(rpc_daemon::__testdataSend1));
+    m_msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::__testdataSend2)::rpc_type,
+                                            bind_msgq_rpc_func<false>(rpc_daemon::__testdataSend2));
 }
 
 void DaemonContext::initRDMARC() {
@@ -104,7 +115,7 @@ void DaemonContext::connectWithMaster() {
     auto rpc = get_erpc();
 
     std::string master_uri = m_options.master_ip + ":" + std::to_string(m_options.master_port);
-    m_master_connection.master_session = rpc.create_session(master_uri, 0);
+    m_master_connection.peer_session = rpc.create_session(master_uri, 0);
 
     using JoinDaemonRPC = RPC_TYPE_STRUCT(rpc_master::joinDaemon);
 
@@ -118,7 +129,7 @@ void DaemonContext::connectWithMaster() {
 
     std::promise<void> pro;
     std::future<void> fu = pro.get_future();
-    rpc.enqueue_request(m_master_connection.master_session, JoinDaemonRPC::rpc_type, req_raw,
+    rpc.enqueue_request(m_master_connection.peer_session, JoinDaemonRPC::rpc_type, req_raw,
                         resp_raw, erpc_general_promise_flag_cb, static_cast<void *>(&pro));
 
     while (fu.wait_for(1ns) == std::future_status::timeout) {
@@ -145,9 +156,21 @@ void DaemonContext::connectWithMaster() {
     param.mac_id = m_daemon_id;
     param.role = CXL_DAEMON;
 
-    m_master_connection.rdma_conn.connect(peer_ip, peer_port, &param, sizeof(param));
+    m_master_connection.rdma_conn = new rdma_rc::RDMAConnection();
+
+    m_master_connection.rdma_conn->connect(peer_ip, peer_port, &param, sizeof(param));
 
     DLOG("Connection with master OK, my id is %d", m_daemon_id);
+}
+
+void DaemonContext::registerCXLMR() {
+    for (uintptr_t cxl_start_ptr = reinterpret_cast<uintptr_t>(m_cxl_format.start_addr);
+         cxl_start_ptr < reinterpret_cast<uintptr_t>(m_cxl_format.end_addr);
+         cxl_start_ptr += mem_region_aligned_size) {
+        ibv_mr *mr = m_listen_conn.register_memory(reinterpret_cast<void *>(cxl_start_ptr),
+                                                   mem_region_aligned_size);
+        m_rdma_page_mr_table.push_back(mr);
+    }
 }
 
 DaemonConnection *DaemonContext::get_connection(mac_id_t mac_id) {
@@ -164,19 +187,42 @@ DaemonConnection *DaemonContext::get_connection(mac_id_t mac_id) {
 
 erpc::IBRpcWrap DaemonContext::get_erpc() { return m_erpc_ctx.rpc_set[0]; }
 
+ibv_mr *DaemonContext::get_mr(void *p) {
+    if (p >= m_cxl_format.start_addr && p < m_cxl_format.end_addr) {
+        return m_rdma_page_mr_table[(reinterpret_cast<uintptr_t>(p) -
+                                     reinterpret_cast<const uintptr_t>(m_cxl_format.start_addr)) /
+                                    mem_region_aligned_size];
+    } else {
+        return m_rdma_mr_table[reinterpret_cast<void *>(
+            align_floor(reinterpret_cast<uintptr_t>(p), mem_region_aligned_size))];
+    }
+}
+
 PageMetadata::PageMetadata(size_t slab_size) : slab_allocator(page_size, slab_size) {}
 
 int main(int argc, char *argv[]) {
+    cmdline::parser cmd;
+    cmd.add<std::string>("master_ip");
+    cmd.add<uint16_t>("master_port");
+    cmd.add<std::string>("daemon_ip");
+    cmd.add<std::string>("daemon_rdma_ip");
+    cmd.add<uint16_t>("daemon_port");
+    cmd.add<rack_id_t>("rack_id");
+    cmd.add<std::string>("cxl_devdax_path");
+    cmd.add<size_t>("cxl_memory_size");
+    bool ret = cmd.parse(argc, argv);
+    DLOG_ASSERT(ret);
+
     rchms::DaemonOptions options;
-    options.master_ip = "192.168.1.51";
-    options.master_port = 31850;
-    options.daemon_ip = "192.168.1.51";
-    options.daemon_rdma_ip = "192.168.200.51";
-    options.daemon_port = 31851;
-    options.rack_id = 0;
+    options.master_ip = cmd.get<std::string>("master_ip");
+    options.master_port = cmd.get<uint16_t>("master_port");
+    options.daemon_ip = cmd.get<std::string>("daemon_ip");
+    options.daemon_rdma_ip = cmd.get<std::string>("daemon_rdma_ip");
+    options.daemon_port = cmd.get<uint16_t>("daemon_port");
+    options.rack_id = cmd.get<rack_id_t>("rack_id");
     options.with_cxl = true;
-    options.cxl_devdax_path = "/dev/shm/cxlsim";
-    options.cxl_memory_size = 4ul << 30;
+    options.cxl_devdax_path = cmd.get<std::string>("cxl_devdax_path");
+    options.cxl_memory_size = cmd.get<size_t>("cxl_memory_size");
     options.swap_zone_size = 2 << 20;
     options.max_client_limit = 2;  // 暂时未使用
     options.cxl_msgq_size = 5 << 10;
@@ -188,16 +234,12 @@ int main(int argc, char *argv[]) {
     daemon_ctx.initRDMARC();
     daemon_ctx.initRPCNexus();
     daemon_ctx.connectWithMaster();
-
-    // TODO: 开始监听master的RRPC
-
-    // TODO: 开始监听client的msg queue
+    daemon_ctx.registerCXLMR();
 
     while (true) {
-        daemon_ctx.msgq_manager.rpc->run_event_loop_once();
+        daemon_ctx.m_msgq_manager.rpc->run_event_loop_once();
+        daemon_ctx.get_erpc().run_event_loop_once();
     }
 
-    getchar();
-    getchar();
     return 0;
 }

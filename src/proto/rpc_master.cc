@@ -31,7 +31,7 @@ JoinDaemonReply joinDaemon(MasterContext& master_context,
     DLOG("Connect with daemon [rack:%d --- id:%d]", daemon_connection.rack_id,
          daemon_connection.daemon_id);
 
-    auto local_addr = master_context.listen_conn.get_local_addr();
+    auto local_addr = master_context.m_listen_conn.get_local_addr();
 
     JoinDaemonReply reply;
     reply.daemon_mac_id = mac_id;

@@ -33,7 +33,7 @@ D align_ceil(D x, uint64_t aligned) {
 
 template <typename D>
 D align_floor(D x, uint64_t aligned) {
-    return (x / aligned) * aligned;
+    return div_floor(x, aligned) * aligned;
 }
 
 void threadBindCore(int core_id);

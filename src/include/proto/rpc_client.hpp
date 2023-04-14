@@ -21,7 +21,9 @@ RemovePageCacheReply removePageCache(ClientContext& client_context,
                                      ClientToDaemonConnection& daemon_connection,
                                      RemovePageCacheRequest& req);
 
-struct GetCurrentWriteDataRequest : public RequestMsg, detail::RawResponseReturn<GetCurrentWriteDataRequest> {
+struct GetCurrentWriteDataReply;
+struct GetCurrentWriteDataRequest : public RequestMsg,
+                                    detail::RawResponseReturn<GetCurrentWriteDataReply> {
     void* dio_write_buf;
     size_t dio_write_size;
 };

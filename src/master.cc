@@ -1,5 +1,6 @@
 #include <type_traits>
 
+#include "cmdline.h"
 #include "common.hpp"
 #include "eRPC/erpc.h"
 #include "impl.hpp"
@@ -24,10 +25,17 @@ MasterConnection *MasterContext::get_connection(mac_id_t mac_id) {
 erpc::IBRpcWrap MasterContext::get_erpc() { return m_erpc_ctx.rpc_set[0]; }
 
 int main(int argc, char *argv[]) {
+    cmdline::parser cmd;
+    cmd.add<std::string>("master_ip");
+    cmd.add<std::string>("master_rdma_ip");
+    cmd.add<uint16_t>("master_port");
+    bool ret = cmd.parse(argc, argv);
+    DLOG_ASSERT(ret);
+
     rchms::MasterOptions options;
-    options.master_ip = "192.168.1.51";
-    options.master_rdma_ip = "192.168.200.51";
-    options.master_port = 31850;
+    options.master_ip = cmd.get<std::string>("master_ip");
+    options.master_rdma_ip = cmd.get<std::string>("master_rdma_ip");
+    options.master_port = cmd.get<uint16_t>("master_port");
     options.max_cluster_mac_num = 100;
 
     MasterContext &master_ctx = MasterContext::getInstance();
@@ -46,7 +54,7 @@ int main(int argc, char *argv[]) {
     // 保证page id不为0，这就保证了分配的GAddr是非null
     DLOG_ASSERT(id == 0, "Can't init page id");
 
-    // TODO: 开始监听Daemon、client的连接
+    // 开始监听Daemon、client的连接
 
     std::string master_uri =
         master_ctx.m_options.master_ip + ":" + std::to_string(master_ctx.m_options.master_port);
@@ -60,6 +68,12 @@ int main(int argc, char *argv[]) {
         bind_erpc_func<true>(rpc_master::joinClient));
     master_ctx.m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_master::allocPage)::rpc_type,
                                                    bind_erpc_func<false>(rpc_master::allocPage));
+    master_ctx.m_erpc_ctx.nexus->register_req_func(
+        RPC_TYPE_STRUCT(rpc_master::latchRemotePage)::rpc_type,
+        bind_erpc_func<false>(rpc_master::latchRemotePage));
+    master_ctx.m_erpc_ctx.nexus->register_req_func(
+        RPC_TYPE_STRUCT(rpc_master::unLatchRemotePage)::rpc_type,
+        bind_erpc_func<false>(rpc_master::unLatchRemotePage));
 
     erpc::SMHandlerWrap smhw;
     smhw.set_null();
@@ -71,8 +85,8 @@ int main(int argc, char *argv[]) {
 
     rdma_rc::RDMAEnv::init();
 
-    master_ctx.listen_conn.register_connect_hook([&master_ctx](rdma_rc::RDMAConnection *rdma_conn,
-                                                               void *param_) {
+    master_ctx.m_listen_conn.register_connect_hook([&master_ctx](rdma_rc::RDMAConnection *rdma_conn,
+                                                                 void *param_) {
         auto param = reinterpret_cast<RDMARCConnectParam *>(param_);
         auto conn_ = master_ctx.get_connection(param->mac_id);
         switch (param->role) {
@@ -88,7 +102,7 @@ int main(int argc, char *argv[]) {
         }
     });
 
-    master_ctx.listen_conn.listen(master_ctx.m_options.master_rdma_ip);
+    master_ctx.m_listen_conn.listen(master_ctx.m_options.master_rdma_ip);
 
     DLOG("OK");
 
