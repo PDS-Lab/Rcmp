@@ -26,6 +26,7 @@ struct RpcCallerWrapper;
     struct detail::RpcCallerWrapper<decltype(rpc_func)>               \
         : public detail::RpcCallerWrapperHelper<decltype(rpc_func)> { \
         constexpr static uint8_t rpc_type = __LINE__;                 \
+        static_assert(rpc_type != 0, "overflow");                     \
     };
 
 /**
@@ -43,13 +44,19 @@ BIND_RPC_TYPE_STRUCT(rpc_master::joinClient);
 BIND_RPC_TYPE_STRUCT(rpc_master::allocPage);
 BIND_RPC_TYPE_STRUCT(rpc_master::freePage);
 BIND_RPC_TYPE_STRUCT(rpc_master::getRackDaemonByPageID);
+BIND_RPC_TYPE_STRUCT(rpc_master::latchRemotePage);
+BIND_RPC_TYPE_STRUCT(rpc_master::unLatchRemotePage);
 
 BIND_RPC_TYPE_STRUCT(rpc_daemon::joinRack);
+BIND_RPC_TYPE_STRUCT(rpc_daemon::crossRackConnect);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::getPageRefOrProxy);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::allocPageMemory);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::__testdataSend1);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::__testdataSend2);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::alloc);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::free);
+BIND_RPC_TYPE_STRUCT(rpc_daemon::rdmaIODirect);
 
 BIND_RPC_TYPE_STRUCT(rpc_client::removePageCache);
+BIND_RPC_TYPE_STRUCT(rpc_client::getCurrentWriteData);
+BIND_RPC_TYPE_STRUCT(rpc_client::getPagePastAccessFreq);

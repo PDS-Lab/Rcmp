@@ -44,3 +44,8 @@ inline static rchms::GAddr GetGAddr(page_id_t page_id, offset_t offset) {
     u.off = offset;
     return u.gaddr;
 }
+
+struct RDMARCConnectParam {
+    SystemRole role;
+    mac_id_t mac_id;
+};

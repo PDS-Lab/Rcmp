@@ -65,7 +65,7 @@ JoinClientReply joinClient(MasterContext& master_context,
 AllocPageReply allocPage(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
                          AllocPageRequest& req) {
     RackMacTable* rack_table;
-    PageRackMetadata page_rack_metadata;
+    PageRackMetadata* page_rack_metadata = new PageRackMetadata();
 
     bool ret = master_context.m_cluster_manager.cluster_rack_table.find(daemon_connection.rack_id,
                                                                         &rack_table);
@@ -76,7 +76,8 @@ AllocPageReply allocPage(MasterContext& master_context, MasterToDaemonConnection
 
     if (rack_table->current_allocated_page_num < rack_table->max_free_page_num) {
         // 采取就近原则分配page到daemon所在rack
-        page_rack_metadata.rack_id = daemon_connection.rack_id;
+        page_rack_metadata->rack_id = daemon_connection.rack_id;
+        page_rack_metadata->daemon_id = daemon_connection.daemon_id;
         rack_table->current_allocated_page_num++;
     } else {
         // TODO: 如果daemon没有多余page，则向其他rack daemon注册，调用allocPageMemory(req.slab_size)
@@ -86,7 +87,7 @@ AllocPageReply allocPage(MasterContext& master_context, MasterToDaemonConnection
 
     DLOG("alloc page: %lu ---> rack %d", new_page_id, rack_table->daemon_connect->rack_id);
 
-    master_context.m_page_directory.insert(new_page_id, new PageRackMetadata(page_rack_metadata));
+    master_context.m_page_directory.insert(new_page_id, page_rack_metadata);
 
     AllocPageReply reply;
     reply.page_id = new_page_id;
@@ -114,6 +115,44 @@ FreePageReply freePage(MasterContext& master_context, MasterToDaemonConnection& 
 
     FreePageReply reply;
     reply.ret = true;
+    return reply;
+}
+
+LatchRemotePageReply latchRemotePage(MasterContext& master_context,
+                                     MasterToDaemonConnection& daemon_connection,
+                                     LatchRemotePageRequest& req) {
+    PageRackMetadata* page_meta;
+    bool ret = master_context.m_page_directory.find(req.page_id, &page_meta);
+    DLOG_ASSERT(ret, "Can't find this page %lu", req.page_id);
+
+    while (!page_meta->latch.try_lock()) {
+    }
+
+    MasterToDaemonConnection* dest_daemon = dynamic_cast<MasterToDaemonConnection*>(
+        master_context.get_connection(page_meta->daemon_id));
+
+    auto peer_addr = dest_daemon->rdma_conn->get_peer_addr();
+
+    LatchRemotePageReply reply;
+    reply.dest_rack_id = page_meta->rack_id;
+    reply.dest_daemon_id = page_meta->daemon_id;
+    reply.dest_daemon_ipv4 = dest_daemon->ip;
+    reply.dest_daemon_erpc_port = dest_daemon->port;
+    reply.dest_daemon_rdma_ipv4 = peer_addr.first;
+    reply.dest_daemon_rdma_port = peer_addr.second;
+    return reply;
+}
+
+UnLatchRemotePageReply unLatchRemotePage(MasterContext& master_context,
+                                         MasterToDaemonConnection& daemon_connection,
+                                         UnLatchRemotePageRequest& req) {
+    PageRackMetadata* page_meta;
+    bool ret = master_context.m_page_directory.find(req.page_id, &page_meta);
+    DLOG_ASSERT(ret, "Can't find this page %lu", req.page_id);
+
+    page_meta->latch.unlock();
+
+    UnLatchRemotePageReply reply;
     return reply;
 }
 

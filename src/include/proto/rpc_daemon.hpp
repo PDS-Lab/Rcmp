@@ -29,7 +29,22 @@ struct JoinRackReply : public ResponseMsg {
 JoinRackReply joinRack(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
                        JoinRackRequest& req);
 
-struct GetPageRefOrProxyRequest : public RequestMsg {
+struct CrossRackConnectRequest : public RequestMsg {
+    rack_id_t rack_id;
+    mac_id_t conn_mac_id;
+};
+struct CrossRackConnectReply : public ResponseMsg {
+    mac_id_t daemon_mac_id;
+    IPv4String rdma_ipv4;
+    uint16_t rdma_port;
+};
+CrossRackConnectReply crossRackConnect(DaemonContext& daemon_context,
+                                       DaemonToDaemonConnection& daemon_connection,
+                                       CrossRackConnectRequest& req);
+
+struct GetPageRefOrProxyReply;
+struct GetPageRefOrProxyRequest : public RequestMsg,
+                                  detail::RawResponseReturn<GetPageRefOrProxyReply> {
     enum {
         READ,
         WRITE,

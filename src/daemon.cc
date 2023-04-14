@@ -76,20 +76,35 @@ void DaemonContext::initRPCNexus() {
 void DaemonContext::initRDMARC() {
     rdma_rc::RDMAEnv::init();
 
-    rdma_rc::RDMAConnection::register_connect_hook([](rdma_rc::RDMAConnection *conn) {
-        DLOG("[RDMA_RC] Get New Connect: %s", conn->get_peer_addr().first.c_str());
+    rdma_rc::RDMAConnection::register_connect_hook([this](rdma_rc::RDMAConnection *rdma_conn,
+                                                          void *param_) {
+        auto param = reinterpret_cast<RDMARCConnectParam *>(param_);
+        auto conn_ = get_connection(param->mac_id);
+        switch (param->role) {
+            case CN:
+            case CXL_CN:
+                DLOG_FATAL("Not Support");
+                break;
+            case DAEMON:
+            case CXL_DAEMON: {
+                DaemonToDaemonConnection *conn = dynamic_cast<DaemonToDaemonConnection *>(conn_);
+                conn->rdma_conn = rdma_conn;
+            } break;
+        }
+
+        DLOG("[RDMA_RC] Get New Connect: %s", rdma_conn->get_peer_addr().first.c_str());
     });
     rdma_rc::RDMAConnection::register_disconnect_hook([](rdma_rc::RDMAConnection *conn) {
         DLOG("[RDMA_RC] Disconnect: %s", conn->get_peer_addr().first.c_str());
     });
-    listen_conn.listen(m_options.daemon_rdma_ip);
+    m_listen_conn.listen(m_options.daemon_rdma_ip);
 }
 
 void DaemonContext::connectWithMaster() {
     auto rpc = get_erpc();
 
     std::string master_uri = m_options.master_ip + ":" + std::to_string(m_options.master_port);
-    m_erpc_ctx.master_session = rpc.create_session(master_uri, 0);
+    m_master_connection.master_session = rpc.create_session(master_uri, 0);
 
     using JoinDaemonRPC = RPC_TYPE_STRUCT(rpc_master::joinDaemon);
 
@@ -103,8 +118,8 @@ void DaemonContext::connectWithMaster() {
 
     std::promise<void> pro;
     std::future<void> fu = pro.get_future();
-    rpc.enqueue_request(m_erpc_ctx.master_session, JoinDaemonRPC::rpc_type, req_raw, resp_raw,
-                        erpc_general_promise_flag_cb, static_cast<void *>(&pro));
+    rpc.enqueue_request(m_master_connection.master_session, JoinDaemonRPC::rpc_type, req_raw,
+                        resp_raw, erpc_general_promise_flag_cb, static_cast<void *>(&pro));
 
     while (fu.wait_for(1ns) == std::future_status::timeout) {
         rpc.run_event_loop_once();
@@ -126,7 +141,11 @@ void DaemonContext::connectWithMaster() {
     DLOG_ASSERT(m_master_connection.master_id == master_id, "Fail to get master id");
     DLOG_ASSERT(m_daemon_id != master_id, "Fail to get daemon id");
 
-    m_master_connection.rdma_conn.connect(peer_ip, peer_port);
+    RDMARCConnectParam param;
+    param.mac_id = m_daemon_id;
+    param.role = CXL_DAEMON;
+
+    m_master_connection.rdma_conn.connect(peer_ip, peer_port, &param, sizeof(param));
 
     DLOG("Connection with master OK, my id is %d", m_daemon_id);
 }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <infiniband/verbs.h>
+
 #include <list>
 #include <memory>
 #include <thread>
@@ -10,6 +12,7 @@
 #include "concurrent_hashmap.hpp"
 #include "cxl.hpp"
 #include "eRPC/erpc.h"
+#include "lock.hpp"
 #include "log.hpp"
 #include "msg_queue.hpp"
 #include "options.hpp"
@@ -21,11 +24,14 @@
 
 struct PageRackMetadata {
     uint32_t rack_id;
+    mac_id_t daemon_id;
+    SpinMutex latch;
 };
 
 struct MasterConnection {
     std::string ip;
-    uint16_t port;
+    uint16_t port;  // erpc port
+    int peer_session;
 
     virtual ~MasterConnection() = default;
 };
@@ -38,6 +44,8 @@ struct MasterToClientConnection : public MasterConnection {
 struct MasterToDaemonConnection : public MasterConnection {
     rack_id_t rack_id;
     mac_id_t daemon_id;
+
+    rdma_rc::RDMAConnection *rdma_conn;
 };
 
 struct RackMacTable {
@@ -87,7 +95,7 @@ struct MasterContext {
 
 struct DaemonConnection {
     std::string ip;
-    uint16_t port;   // erpc port
+    uint16_t port;  // erpc port
 
     virtual ~DaemonConnection() = default;
 };
@@ -95,6 +103,7 @@ struct DaemonConnection {
 struct DaemonToMasterConnection : public DaemonConnection {
     mac_id_t master_id;
 
+    int master_session;
     rdma_rc::RDMAConnection rdma_conn;
 };
 
@@ -107,6 +116,9 @@ struct DaemonToClientConnection : public DaemonConnection {
 struct DaemonToDaemonConnection : public DaemonConnection {
     rack_id_t rack_id;
     mac_id_t daemon_id;
+
+    int daemon_session;
+    rdma_rc::RDMAConnection *rdma_conn;
 };
 
 struct PageMetadata {
@@ -142,13 +154,13 @@ struct DaemonContext {
     ConcurrentHashMap<page_id_t, PageMetadata *> m_page_table;
     ConcurrentHashMap<page_id_t, FreqStats *> m_hot_stats;
 
-    rdma_rc::RDMAConnection listen_conn;
+    rdma_rc::RDMAConnection m_listen_conn;
+    std::vector<ibv_mr> m_rdma_page_mr_table;
 
     std::array<std::list<page_id_t>, page_size / min_slab_size> m_can_alloc_slab_class_lists;
 
     struct {
         volatile bool running;
-        int master_session;
         std::unique_ptr<erpc::NexusWrap> nexus;
         std::vector<erpc::IBRpcWrap> rpc_set;
     } m_erpc_ctx;

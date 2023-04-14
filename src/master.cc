@@ -71,6 +71,23 @@ int main(int argc, char *argv[]) {
 
     rdma_rc::RDMAEnv::init();
 
+    master_ctx.listen_conn.register_connect_hook([&master_ctx](rdma_rc::RDMAConnection *rdma_conn,
+                                                               void *param_) {
+        auto param = reinterpret_cast<RDMARCConnectParam *>(param_);
+        auto conn_ = master_ctx.get_connection(param->mac_id);
+        switch (param->role) {
+            case CN:
+            case CXL_CN:
+                DLOG_FATAL("Not Support");
+                break;
+            case DAEMON:
+            case CXL_DAEMON: {
+                MasterToDaemonConnection *conn = dynamic_cast<MasterToDaemonConnection *>(conn_);
+                conn->rdma_conn = rdma_conn;
+            } break;
+        }
+    });
+
     master_ctx.listen_conn.listen(master_ctx.m_options.master_rdma_ip);
 
     DLOG("OK");

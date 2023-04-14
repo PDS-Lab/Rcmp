@@ -63,6 +63,9 @@ class ReqHandleWrap {
   ReqHandleWrap(ReqHandle *req_handle);
   ~ReqHandleWrap();
 
+  uint8_t get_server_rpc_id() const;
+  int get_server_session_num() const;
+
   const MsgBufferWrap get_req_msgbuf() const;
   MsgBufferWrap get_pre_resp_msgbuf() const;
   MsgBufferWrap get_dyn_resp_msgbuf() const;

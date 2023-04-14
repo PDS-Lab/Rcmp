@@ -106,6 +106,9 @@ struct LatchRemotePageRequest : public RequestMsg {
 };
 struct LatchRemotePageReply : public ResponseMsg {
     rack_id_t dest_rack_id;
+    mac_id_t dest_daemon_id;
+    IPv4String dest_daemon_ipv4;
+    uint16_t dest_daemon_erpc_port;
     IPv4String dest_daemon_rdma_ipv4;
     uint16_t dest_daemon_rdma_port;
 };

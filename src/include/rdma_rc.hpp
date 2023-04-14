@@ -97,7 +97,7 @@ struct RDMAConnection {
      * @param port
      * @return int
      */
-    int connect(const std::string &ip, uint16_t port);
+    int connect(const std::string &ip, uint16_t port, const void *param, uint8_t param_size);
 
     std::pair<std::string, in_port_t> get_local_addr();
     std::pair<std::string, in_port_t> get_peer_addr();
@@ -125,9 +125,9 @@ struct RDMAConnection {
      */
     RDMAFuture submit(RDMABatch &b);
 
-    static std::function<void(RDMAConnection *conn)> m_hook_connect_;
+    static std::function<void(RDMAConnection *conn, void *param)> m_hook_connect_;
     static std::function<void(RDMAConnection *conn)> m_hook_disconnect_;
-    static void register_connect_hook(std::function<void(RDMAConnection *conn)> &&hook_connect);
+    static void register_connect_hook(std::function<void(RDMAConnection *conn, void *param)> &&hook_connect);
     static void register_disconnect_hook(
         std::function<void(RDMAConnection *conn)> &&hook_disconnect);
 

@@ -5,11 +5,16 @@
 #include "eRPC/erpc.h"
 #include "log.hpp"
 #include "msg_queue.hpp"
+#include "proto/rpc_base.hpp"
 #include "utils.hpp"
 
 namespace detail {
 
-template <typename EFW, bool ESTABLISH>
+template <
+    typename EFW, bool ESTABLISH,
+    typename std::enable_if<!std::is_base_of<detail::RawResponseReturn<typename EFW::RequestType>,
+                                             typename EFW::RequestType>::value,
+                            bool>::type = true>
 void erpc_call_target(erpc::ReqHandle *req_handle, void *context) {
     auto self_ctx = reinterpret_cast<typename EFW::SelfContext *>(context);
     erpc::ReqHandleWrap req_wrap(req_handle);
@@ -23,6 +28,7 @@ void erpc_call_target(erpc::ReqHandle *req_handle, void *context) {
     typename EFW::PeerContext *peer_connection = nullptr;
     if (ESTABLISH) {
         peer_connection = new typename EFW::PeerContext();
+        peer_connection->peer_session = req_wrap.get_server_session_num();
     } else {
         peer_connection =
             dynamic_cast<typename EFW::PeerContext *>(self_ctx->get_connection(req->mac_id));
@@ -32,6 +38,41 @@ void erpc_call_target(erpc::ReqHandle *req_handle, void *context) {
 
     auto rpc = self_ctx->get_erpc();
     rpc.resize_msg_buffer(resp_raw, sizeof(typename EFW::ResponseType));
+    rpc.enqueue_response(req_wrap, resp_raw);
+}
+
+template <
+    typename EFW, bool ESTABLISH,
+    typename std::enable_if<std::is_base_of<detail::RawResponseReturn<typename EFW::RequestType>,
+                                            typename EFW::RequestType>::value,
+                            bool>::type = true>
+void erpc_call_target(erpc::ReqHandle *req_handle, void *context) {
+    auto self_ctx = reinterpret_cast<typename EFW::SelfContext *>(context);
+    erpc::ReqHandleWrap req_wrap(req_handle);
+
+    auto resp_raw = req_wrap.get_pre_resp_msgbuf();
+    auto req_raw = req_wrap.get_req_msgbuf();
+
+    auto req = reinterpret_cast<typename EFW::RequestType *>(req_raw.get_buf());
+    auto resp = reinterpret_cast<typename EFW::ResponseType *>(resp_raw.get_buf());
+
+    typename EFW::PeerContext *peer_connection = nullptr;
+    erpc::IBRpcWrap rpc = self_ctx->get_erpc();
+
+    auto alloc_fn = [&](size_t s) {
+        rpc.resize_msg_buffer(resp_raw, sizeof(typename EFW::ResponseType) + s);
+        return resp_raw.get_buf();
+    };
+    req->__func_flex = &alloc_fn;
+
+    if (ESTABLISH) {
+        peer_connection = new typename EFW::PeerContext();
+    } else {
+        peer_connection =
+            dynamic_cast<typename EFW::PeerContext *>(self_ctx->get_connection(req->mac_id));
+    }
+
+    *resp = EFW::func(*self_ctx, *peer_connection, *req);
     rpc.enqueue_response(req_wrap, resp_raw);
 }
 
@@ -52,7 +93,11 @@ bool ErpcFuncWrapper<RpcFunc>::registed = false;
 template <typename RpcFunc>
 RpcFunc ErpcFuncWrapper<RpcFunc>::func;
 
-template <typename EFW, bool ESTABLISH>
+template <
+    typename EFW, bool ESTABLISH,
+    typename std::enable_if<!std::is_base_of<detail::RawResponseReturn<typename EFW::RequestType>,
+                                             typename EFW::RequestType>::value,
+                            bool>::type = true>
 void msgq_call_target(msgq::MsgBuffer &req_raw, void *ctx) {
     auto self_ctx = reinterpret_cast<typename EFW::SelfContext *>(ctx);
 
@@ -77,6 +122,41 @@ void msgq_call_target(msgq::MsgBuffer &req_raw, void *ctx) {
         auto resp = reinterpret_cast<typename EFW::ResponseType *>(resp_raw.get_buf());
         *resp = EFW::func(*self_ctx, *peer_connection, *req);
     }
+    rpc->enqueue_response(req_raw, resp_raw);
+
+    // 发送端的buffer将由接收端释放
+    rpc->free_msg_buffer(req_raw);
+}
+
+template <
+    typename EFW, bool ESTABLISH,
+    typename std::enable_if<std::is_base_of<detail::RawResponseReturn<typename EFW::RequestType>,
+                                            typename EFW::RequestType>::value,
+                            bool>::type = true>
+void msgq_call_target(msgq::MsgBuffer &req_raw, void *ctx) {
+    auto self_ctx = reinterpret_cast<typename EFW::SelfContext *>(ctx);
+
+    auto req = reinterpret_cast<typename EFW::RequestType *>(req_raw.get_buf());
+
+    typename EFW::PeerContext *peer_connection = nullptr;
+    msgq::MsgQueueRPC *rpc;
+    msgq::MsgBuffer resp_raw;
+
+    auto alloc_fn = [&](size_t s) {
+        resp_raw =
+            peer_connection->msgq_rpc->alloc_msg_buffer(sizeof(typename EFW::ResponseType) + s);
+        return resp_raw.get_buf();
+    };
+    req->__func_flex = &alloc_fn;
+
+    if (ESTABLISH) {
+        peer_connection = new typename EFW::PeerContext();
+    } else {
+        peer_connection =
+            dynamic_cast<typename EFW::PeerContext *>(self_ctx->get_connection(req->mac_id));
+    }
+    rpc = peer_connection->msgq_rpc;
+    EFW::func(*self_ctx, *peer_connection, *req);
     rpc->enqueue_response(req_raw, resp_raw);
 
     // 发送端的buffer将由接收端释放

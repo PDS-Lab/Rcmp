@@ -19,7 +19,7 @@ int RDMAConnection::POLL_ENTRY_COUNT = 16;
 bool RDMAConnection::RDMA_TIMEOUT_ENABLE = true;
 uint32_t RDMAConnection::RDMA_TIMEOUT_MS = 2000;
 
-std::function<void(RDMAConnection *conn)> RDMAConnection::m_hook_connect_;
+std::function<void(RDMAConnection *conn, void *param)> RDMAConnection::m_hook_connect_;
 std::function<void(RDMAConnection *conn)> RDMAConnection::m_hook_disconnect_;
 
 bool RDMAConnection::m_rdma_conn_param_valid_() {
@@ -183,7 +183,8 @@ int RDMAConnection::listen(const std::string &ip) {
     return 0;
 }
 
-int RDMAConnection::connect(const std::string &ip, uint16_t port) {
+int RDMAConnection::connect(const std::string &ip, uint16_t port, const void *param,
+                            uint8_t param_size) {
     conn_type = SENDER;
 
     rdma_event_channel *m_cm_channel_ = RDMAEnv::get_instance().m_cm_channel_;
@@ -249,8 +250,8 @@ int RDMAConnection::connect(const std::string &ip, uint16_t port) {
     conn_param.initiator_depth = INITIATOR_DEPTH;
     conn_param.rnr_retry_count = RNR_RETRY_COUNT;
     conn_param.retry_count = RETRY_COUNT;
-    conn_param.private_data = nullptr;
-    conn_param.private_data_len = 0;
+    conn_param.private_data = param;
+    conn_param.private_data_len = param_size;
 
     if (rdma_connect(m_cm_id_, &conn_param)) {
         DLOG_ERROR("rdma_connect fail");
@@ -286,6 +287,11 @@ void RDMAConnection::m_handle_connection_() {
 
         if (event->event == RDMA_CM_EVENT_CONNECT_REQUEST) {
             struct rdma_cm_id *cm_id = event->id;
+
+            uint8_t param_buf[1ul << (sizeof(cm_id->event->param.conn.private_data_len) * 8)];
+            memcpy(param_buf, cm_id->event->param.conn.private_data,
+                   cm_id->event->param.conn.private_data_len);
+
             rdma_ack_cm_event(event);
 
             RDMAConnection *conn = new RDMAConnection();
@@ -295,7 +301,7 @@ void RDMAConnection::m_handle_connection_() {
 
             m_init_connection_(conn);
 
-            if (m_hook_connect_) m_hook_connect_(conn);
+            if (m_hook_connect_) m_hook_connect_(conn, param_buf);
 
         } else if (event->event == RDMA_CM_EVENT_ESTABLISHED) {
             rdma_ack_cm_event(event);
@@ -365,8 +371,9 @@ void RDMAConnection::deregister_memory(ibv_mr *mr, bool freed) {
 }
 
 void RDMAConnection::register_connect_hook(
-    std::function<void(RDMAConnection *conn)> &&hook_connect) {
-    m_hook_connect_ = std::forward<std::function<void(RDMAConnection * conn)>>(hook_connect);
+    std::function<void(RDMAConnection *conn, void *param)> &&hook_connect) {
+    m_hook_connect_ =
+        std::forward<std::function<void(RDMAConnection * conn, void *param)>>(hook_connect);
 }
 
 void RDMAConnection::register_disconnect_hook(
