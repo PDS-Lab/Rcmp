@@ -80,9 +80,6 @@ JoinRackReply joinRack(DaemonContext& daemon_context, DaemonToClientConnection& 
 CrossRackConnectReply crossRackConnect(DaemonContext& daemon_context,
                                        DaemonToDaemonConnection& daemon_connection,
                                        CrossRackConnectRequest& req) {
-    DLOG_ASSERT(req.rack_id != daemon_context.m_daemon_id,
-                "Fail to connect because of same mac id");
-
     DLOG_ASSERT(req.conn_mac_id == daemon_context.m_daemon_id, "Can't connect this daemon");
 
     daemon_context.m_connect_table.insert(req.mac_id, &daemon_connection);
@@ -90,6 +87,8 @@ CrossRackConnectReply crossRackConnect(DaemonContext& daemon_context,
 
     daemon_connection.daemon_id = req.mac_id;
     daemon_connection.rack_id = req.rack_id;
+    daemon_connection.ip = req.ip.get_string();
+    daemon_connection.port = req.port;
 
     DLOG("Connect with daemon [rack:%d --- id:%d]", daemon_connection.rack_id,
          daemon_connection.daemon_id);
@@ -103,20 +102,24 @@ CrossRackConnectReply crossRackConnect(DaemonContext& daemon_context,
     return reply;
 }
 
-GetPageRefOrProxyReply getPageRefOrProxy(DaemonContext& daemon_context,
-                                         DaemonToClientConnection& client_connection,
-                                         GetPageRefOrProxyRequest& req) {
+GetPageCXLRefOrProxyReply getPageCXLRefOrProxy(DaemonContext& daemon_context,
+                                               DaemonToClientConnection& client_connection,
+                                               GetPageCXLRefOrProxyRequest& req) {
     PageMetadata* page_metadata;
     page_id_t page_id = GetPageID(req.gaddr);
+    offset_t page_offset = GetPageOffset(req.gaddr);
+    GetPageCXLRefOrProxyReply* reply_ptr;
 retry:
     bool ret = daemon_context.m_page_table.find(page_id, &page_metadata);
 
     if (ret) {
         page_metadata->ref_client.insert(&client_connection);
 
-        GetPageRefOrProxyReply reply;
-        reply.offset = page_metadata->cxl_memory_offset;
-        return reply;
+        reply_ptr = req.alloc_flex_resp(0);
+
+        reply_ptr->refs = true;
+        reply_ptr->offset = page_metadata->cxl_memory_offset;
+        return {};
     }
 
     FreqStats* stats;
@@ -135,11 +138,8 @@ retry:
         uintptr_t my_data_buf;
         uint32_t my_rkey;
         uint32_t my_size;
-        GetPageRefOrProxyReply reply;
-        GetPageRefOrProxyReply* reply_ptr = &reply;
 
         // 1. 获取mn上page的daemon，并锁定该page
-
         using LatchRemotePageRPC = RPC_TYPE_STRUCT(rpc_master::latchRemotePage);
         auto req_raw = rpc.alloc_msg_buffer_or_die(sizeof(LatchRemotePageRPC::RequestType));
         auto resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(LatchRemotePageRPC::ResponseType));
@@ -155,9 +155,8 @@ retry:
                             erpc_general_promise_flag_cb, static_cast<void*>(&pro));
 
         switch (req.type) {
-            case GetPageRefOrProxyRequest::WRITE: {
+            case GetPageCXLRefOrProxyRequest::WRITE: {
                 // 1.1 如果是写操作，则并行获取cn的write buf
-
                 using GetCurrentWriteDataRPC = RPC_TYPE_STRUCT(rpc_client::getCurrentWriteData);
                 auto wd_req_raw = client_connection.msgq_rpc->alloc_msg_buffer(
                     sizeof(LatchRemotePageRPC::RequestType));
@@ -188,14 +187,14 @@ retry:
                 my_size = req.cn_write_size;
 
                 client_connection.msgq_rpc->free_msg_buffer(wd_resp_raw);
+                reply_ptr = req.alloc_flex_resp(0);
                 break;
             }
-            case GetPageRefOrProxyRequest::READ: {
+            case GetPageCXLRefOrProxyRequest::READ: {
                 // 1.2 如果是读操作，则动态申请读取resp buf
                 reply_ptr = req.alloc_flex_resp(req.cn_read_size);
 
                 ibv_mr* mr = daemon_context.get_mr(reply_ptr->read_data);
-
                 my_data_buf = reinterpret_cast<uintptr_t>(reply_ptr->read_data);
                 my_rkey = mr->rkey;
                 my_size = req.cn_read_size;
@@ -221,7 +220,7 @@ retry:
             std::string server_uri = resp->dest_daemon_ipv4.get_string() + ":" +
                                      std::to_string(resp->dest_daemon_erpc_port);
             dd_conn->peer_session = rpc.create_session(server_uri, 0);
-            dd_conn->daemon_id = resp->dest_rack_id;
+            dd_conn->daemon_id = resp->dest_daemon_id;
             dd_conn->rack_id = resp->dest_rack_id;
             dd_conn->ip = resp->dest_daemon_ipv4.get_string();
             dd_conn->port = resp->dest_daemon_erpc_port;
@@ -232,8 +231,9 @@ retry:
             auto resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(CrossRackConnectRPC::ResponseType));
 
             auto req = reinterpret_cast<CrossRackConnectRPC::RequestType*>(req_raw.get_buf());
-
             req->mac_id = daemon_context.m_daemon_id;
+            req->ip = daemon_context.m_options.daemon_ip;
+            req->port = daemon_context.m_options.daemon_port;
             req->rack_id = daemon_context.m_options.rack_id;
             req->conn_mac_id = resp->dest_daemon_id;
 
@@ -269,31 +269,23 @@ retry:
 
         DaemonToDaemonConnection* dest_daemon_conn =
             dynamic_cast<DaemonToDaemonConnection*>(dest_daemon_conn_tmp);
+        uintptr_t remote_page_addr;
+        uint32_t remote_page_rkey;
 
-        // 3. 调用dio读写远端内存
+        // 3. 获取远端内存rdma ref
         {
-            using RDMAIODirectRPC = RPC_TYPE_STRUCT(rpc_daemon::rdmaIODirect);
+            using GetPageRDMARefRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageRDMARef);
 
-            auto req_raw = rpc.alloc_msg_buffer_or_die(sizeof(RDMAIODirectRPC::RequestType));
-            auto resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(RDMAIODirectRPC::ResponseType));
+            auto req_raw = rpc.alloc_msg_buffer_or_die(sizeof(GetPageRDMARefRPC::RequestType));
+            auto resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(GetPageRDMARefRPC::ResponseType));
 
-            auto dio_req = reinterpret_cast<RDMAIODirectRPC::RequestType*>(req_raw.get_buf());
-            dio_req->mac_id = daemon_context.m_daemon_id;
-            dio_req->gaddr = req.gaddr;
-            dio_req->buf_addr = my_data_buf;
-            dio_req->buf_size = my_size;
-            switch (req.type) {
-                case GetPageRefOrProxyRequest::READ:
-                    dio_req->type = dio_req->READ;
-                    break;
-                case GetPageRefOrProxyRequest::WRITE:
-                    dio_req->type = dio_req->WRITE;
-                    break;
-            }
+            auto ref_req = reinterpret_cast<GetPageRDMARefRPC::RequestType*>(req_raw.get_buf());
+            ref_req->mac_id = daemon_context.m_daemon_id;
+            ref_req->page_id = page_id;
 
             std::promise<void> pro;
             std::future<void> fu = pro.get_future();
-            rpc.enqueue_request(dest_daemon_conn->peer_session, RDMAIODirectRPC::rpc_type,
+            rpc.enqueue_request(dest_daemon_conn->peer_session, GetPageRDMARefRPC::rpc_type,
                                 req_raw, resp_raw, erpc_general_promise_flag_cb,
                                 static_cast<void*>(&pro));
 
@@ -301,11 +293,39 @@ retry:
                 rpc.run_event_loop_once();
             }
 
+            auto resp = reinterpret_cast<GetPageRDMARefRPC::ResponseType*>(resp_raw.get_buf());
+            remote_page_addr = resp->addr + page_offset;
+            remote_page_rkey = resp->rkey;
+
             rpc.free_msg_buffer(req_raw);
             rpc.free_msg_buffer(resp_raw);
         }
 
-        // 4. unlatch
+        // 4. 调用dio读写远端内存
+        {
+            rdma_rc::RDMABatch ba;
+            switch (req.type) {
+                case GetPageCXLRefOrProxyRequest::READ:
+                    dest_daemon_conn->rdma_conn->prep_read(ba, my_data_buf, my_rkey, my_size,
+                                                           remote_page_addr, remote_page_rkey,
+                                                           false);
+                    DLOG("read size %u remote addr [%#lx, %u] to local addr [%#lx, %u]", my_size,
+                         remote_page_addr, remote_page_rkey, my_data_buf, my_rkey);
+                    break;
+                case GetPageCXLRefOrProxyRequest::WRITE:
+                    dest_daemon_conn->rdma_conn->prep_write(ba, my_data_buf, my_rkey, my_size,
+                                                            remote_page_addr, remote_page_rkey,
+                                                            false);
+                    DLOG("write size %u remote addr [%#lx, %u] to local addr [%#lx, %u]", my_size,
+                         remote_page_addr, remote_page_rkey, my_data_buf, my_rkey);
+                    break;
+            }
+            auto fu = dest_daemon_conn->rdma_conn->submit(ba);
+            while (fu.try_get() == 1) {
+            }
+        }
+
+        // 5. unlatch
         {
             using UnLatchRemotePageRPC = RPC_TYPE_STRUCT(rpc_master::unLatchRemotePage);
             auto req_raw = rpc.alloc_msg_buffer_or_die(sizeof(UnLatchRemotePageRPC::RequestType));
@@ -333,29 +353,29 @@ retry:
         stats->add(getTimestamp());
 
         reply_ptr->refs = false;
-        return reply;
-    } else {
-        // TODO: page swap
-
-        /**
-         * 1. 向mn发送LatchPage(page_id)，获取mn上page的daemon，并锁定该page
-         *      1.1
-         * 如果本地page不够，与此同时向所有cn发起getPagePastAccessFreq()获取最久远的swapout page
-         * 2. 与自己建立RDMA RC连接
-         * 3. mn向daemon发送tryMigratePage(page_id, swapout meta, swapin meta)
-         *      3.1 如果本地page少，则无swapout meta
-         * 4. daemonRDMA单边读将page_addr读过来、daemonRDMA单边写将自己page写过去swap_addr
-         *      4.1 如果无swapout meta，则不写
-         *      4.2 如果拒绝，则自己需要DIO访问
-         * 5. daemon删除page meta，返回RPC
-         * 6. 向mn发送unLatchPageAndBalance，更改page dir，返回RPC
-         * 7. 更改page meta
-         * 8. 返回ref
-         */
-
-        DLOG_FATAL("Not Support");
-        goto retry;
+        return {};
     }
+
+    // TODO: page swap
+
+    /**
+     * 1. 向mn发送LatchPage(page_id)，获取mn上page的daemon，并锁定该page
+     *      1.1
+     * 如果本地page不够，与此同时向所有cn发起getPagePastAccessFreq()获取最久远的swapout page
+     * 2. 与自己建立RDMA RC连接
+     * 3. mn向daemon发送tryMigratePage(page_id, swapout meta, swapin meta)
+     *      3.1 如果本地page少，则无swapout meta
+     * 4. daemonRDMA单边读将page_addr读过来、daemonRDMA单边写将自己page写过去swap_addr
+     *      4.1 如果无swapout meta，则不写
+     *      4.2 如果拒绝，则自己需要DIO访问
+     * 5. daemon删除page meta，返回RPC
+     * 6. 向mn发送unLatchPageAndBalance，更改page dir，返回RPC
+     * 7. 更改page meta
+     * 8. 返回ref
+     */
+
+    DLOG_FATAL("Not Support");
+    goto retry;
 }
 
 AllocPageMemoryReply allocPageMemory(DaemonContext& daemon_context,
@@ -408,8 +428,8 @@ AllocReply alloc(DaemonContext& daemon_context, DaemonToClientConnection& client
 
         std::promise<void> pro;
         std::future<void> fu = pro.get_future();
-        rpc.enqueue_request(daemon_context.m_master_connection.peer_session,
-                            PageAllocRPC::rpc_type, req_raw, resp_raw, erpc_general_promise_flag_cb,
+        rpc.enqueue_request(daemon_context.m_master_connection.peer_session, PageAllocRPC::rpc_type,
+                            req_raw, resp_raw, erpc_general_promise_flag_cb,
                             static_cast<void*>(&pro));
 
         // 等待期间可能出现由于本地page不足而发生page swap
@@ -457,40 +477,25 @@ FreeReply free(DaemonContext& daemon_context, DaemonToClientConnection& client_c
     DLOG_FATAL("Not Support");
 }
 
-RdmaIODirectReply rdmaIODirect(DaemonContext& daemon_context,
-                               DaemonToDaemonConnection& daemon_connection,
-                               RdmaIODirectRequest& req) {
-    page_id_t page_id = GetPageID(req.gaddr);
-    offset_t page_offset = GetPageOffset(req.gaddr);
-
+GetPageRDMARefReply getPageRDMARef(DaemonContext& daemon_context,
+                                   DaemonToDaemonConnection& daemon_connection,
+                                   GetPageRDMARefRequest& req) {
     PageMetadata* page_meta;
-    bool ret = daemon_context.m_page_table.find(page_id, &page_meta);
-    DLOG_ASSERT(ret, "Can't find page %lu", page_id);
+    bool ret = daemon_context.m_page_table.find(req.page_id, &page_meta);
+    DLOG_ASSERT(ret, "Can't find page %lu", req.page_id);
 
     uintptr_t local_addr =
         reinterpret_cast<uintptr_t>(daemon_context.m_cxl_format.page_data_start_addr) +
-        page_meta->cxl_memory_offset + page_offset;
+        page_meta->cxl_memory_offset;
     ibv_mr* mr = daemon_context.get_mr(reinterpret_cast<void*>(local_addr));
 
-    DLOG_ASSERT(mr->addr != nullptr, "The page %lu isn't registered to rdma memory", page_id);
+    DLOG_ASSERT(mr->addr != nullptr, "The page %lu isn't registered to rdma memory", req.page_id);
 
-    rdma_rc::RDMABatch ba;
-    switch (req.type) {
-        case RdmaIODirectRequest::READ:
-            daemon_connection.rdma_conn->prep_write(ba, local_addr, mr->lkey, req.buf_size,
-                                                    req.buf_addr, req.buf_rkey, false);
-            break;
+    DLOG("get page %lu rdma ref [%#lx, %u]", req.page_id, local_addr, mr->rkey);
 
-        case RdmaIODirectRequest::WRITE:
-            daemon_connection.rdma_conn->prep_read(ba, local_addr, mr->lkey, req.buf_size,
-                                                   req.buf_addr, req.buf_rkey, false);
-            break;
-    }
-    auto fu = daemon_connection.rdma_conn->submit(ba);
-    while (fu.try_get() == 0) {
-    }
-
-    RdmaIODirectReply reply;
+    GetPageRDMARefReply reply;
+    reply.addr = local_addr;
+    reply.rkey = mr->rkey;
     return reply;
 }
 

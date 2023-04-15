@@ -32,20 +32,27 @@ int main(int argc, char *argv[]) {
         std::string cmdstr;
         cout << "> ";
         cin >> cmdstr;
-        if (cmdstr == "alloc") {
+        if (cmdstr == "a") {
             rchms::GAddr gaddr = pool->Alloc(8);
             cout << gaddr << endl;
-        } else if (cmdstr == "read") {
+        } else if (cmdstr == "r") {
             rchms::GAddr gaddr;
             cin >> gaddr;
             uint64_t n;
             pool->Read(gaddr, 8, &n);
             cout << n << endl;
-        } else if (cmdstr == "write") {
+        } else if (cmdstr == "w") {
             rchms::GAddr gaddr;
             uint64_t n;
             cin >> gaddr >> n;
             pool->Write(gaddr, 8, &n);
+        } else if (cmdstr == "?") {
+            cout << "Usage:\n"
+                    "\ta \t\t alloc 8B int gaddr\n"
+                    "\tr <gaddr> \t\t read gaddr 8B int\n"
+                    "\tw <gaddr> <int> \t\twrite gaddr 8B int\n"
+                    "\t? \t\t for help"
+                 << endl;
         } else {
             cout << "Illegal Operation" << endl;
         }

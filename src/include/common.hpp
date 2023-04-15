@@ -10,11 +10,12 @@ using offset_t = uint64_t;
 using mac_id_t = uint32_t;
 using rack_id_t = uint32_t;
 
-enum SystemRole {
-    CN = 1,
-    CXL_CN = 2,
-    DAEMON = 3,
-    CXL_DAEMON = 4,
+enum SystemRole : uint8_t {
+    MN = 1,
+    CN = 2,
+    CXL_CN = 3,
+    DAEMON = 4,
+    CXL_DAEMON = 5,
 };
 
 constexpr static mac_id_t master_id = 0;

@@ -30,8 +30,6 @@ struct PageRackMetadata {
 };
 
 struct MasterConnection {
-    std::string ip;
-    uint16_t port;  // erpc port
     int peer_session;
 
     virtual ~MasterConnection() = default;
@@ -43,6 +41,8 @@ struct MasterToClientConnection : public MasterConnection {
 };
 
 struct MasterToDaemonConnection : public MasterConnection {
+    std::string ip;
+    uint16_t port;  // erpc port
     rack_id_t rack_id;
     mac_id_t daemon_id;
 
@@ -156,8 +156,8 @@ struct DaemonContext {
     ConcurrentHashMap<page_id_t, FreqStats *> m_hot_stats;
 
     rdma_rc::RDMAConnection m_listen_conn;
-    std::vector<ibv_mr*> m_rdma_page_mr_table;   // 为cxl注册的mr，初始化长度后不可更改
-    std::unordered_map<void*, ibv_mr*> m_rdma_mr_table;
+    std::vector<ibv_mr *> m_rdma_page_mr_table;  // 为cxl注册的mr，初始化长度后不可更改
+    std::unordered_map<void *, ibv_mr *> m_rdma_mr_table;
 
     std::array<std::list<page_id_t>, page_size / min_slab_size> m_can_alloc_slab_class_lists;
 
@@ -215,9 +215,9 @@ struct ClientContext {
     std::unique_ptr<UDPServer<msgq::MsgUDPConnPacket>> m_udp_conn_recver;
     std::unique_ptr<msgq::MsgQueueRPC> m_msgq_rpc;
     std::unique_ptr<msgq::MsgQueueNexus> m_msgq_nexus;
-    ClientToMasterConnection m_master_connection;
+    // ClientToMasterConnection m_master_connection;
     ClientToDaemonConnection m_local_rack_daemon_connection;
-    ConcurrentHashMap<mac_id_t, ClientToDaemonConnection *> m_other_rack_daemon_connection;
+    // ConcurrentHashMap<mac_id_t, ClientToDaemonConnection *> m_other_rack_daemon_connection;
     ConcurrentHashMap<page_id_t, offset_t> m_page_table_cache;
 
     volatile bool m_msgq_stop;

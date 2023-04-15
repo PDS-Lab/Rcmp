@@ -90,6 +90,7 @@ int main(int argc, char *argv[]) {
         auto param = reinterpret_cast<RDMARCConnectParam *>(param_);
         auto conn_ = master_ctx.get_connection(param->mac_id);
         switch (param->role) {
+            case MN:
             case CN:
             case CXL_CN:
                 DLOG_FATAL("Not Support");
@@ -104,7 +105,7 @@ int main(int argc, char *argv[]) {
 
     master_ctx.m_listen_conn.listen(master_ctx.m_options.master_rdma_ip);
 
-    DLOG("OK");
+    DLOG("START OK");
 
     master_ctx.m_erpc_ctx.running = true;
     while (master_ctx.m_erpc_ctx.running) {

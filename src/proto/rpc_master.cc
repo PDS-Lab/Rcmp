@@ -21,6 +21,8 @@ JoinDaemonReply joinDaemon(MasterContext& master_context,
     rack_table->daemon_connect = &daemon_connection;
     rack_table->daemon_connect->rack_id = req.rack_id;
     rack_table->daemon_connect->daemon_id = mac_id;
+    rack_table->daemon_connect->ip = req.ip.get_string();
+    rack_table->daemon_connect->port = req.port;
 
     master_context.m_cluster_manager.cluster_rack_table.insert(req.rack_id, rack_table);
     master_context.m_cluster_manager.connect_table.insert(daemon_connection.daemon_id,
@@ -132,6 +134,9 @@ LatchRemotePageReply latchRemotePage(MasterContext& master_context,
         master_context.get_connection(page_meta->daemon_id));
 
     auto peer_addr = dest_daemon->rdma_conn->get_peer_addr();
+
+    DLOG("page %lu dest daemon %u [%s:%d]", req.page_id, page_meta->daemon_id,
+         dest_daemon->ip.c_str(), dest_daemon->port);
 
     LatchRemotePageReply reply;
     reply.dest_rack_id = page_meta->rack_id;

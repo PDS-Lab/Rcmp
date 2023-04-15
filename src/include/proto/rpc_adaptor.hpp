@@ -12,7 +12,7 @@ namespace detail {
 
 template <
     typename EFW, bool ESTABLISH,
-    typename std::enable_if<!std::is_base_of<detail::RawResponseReturn<typename EFW::RequestType>,
+    typename std::enable_if<!std::is_base_of<detail::RawResponseReturn<typename EFW::ResponseType>,
                                              typename EFW::RequestType>::value,
                             bool>::type = true>
 void erpc_call_target(erpc::ReqHandle *req_handle, void *context) {
@@ -43,7 +43,7 @@ void erpc_call_target(erpc::ReqHandle *req_handle, void *context) {
 
 template <
     typename EFW, bool ESTABLISH,
-    typename std::enable_if<std::is_base_of<detail::RawResponseReturn<typename EFW::RequestType>,
+    typename std::enable_if<std::is_base_of<detail::RawResponseReturn<typename EFW::ResponseType>,
                                             typename EFW::RequestType>::value,
                             bool>::type = true>
 void erpc_call_target(erpc::ReqHandle *req_handle, void *context) {
@@ -59,10 +59,10 @@ void erpc_call_target(erpc::ReqHandle *req_handle, void *context) {
     typename EFW::PeerContext *peer_connection = nullptr;
     erpc::IBRpcWrap rpc = self_ctx->get_erpc();
 
-    auto alloc_fn = [&](size_t s) {
+    auto alloc_fn = std::function<typename EFW::ResponseType *(size_t)>([&](size_t s) {
         rpc.resize_msg_buffer(resp_raw, sizeof(typename EFW::ResponseType) + s);
-        return resp_raw.get_buf();
-    };
+        return reinterpret_cast<typename EFW::ResponseType *>(resp_raw.get_buf());
+    });
     req->__func_flex = &alloc_fn;
 
     if (ESTABLISH) {
@@ -95,7 +95,7 @@ RpcFunc ErpcFuncWrapper<RpcFunc>::func;
 
 template <
     typename EFW, bool ESTABLISH,
-    typename std::enable_if<!std::is_base_of<detail::RawResponseReturn<typename EFW::RequestType>,
+    typename std::enable_if<!std::is_base_of<detail::RawResponseReturn<typename EFW::ResponseType>,
                                              typename EFW::RequestType>::value,
                             bool>::type = true>
 void msgq_call_target(msgq::MsgBuffer &req_raw, void *ctx) {
@@ -130,7 +130,7 @@ void msgq_call_target(msgq::MsgBuffer &req_raw, void *ctx) {
 
 template <
     typename EFW, bool ESTABLISH,
-    typename std::enable_if<std::is_base_of<detail::RawResponseReturn<typename EFW::RequestType>,
+    typename std::enable_if<std::is_base_of<detail::RawResponseReturn<typename EFW::ResponseType>,
                                             typename EFW::RequestType>::value,
                             bool>::type = true>
 void msgq_call_target(msgq::MsgBuffer &req_raw, void *ctx) {
@@ -142,11 +142,11 @@ void msgq_call_target(msgq::MsgBuffer &req_raw, void *ctx) {
     msgq::MsgQueueRPC *rpc;
     msgq::MsgBuffer resp_raw;
 
-    auto alloc_fn = [&](size_t s) {
+    auto alloc_fn = std::function<typename EFW::ResponseType *(size_t)>([&](size_t s) {
         resp_raw =
             peer_connection->msgq_rpc->alloc_msg_buffer(sizeof(typename EFW::ResponseType) + s);
-        return resp_raw.get_buf();
-    };
+        return reinterpret_cast<typename EFW::ResponseType *>(resp_raw.get_buf());
+    });
     req->__func_flex = &alloc_fn;
 
     if (ESTABLISH) {

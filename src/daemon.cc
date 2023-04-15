@@ -47,13 +47,13 @@ void DaemonContext::initRPCNexus() {
 
     m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::crossRackConnect)::rpc_type,
                                         bind_erpc_func<true>(rpc_daemon::crossRackConnect));
-    m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::rdmaIODirect)::rpc_type,
-                                        bind_erpc_func<true>(rpc_daemon::rdmaIODirect));
+    m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::getPageRDMARef)::rpc_type,
+                                        bind_erpc_func<true>(rpc_daemon::getPageRDMARef));
 
     erpc::SMHandlerWrap smhw;
     smhw.set_empty();
 
-    auto rpc = erpc::IBRpcWrap(m_erpc_ctx.nexus.get(), nullptr, 0, smhw);
+    auto rpc = erpc::IBRpcWrap(m_erpc_ctx.nexus.get(), this, 0, smhw);
     m_erpc_ctx.rpc_set.push_back(rpc);
     DLOG_ASSERT(m_erpc_ctx.rpc_set.size() == 1);
 
@@ -75,8 +75,8 @@ void DaemonContext::initRPCNexus() {
     m_msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::alloc)::rpc_type,
                                             bind_msgq_rpc_func<false>(rpc_daemon::alloc));
     m_msgq_manager.nexus->register_req_func(
-        RPC_TYPE_STRUCT(rpc_daemon::getPageRefOrProxy)::rpc_type,
-        bind_msgq_rpc_func<false>(rpc_daemon::getPageRefOrProxy));
+        RPC_TYPE_STRUCT(rpc_daemon::getPageCXLRefOrProxy)::rpc_type,
+        bind_msgq_rpc_func<false>(rpc_daemon::getPageCXLRefOrProxy));
 
     m_msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::__testdataSend1)::rpc_type,
                                             bind_msgq_rpc_func<false>(rpc_daemon::__testdataSend1));
@@ -92,6 +92,7 @@ void DaemonContext::initRDMARC() {
         auto param = reinterpret_cast<RDMARCConnectParam *>(param_);
         auto conn_ = get_connection(param->mac_id);
         switch (param->role) {
+            case MN:
             case CN:
             case CXL_CN:
                 DLOG_FATAL("Not Support");
@@ -123,6 +124,8 @@ void DaemonContext::connectWithMaster() {
     auto resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(JoinDaemonRPC::ResponseType));
 
     auto req = reinterpret_cast<JoinDaemonRPC::RequestType *>(req_raw.get_buf());
+    req->ip = m_options.daemon_ip;
+    req->port = m_options.daemon_port;
     req->free_page_num = m_max_data_page_num;
     req->rack_id = m_options.rack_id;
     req->with_cxl = m_options.with_cxl;

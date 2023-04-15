@@ -6,6 +6,7 @@
 #include "common.hpp"
 #include "cxl.hpp"
 #include "impl.hpp"
+#include "log.hpp"
 #include "msg_queue.hpp"
 #include "proto/rpc.hpp"
 #include "proto/rpc_adaptor.hpp"
@@ -38,7 +39,7 @@ PoolContext::PoolContext(ClientOptions options) {
 
     __impl->m_msgq_nexus->register_req_func(
         RPC_TYPE_STRUCT(rpc_client::getCurrentWriteData)::rpc_type,
-        bind_msgq_rpc_func<true>(rpc_client::getCurrentWriteData));
+        bind_msgq_rpc_func<false>(rpc_client::getCurrentWriteData));
 
     // 3. 发送join rack rpc
     using JoinRackRPC = RPC_TYPE_STRUCT(rpc_daemon::joinRack);
@@ -71,6 +72,8 @@ PoolContext::PoolContext(ClientOptions options) {
 
     __impl->m_client_id = resp->client_mac_id;
     __impl->m_local_rack_daemon_connection.daemon_id = resp->daemon_mac_id;
+    __impl->m_local_rack_daemon_connection.rack_id = __impl->m_options.rack_id;
+    __impl->m_local_rack_daemon_connection.msgq_rpc = __impl->m_msgq_rpc.get();
 
     __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
 
@@ -139,9 +142,7 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
 
     bool ret = __impl->m_page_table_cache.find(page_id, &offset);
     if (!ret) {
-        // TODO: locally get ref?
-
-        using GetPageRefOrProxyRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageRefOrProxy);
+        using GetPageRefOrProxyRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageCXLRefOrProxy);
         msgq::MsgBuffer req_raw =
             __impl->m_msgq_rpc->alloc_msg_buffer(sizeof(GetPageRefOrProxyRPC::RequestType));
         auto req = reinterpret_cast<GetPageRefOrProxyRPC::RequestType *>(req_raw.get_buf());
@@ -194,9 +195,7 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
 
     bool ret = __impl->m_page_table_cache.find(page_id, &offset);
     if (!ret) {
-        // TODO: locally get ref?
-
-        using GetPageRefOrProxyRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageRefOrProxy);
+        using GetPageRefOrProxyRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageCXLRefOrProxy);
         msgq::MsgBuffer req_raw =
             __impl->m_msgq_rpc->alloc_msg_buffer(sizeof(GetPageRefOrProxyRPC::RequestType));
         auto req = reinterpret_cast<GetPageRefOrProxyRPC::RequestType *>(req_raw.get_buf());
@@ -218,8 +217,6 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
 
         msgq::MsgBuffer resp_raw = fu.get();
         auto resp = reinterpret_cast<GetPageRefOrProxyRPC::ResponseType *>(resp_raw.get_buf());
-
-        // TODO: ref
 
         if (!resp->refs) {
             __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
@@ -314,14 +311,8 @@ Status PoolContext::__TestDataSend2(int *array, size_t size) {
 
 ClientConnection *ClientContext::get_connection(mac_id_t mac_id) {
     DLOG_ASSERT(mac_id != m_client_id, "Can't find self connection");
-    if (mac_id == master_id) {
-        return &m_master_connection;
-    } else if (mac_id == m_local_rack_daemon_connection.daemon_id) {
+    if (mac_id == m_local_rack_daemon_connection.daemon_id) {
         return &m_local_rack_daemon_connection;
-    } else {
-        ClientToDaemonConnection *ctx;
-        bool ret = m_other_rack_daemon_connection.find(mac_id, &ctx);
-        DLOG_ASSERT(ret, "Can't find mac %d", mac_id);
-        return ctx;
     }
+    DLOG_FATAL("Can't find mac %d", mac_id);
 }

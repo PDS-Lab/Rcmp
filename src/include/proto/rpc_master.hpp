@@ -8,6 +8,8 @@
 namespace rpc_master {
 
 struct JoinDaemonRequest : public RequestMsg {
+    IPv4String ip;
+    uint16_t port;
     rack_id_t rack_id;
     bool with_cxl;
     size_t free_page_num;

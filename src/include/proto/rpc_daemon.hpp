@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include "common.hpp"
 #include "impl.hpp"
 #include "log.hpp"
@@ -30,6 +31,8 @@ JoinRackReply joinRack(DaemonContext& daemon_context, DaemonToClientConnection& 
                        JoinRackRequest& req);
 
 struct CrossRackConnectRequest : public RequestMsg {
+    IPv4String ip;
+    uint16_t port;
     rack_id_t rack_id;
     mac_id_t conn_mac_id;
 };
@@ -42,9 +45,9 @@ CrossRackConnectReply crossRackConnect(DaemonContext& daemon_context,
                                        DaemonToDaemonConnection& daemon_connection,
                                        CrossRackConnectRequest& req);
 
-struct GetPageRefOrProxyReply;
-struct GetPageRefOrProxyRequest : public RequestMsg,
-                                  detail::RawResponseReturn<GetPageRefOrProxyReply> {
+struct GetPageCXLRefOrProxyReply;
+struct GetPageCXLRefOrProxyRequest : public RequestMsg,
+                                  detail::RawResponseReturn<GetPageCXLRefOrProxyReply> {
     enum {
         READ,
         WRITE,
@@ -60,7 +63,7 @@ struct GetPageRefOrProxyRequest : public RequestMsg,
         };
     };
 };
-struct GetPageRefOrProxyReply : public ResponseMsg {
+struct GetPageCXLRefOrProxyReply : public ResponseMsg {
     bool refs;
     union {
         struct {  // refs == true
@@ -80,9 +83,9 @@ struct GetPageRefOrProxyReply : public ResponseMsg {
  * @param req
  * @return GetPageRefOrProxyReply
  */
-GetPageRefOrProxyReply getPageRefOrProxy(DaemonContext& daemon_context,
+GetPageCXLRefOrProxyReply getPageCXLRefOrProxy(DaemonContext& daemon_context,
                                          DaemonToClientConnection& client_connection,
-                                         GetPageRefOrProxyRequest& req);
+                                         GetPageCXLRefOrProxyRequest& req);
 
 struct AllocPageMemoryRequest : public RequestMsg {
     page_id_t page_id;
@@ -138,28 +141,25 @@ struct FreeReply : public ResponseMsg {
 FreeReply free(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
                FreeRequest& req);
 
-struct RdmaIODirectRequest : public RequestMsg {
-    enum {
-        READ,
-        WRITE,
-    } type;
-    rchms::GAddr gaddr;
-    uintptr_t buf_addr;
-    size_t buf_size;
-    uint32_t buf_rkey;
+struct GetPageRDMARefRequest : public RequestMsg {
+    page_id_t page_id;
 };
-struct RdmaIODirectReply : public ResponseMsg {};
+struct GetPageRDMARefReply : public ResponseMsg {
+    uintptr_t addr;
+    uint32_t rkey;
+};
 /**
- * @brief 进行远程直接操作
+ * @brief 获取page的引用。如果本地Page Table没有该page
+ * id，则会触发远程调用。
  *
  * @param daemon_context
- * @param daemon_connection
+ * @param client_connection
  * @param req
- * @return RdmaIODirectReply
+ * @return GetPageRDMARefReply
  */
-RdmaIODirectReply rdmaIODirect(DaemonContext& daemon_context,
-                               DaemonToDaemonConnection& daemon_connection,
-                               RdmaIODirectRequest& req);
+GetPageRDMARefReply getPageRDMARef(DaemonContext& daemon_context,
+                                         DaemonToDaemonConnection& daemon_connection,
+                                         GetPageRDMARefRequest& req);
 
 struct TryMigratePageRequest : public RequestMsg {
     page_id_t page_id;

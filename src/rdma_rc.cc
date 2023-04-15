@@ -518,6 +518,7 @@ RDMAFuture RDMAConnection::submit(RDMABatch &b) {
     }
 
     ibv_send_wr *wr_head = &sge_wrs.front().wr;
+    sge_wrs.back().wr.wr_id = wr_id;
     sge_wrs.back().wr.next = nullptr;
     sge_wrs.back().wr.send_flags |= IBV_SEND_SIGNALED;
 
