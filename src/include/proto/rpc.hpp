@@ -56,6 +56,8 @@ BIND_RPC_TYPE_STRUCT(rpc_daemon::free);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::getPageRDMARef);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::__testdataSend1);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::__testdataSend2);
+BIND_RPC_TYPE_STRUCT(rpc_daemon::__notifyPerf);
+BIND_RPC_TYPE_STRUCT(rpc_daemon::__stopPerf);
 
 BIND_RPC_TYPE_STRUCT(rpc_client::removePageCache);
 BIND_RPC_TYPE_STRUCT(rpc_client::getCurrentWriteData);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+
 #include "common.hpp"
 #include "impl.hpp"
 #include "log.hpp"
@@ -47,7 +48,7 @@ CrossRackConnectReply crossRackConnect(DaemonContext& daemon_context,
 
 struct GetPageCXLRefOrProxyReply;
 struct GetPageCXLRefOrProxyRequest : public RequestMsg,
-                                  detail::RawResponseReturn<GetPageCXLRefOrProxyReply> {
+                                     detail::RawResponseReturn<GetPageCXLRefOrProxyReply> {
     enum {
         READ,
         WRITE,
@@ -84,8 +85,8 @@ struct GetPageCXLRefOrProxyReply : public ResponseMsg {
  * @return GetPageRefOrProxyReply
  */
 GetPageCXLRefOrProxyReply getPageCXLRefOrProxy(DaemonContext& daemon_context,
-                                         DaemonToClientConnection& client_connection,
-                                         GetPageCXLRefOrProxyRequest& req);
+                                               DaemonToClientConnection& client_connection,
+                                               GetPageCXLRefOrProxyRequest& req);
 
 struct AllocPageMemoryRequest : public RequestMsg {
     page_id_t page_id;
@@ -158,8 +159,8 @@ struct GetPageRDMARefReply : public ResponseMsg {
  * @return GetPageRDMARefReply
  */
 GetPageRDMARefReply getPageRDMARef(DaemonContext& daemon_context,
-                                         DaemonToDaemonConnection& daemon_connection,
-                                         GetPageRDMARefRequest& req);
+                                   DaemonToDaemonConnection& daemon_connection,
+                                   GetPageRDMARefRequest& req);
 
 struct TryMigratePageRequest : public RequestMsg {
     page_id_t page_id;
@@ -219,5 +220,17 @@ __TestDataSend1Reply __testdataSend1(DaemonContext& daemon_context,
 __TestDataSend2Reply __testdataSend2(DaemonContext& daemon_context,
                                      DaemonToClientConnection& client_connection,
                                      __TestDataSend2Request& req);
+
+struct __notifyPerfRequest : public RequestMsg {};
+struct __notifyPerfReply : public ResponseMsg {};
+__notifyPerfReply __notifyPerf(DaemonContext& daemon_context,
+                               DaemonToClientConnection& client_connection,
+                               __notifyPerfRequest& req);
+
+                            struct __stopPerfRequest : public RequestMsg {};
+struct __stopPerfReply : public ResponseMsg {};
+__stopPerfReply __stopPerf(DaemonContext& daemon_context,
+                               DaemonToClientConnection& client_connection,
+                               __stopPerfRequest& req);
 
 }  // namespace rpc_daemon

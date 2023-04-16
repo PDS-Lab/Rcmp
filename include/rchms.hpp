@@ -96,6 +96,10 @@ class PoolContext {
      */
     Status __TestDataSend2(int *array, size_t size);
 
+    Status __NotifyPerf();
+
+    Status __StopPerf();
+
    private:
     PoolContextImpl *__impl;
 };

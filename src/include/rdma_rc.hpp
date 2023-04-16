@@ -48,6 +48,8 @@ struct SgeWr {
 
 struct RDMABatch {
     std::vector<SgeWr> m_sge_wrs_;
+
+    void clear() { m_sge_wrs_.clear(); }
 };
 
 struct SyncData;
@@ -127,7 +129,8 @@ struct RDMAConnection {
 
     static std::function<void(RDMAConnection *conn, void *param)> m_hook_connect_;
     static std::function<void(RDMAConnection *conn)> m_hook_disconnect_;
-    static void register_connect_hook(std::function<void(RDMAConnection *conn, void *param)> &&hook_connect);
+    static void register_connect_hook(
+        std::function<void(RDMAConnection *conn, void *param)> &&hook_connect);
     static void register_disconnect_hook(
         std::function<void(RDMAConnection *conn)> &&hook_disconnect);
 

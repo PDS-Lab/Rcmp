@@ -26,9 +26,10 @@ void erpc_call_target(erpc::ReqHandle *req_handle, void *context) {
     auto resp = reinterpret_cast<typename EFW::ResponseType *>(resp_raw.get_buf());
 
     typename EFW::PeerContext *peer_connection = nullptr;
+    auto &rpc = self_ctx->get_erpc();
+
     if (ESTABLISH) {
         peer_connection = new typename EFW::PeerContext();
-        peer_connection->peer_session = req_wrap.get_server_session_num();
     } else {
         peer_connection =
             dynamic_cast<typename EFW::PeerContext *>(self_ctx->get_connection(req->mac_id));
@@ -36,7 +37,6 @@ void erpc_call_target(erpc::ReqHandle *req_handle, void *context) {
 
     *resp = EFW::func(*self_ctx, *peer_connection, *req);
 
-    auto rpc = self_ctx->get_erpc();
     rpc.resize_msg_buffer(resp_raw, sizeof(typename EFW::ResponseType));
     rpc.enqueue_response(req_wrap, resp_raw);
 }
@@ -57,7 +57,7 @@ void erpc_call_target(erpc::ReqHandle *req_handle, void *context) {
     auto resp = reinterpret_cast<typename EFW::ResponseType *>(resp_raw.get_buf());
 
     typename EFW::PeerContext *peer_connection = nullptr;
-    erpc::IBRpcWrap rpc = self_ctx->get_erpc();
+    auto &rpc = self_ctx->get_erpc();
 
     auto alloc_fn = std::function<typename EFW::ResponseType *(size_t)>([&](size_t s) {
         rpc.resize_msg_buffer(resp_raw, sizeof(typename EFW::ResponseType) + s);
@@ -219,4 +219,8 @@ auto bind_msgq_rpc_func(RpcFunc func) {
  */
 void erpc_general_promise_flag_cb(void *, void *pr);
 
+void erpc_general_bool_flag_cb(void *, void *b);
+
 void msgq_general_promise_flag_cb(msgq::MsgBuffer &resp, void *arg);
+
+void msgq_general_bool_flag_cb(msgq::MsgBuffer &resp, void *pr);

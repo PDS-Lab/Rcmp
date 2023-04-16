@@ -24,6 +24,7 @@
 /************************  Master   **********************/
 
 struct PageRackMetadata {
+    uint64_t version;  // 页面有效性版本号，从1开始，每次递增2
     uint32_t rack_id;
     mac_id_t daemon_id;
     SpinMutex latch;
@@ -89,7 +90,7 @@ struct MasterContext {
 
     static MasterContext &getInstance();
     MasterConnection *get_connection(mac_id_t mac_id);
-    erpc::IBRpcWrap get_erpc();
+    erpc::IBRpcWrap &get_erpc();
 };
 
 /************************  Daemon   **********************/
@@ -130,6 +131,15 @@ struct PageMetadata {
     PageMetadata(size_t slab_size);
 };
 
+struct RemotePageMetaCache {
+    FreqStats stats;
+    uint64_t page_version;
+    uintptr_t remote_page_addr;
+    uint32_t remote_page_rkey;
+
+    RemotePageMetaCache(size_t max_recent_record);
+};
+
 struct DaemonContext {
     rchms::DaemonOptions m_options;
 
@@ -153,7 +163,7 @@ struct DaemonContext {
     std::unique_ptr<SingleAllocator> m_cxl_page_allocator;
     ConcurrentHashMap<mac_id_t, DaemonConnection *> m_connect_table;
     ConcurrentHashMap<page_id_t, PageMetadata *> m_page_table;
-    ConcurrentHashMap<page_id_t, FreqStats *> m_hot_stats;
+    ConcurrentHashMap<page_id_t, RemotePageMetaCache *> m_hot_stats;
 
     rdma_rc::RDMAConnection m_listen_conn;
     std::vector<ibv_mr *> m_rdma_page_mr_table;  // 为cxl注册的mr，初始化长度后不可更改
@@ -182,7 +192,7 @@ struct DaemonContext {
     void registerCXLMR();
 
     DaemonConnection *get_connection(mac_id_t mac_id);
-    erpc::IBRpcWrap get_erpc();
+    erpc::IBRpcWrap &get_erpc();
     ibv_mr *get_mr(void *p);
 };
 

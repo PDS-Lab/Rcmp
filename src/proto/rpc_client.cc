@@ -9,7 +9,7 @@ GetCurrentWriteDataReply getCurrentWriteData(ClientContext& client_context,
 
     memcpy(reply_ptr->data, req.dio_write_buf, req.dio_write_size);
 
-    return *reply_ptr;
+    return {};
 }
 
 }  // namespace rpc_client
