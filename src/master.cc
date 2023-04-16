@@ -22,7 +22,7 @@ MasterConnection *MasterContext::get_connection(mac_id_t mac_id) {
     return ctx;
 }
 
-erpc::IBRpcWrap MasterContext::get_erpc() { return m_erpc_ctx.rpc_set[0]; }
+erpc::IBRpcWrap &MasterContext::get_erpc() { return m_erpc_ctx.rpc_set[0]; }
 
 int main(int argc, char *argv[]) {
     cmdline::parser cmd;
@@ -76,11 +76,10 @@ int main(int argc, char *argv[]) {
         bind_erpc_func<false>(rpc_master::unLatchRemotePage));
 
     erpc::SMHandlerWrap smhw;
-    smhw.set_null();
+    smhw.set_empty();
 
-    auto rpc =
-        erpc::IBRpcWrap(master_ctx.m_erpc_ctx.nexus.get(), &MasterContext::getInstance(), 0, smhw);
-    master_ctx.m_erpc_ctx.rpc_set.push_back(rpc);
+    erpc::IBRpcWrap rpc(master_ctx.m_erpc_ctx.nexus.get(), &MasterContext::getInstance(), 0, smhw);
+    master_ctx.m_erpc_ctx.rpc_set.push_back(std::move(rpc));
     DLOG_ASSERT(master_ctx.m_erpc_ctx.rpc_set.size() == 1);
 
     rdma_rc::RDMAEnv::init();
@@ -109,7 +108,7 @@ int main(int argc, char *argv[]) {
 
     master_ctx.m_erpc_ctx.running = true;
     while (master_ctx.m_erpc_ctx.running) {
-        rpc.run_event_loop_once();
+        master_ctx.get_erpc().run_event_loop_once();
     }
 
     return 0;

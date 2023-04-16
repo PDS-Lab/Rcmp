@@ -151,13 +151,12 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
         req->gaddr = gaddr;
         req->cn_read_size = size;
 
-        std::promise<msgq::MsgBuffer> pro;
-        std::future<msgq::MsgBuffer> fu = pro.get_future();
+        SpinPromise<msgq::MsgBuffer> pro;
+        SpinFuture<msgq::MsgBuffer> fu = pro.get_future();
         __impl->m_msgq_rpc->enqueue_request(GetPageRefOrProxyRPC::rpc_type, req_raw,
-                                            msgq_general_promise_flag_cb,
-                                            static_cast<void *>(&pro));
+                                            msgq_general_bool_flag_cb, static_cast<void *>(&pro));
 
-        while (fu.wait_for(1ns) == std::future_status::timeout) {
+        while (fu.wait_for(0s) == std::future_status::timeout) {
             __impl->m_msgq_rpc->run_event_loop_once();
         }
 
@@ -205,13 +204,13 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
         req->cn_write_buf = buf;
         req->cn_write_size = size;
 
-        std::promise<msgq::MsgBuffer> pro;
-        std::future<msgq::MsgBuffer> fu = pro.get_future();
+        SpinPromise<msgq::MsgBuffer> pro;
+        SpinFuture<msgq::MsgBuffer> fu = pro.get_future();
         __impl->m_msgq_rpc->enqueue_request(GetPageRefOrProxyRPC::rpc_type, req_raw,
-                                            msgq_general_promise_flag_cb,
+                                            msgq_general_bool_flag_cb,
                                             static_cast<void *>(&pro));
 
-        while (fu.wait_for(1ns) == std::future_status::timeout) {
+        while (fu.wait_for(0s) == std::future_status::timeout) {
             __impl->m_msgq_rpc->run_event_loop_once();
         }
 
@@ -243,40 +242,7 @@ Status PoolContext::Free(GAddr gaddr, size_t size) { DLOG_FATAL("Not Support"); 
 /*********************** for test **************************/
 
 Status PoolContext::__TestDataSend1(int *array, size_t size) {
-    using DataSendRPC = RPC_TYPE_STRUCT(rpc_daemon::__testdataSend1);
-    msgq::MsgBuffer req_raw =
-        __impl->m_msgq_rpc->alloc_msg_buffer(sizeof(DataSendRPC::RequestType));
-    auto req = reinterpret_cast<DataSendRPC::RequestType *>(req_raw.get_buf());
-    req->mac_id = __impl->m_client_id;
-    req->size = size;
-    for (size_t i = 0; i < req->size; i++) {
-        req->data[i] = i + req->mac_id;
-    }
-    memcpy(req->data, array, size * sizeof(int));
-
-    std::promise<msgq::MsgBuffer> pro;
-    std::future<msgq::MsgBuffer> fu = pro.get_future();
-    __impl->m_msgq_rpc->enqueue_request(DataSendRPC::rpc_type, req_raw,
-                                        msgq_general_promise_flag_cb, static_cast<void *>(&pro));
-
-    while (fu.wait_for(1ns) == std::future_status::timeout) {
-        __impl->m_msgq_rpc->run_event_loop_once();
-    }
-
-    msgq::MsgBuffer resp_raw = fu.get();
-    auto resp = reinterpret_cast<DataSendRPC::ResponseType *>(resp_raw.get_buf());
-    // check
-    assert(resp->size == size);
-    for (size_t i = 0; i < resp->size; i++) {
-        assert(resp->data[i] == array[i]);
-    }
-    __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
-
-    return Status::OK;
-}
-
-Status PoolContext::__TestDataSend2(int *array, size_t size) {
-    using DataSend1RPC = RPC_TYPE_STRUCT(rpc_daemon::__testdataSend2);
+    using DataSend1RPC = RPC_TYPE_STRUCT(rpc_daemon::__testdataSend1);
     msgq::MsgBuffer req_raw =
         __impl->m_msgq_rpc->alloc_msg_buffer(sizeof(DataSend1RPC::RequestType));
     auto req = reinterpret_cast<DataSend1RPC::RequestType *>(req_raw.get_buf());
@@ -299,9 +265,81 @@ Status PoolContext::__TestDataSend2(int *array, size_t size) {
     msgq::MsgBuffer resp_raw = fu.get();
     auto resp = reinterpret_cast<DataSend1RPC::ResponseType *>(resp_raw.get_buf());
     // check
+    assert(resp->size == size);
     for (size_t i = 0; i < resp->size; i++) {
         assert(resp->data[i] == array[i]);
     }
+    __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
+
+    return Status::OK;
+}
+
+Status PoolContext::__TestDataSend2(int *array, size_t size) {
+    using DataSend2RPC = RPC_TYPE_STRUCT(rpc_daemon::__testdataSend2);
+    msgq::MsgBuffer req_raw =
+        __impl->m_msgq_rpc->alloc_msg_buffer(sizeof(DataSend2RPC::RequestType));
+    auto req = reinterpret_cast<DataSend2RPC::RequestType *>(req_raw.get_buf());
+    req->mac_id = __impl->m_client_id;
+    req->size = size;
+    for (size_t i = 0; i < req->size; i++) {
+        req->data[i] = i + req->mac_id;
+    }
+    memcpy(req->data, array, size * sizeof(int));
+
+    std::promise<msgq::MsgBuffer> pro;
+    std::future<msgq::MsgBuffer> fu = pro.get_future();
+    __impl->m_msgq_rpc->enqueue_request(DataSend2RPC::rpc_type, req_raw,
+                                        msgq_general_promise_flag_cb, static_cast<void *>(&pro));
+
+    while (fu.wait_for(1ns) == std::future_status::timeout) {
+        __impl->m_msgq_rpc->run_event_loop_once();
+    }
+
+    msgq::MsgBuffer resp_raw = fu.get();
+    auto resp = reinterpret_cast<DataSend2RPC::ResponseType *>(resp_raw.get_buf());
+    // check
+    for (size_t i = 0; i < resp->size; i++) {
+        assert(resp->data[i] == array[i]);
+    }
+    __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
+
+    return Status::OK;
+}
+
+Status PoolContext::__NotifyPerf() {
+    using __notify_rpc = RPC_TYPE_STRUCT(rpc_daemon::__notifyPerf);
+    msgq::MsgBuffer req_raw =
+        __impl->m_msgq_rpc->alloc_msg_buffer(sizeof(__notify_rpc::RequestType));
+    auto req = reinterpret_cast<__notify_rpc::RequestType *>(req_raw.get_buf());
+    req->mac_id = __impl->m_client_id;
+
+    std::promise<msgq::MsgBuffer> pro;
+    std::future<msgq::MsgBuffer> fu = pro.get_future();
+    __impl->m_msgq_rpc->enqueue_request(__notify_rpc::rpc_type, req_raw,
+                                        msgq_general_promise_flag_cb, static_cast<void *>(&pro));
+    while (fu.wait_for(1ns) == std::future_status::timeout) {
+        __impl->m_msgq_rpc->run_event_loop_once();
+    }
+    msgq::MsgBuffer resp_raw = fu.get();
+    __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
+
+    return Status::OK;
+}
+
+Status PoolContext::__StopPerf() {
+    using __stop_rpc = RPC_TYPE_STRUCT(rpc_daemon::__stopPerf);
+    msgq::MsgBuffer req_raw = __impl->m_msgq_rpc->alloc_msg_buffer(sizeof(__stop_rpc::RequestType));
+    auto req = reinterpret_cast<__stop_rpc::RequestType *>(req_raw.get_buf());
+    req->mac_id = __impl->m_client_id;
+
+    std::promise<msgq::MsgBuffer> pro;
+    std::future<msgq::MsgBuffer> fu = pro.get_future();
+    __impl->m_msgq_rpc->enqueue_request(__stop_rpc::rpc_type, req_raw, msgq_general_promise_flag_cb,
+                                        static_cast<void *>(&pro));
+    while (fu.wait_for(1ns) == std::future_status::timeout) {
+        __impl->m_msgq_rpc->run_event_loop_once();
+    }
+    msgq::MsgBuffer resp_raw = fu.get();
     __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
 
     return Status::OK;

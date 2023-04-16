@@ -23,6 +23,8 @@ JoinDaemonReply joinDaemon(MasterContext& master_context,
     rack_table->daemon_connect->daemon_id = mac_id;
     rack_table->daemon_connect->ip = req.ip.get_string();
     rack_table->daemon_connect->port = req.port;
+    rack_table->daemon_connect->peer_session = master_context.get_erpc().create_session(
+        rack_table->daemon_connect->ip + ":" + std::to_string(rack_table->daemon_connect->port), 0);
 
     master_context.m_cluster_manager.cluster_rack_table.insert(req.rack_id, rack_table);
     master_context.m_cluster_manager.connect_table.insert(daemon_connection.daemon_id,
@@ -78,6 +80,7 @@ AllocPageReply allocPage(MasterContext& master_context, MasterToDaemonConnection
 
     if (rack_table->current_allocated_page_num < rack_table->max_free_page_num) {
         // 采取就近原则分配page到daemon所在rack
+        page_rack_metadata->version = 1;
         page_rack_metadata->rack_id = daemon_connection.rack_id;
         page_rack_metadata->daemon_id = daemon_connection.daemon_id;
         rack_table->current_allocated_page_num++;
@@ -135,10 +138,11 @@ LatchRemotePageReply latchRemotePage(MasterContext& master_context,
 
     auto peer_addr = dest_daemon->rdma_conn->get_peer_addr();
 
-    DLOG("page %lu dest daemon %u [%s:%d]", req.page_id, page_meta->daemon_id,
-         dest_daemon->ip.c_str(), dest_daemon->port);
+    // DLOG("page %lu dest daemon %u [%s:%d]", req.page_id, page_meta->daemon_id,
+    //      dest_daemon->ip.c_str(), dest_daemon->port);
 
     LatchRemotePageReply reply;
+    reply.version = page_meta->version;
     reply.dest_rack_id = page_meta->rack_id;
     reply.dest_daemon_id = page_meta->daemon_id;
     reply.dest_daemon_ipv4 = dest_daemon->ip;

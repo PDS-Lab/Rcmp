@@ -53,8 +53,8 @@ void DaemonContext::initRPCNexus() {
     erpc::SMHandlerWrap smhw;
     smhw.set_empty();
 
-    auto rpc = erpc::IBRpcWrap(m_erpc_ctx.nexus.get(), this, 0, smhw);
-    m_erpc_ctx.rpc_set.push_back(rpc);
+    erpc::IBRpcWrap rpc(m_erpc_ctx.nexus.get(), this, 0, smhw);
+    m_erpc_ctx.rpc_set.push_back(std::move(rpc));
     DLOG_ASSERT(m_erpc_ctx.rpc_set.size() == 1);
 
     // 2. init msgq
@@ -82,6 +82,8 @@ void DaemonContext::initRPCNexus() {
                                             bind_msgq_rpc_func<false>(rpc_daemon::__testdataSend1));
     m_msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::__testdataSend2)::rpc_type,
                                             bind_msgq_rpc_func<false>(rpc_daemon::__testdataSend2));
+    m_msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::__notifyPerf)::rpc_type,
+                                            bind_msgq_rpc_func<false>(rpc_daemon::__notifyPerf));
 }
 
 void DaemonContext::initRDMARC() {
@@ -113,7 +115,7 @@ void DaemonContext::initRDMARC() {
 }
 
 void DaemonContext::connectWithMaster() {
-    auto rpc = get_erpc();
+    auto &rpc = get_erpc();
 
     std::string master_uri = m_options.master_ip + ":" + std::to_string(m_options.master_port);
     m_master_connection.peer_session = rpc.create_session(master_uri, 0);
@@ -188,7 +190,7 @@ DaemonConnection *DaemonContext::get_connection(mac_id_t mac_id) {
     }
 }
 
-erpc::IBRpcWrap DaemonContext::get_erpc() { return m_erpc_ctx.rpc_set[0]; }
+erpc::IBRpcWrap &DaemonContext::get_erpc() { return m_erpc_ctx.rpc_set[0]; }
 
 ibv_mr *DaemonContext::get_mr(void *p) {
     if (p >= m_cxl_format.start_addr && p < m_cxl_format.end_addr) {
@@ -202,6 +204,8 @@ ibv_mr *DaemonContext::get_mr(void *p) {
 }
 
 PageMetadata::PageMetadata(size_t slab_size) : slab_allocator(page_size, slab_size) {}
+
+RemotePageMetaCache::RemotePageMetaCache(size_t max_recent_record) : stats(max_recent_record) {}
 
 int main(int argc, char *argv[]) {
     cmdline::parser cmd;
