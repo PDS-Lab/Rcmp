@@ -2,6 +2,7 @@
 
 #include <type_traits>
 
+#include "cort_sched.hpp"
 #include "eRPC/erpc.h"
 #include "log.hpp"
 #include "msg_queue.hpp"
@@ -17,28 +18,32 @@ template <
                             bool>::type = true>
 void erpc_call_target(erpc::ReqHandle *req_handle, void *context) {
     auto self_ctx = reinterpret_cast<typename EFW::SelfContext *>(context);
-    erpc::ReqHandleWrap req_wrap(req_handle);
 
-    auto resp_raw = req_wrap.get_pre_resp_msgbuf();
-    auto req_raw = req_wrap.get_req_msgbuf();
+    CortScheduler &cort_sched = self_ctx->get_cort_sched();
+    cort_sched.addTask([self_ctx, req_handle]() {
+        erpc::ReqHandleWrap req_wrap(req_handle);
 
-    auto req = reinterpret_cast<typename EFW::RequestType *>(req_raw.get_buf());
-    auto resp = reinterpret_cast<typename EFW::ResponseType *>(resp_raw.get_buf());
+        auto resp_raw = req_wrap.get_pre_resp_msgbuf();
+        auto req_raw = req_wrap.get_req_msgbuf();
 
-    typename EFW::PeerContext *peer_connection = nullptr;
-    auto &rpc = self_ctx->get_erpc();
+        auto req = reinterpret_cast<typename EFW::RequestType *>(req_raw.get_buf());
+        auto resp = reinterpret_cast<typename EFW::ResponseType *>(resp_raw.get_buf());
 
-    if (ESTABLISH) {
-        peer_connection = new typename EFW::PeerContext();
-    } else {
-        peer_connection =
-            dynamic_cast<typename EFW::PeerContext *>(self_ctx->get_connection(req->mac_id));
-    }
+        typename EFW::PeerContext *peer_connection = nullptr;
+        auto &rpc = self_ctx->get_erpc();
 
-    *resp = EFW::func(*self_ctx, *peer_connection, *req);
+        if (ESTABLISH) {
+            peer_connection = new typename EFW::PeerContext();
+        } else {
+            peer_connection =
+                dynamic_cast<typename EFW::PeerContext *>(self_ctx->get_connection(req->mac_id));
+        }
 
-    rpc.resize_msg_buffer(resp_raw, sizeof(typename EFW::ResponseType));
-    rpc.enqueue_response(req_wrap, resp_raw);
+        *resp = EFW::func(*self_ctx, *peer_connection, *req);
+
+        rpc.resize_msg_buffer(resp_raw, sizeof(typename EFW::ResponseType));
+        rpc.enqueue_response(req_wrap, resp_raw);
+    });
 }
 
 template <
@@ -48,32 +53,36 @@ template <
                             bool>::type = true>
 void erpc_call_target(erpc::ReqHandle *req_handle, void *context) {
     auto self_ctx = reinterpret_cast<typename EFW::SelfContext *>(context);
-    erpc::ReqHandleWrap req_wrap(req_handle);
 
-    auto resp_raw = req_wrap.get_pre_resp_msgbuf();
-    auto req_raw = req_wrap.get_req_msgbuf();
+    CortScheduler &cort_sched = self_ctx->get_cort_sched();
+    cort_sched.addTask([self_ctx, req_handle]() {
+        erpc::ReqHandleWrap req_wrap(req_handle);
 
-    auto req = reinterpret_cast<typename EFW::RequestType *>(req_raw.get_buf());
-    auto resp = reinterpret_cast<typename EFW::ResponseType *>(resp_raw.get_buf());
+        auto resp_raw = req_wrap.get_pre_resp_msgbuf();
+        auto req_raw = req_wrap.get_req_msgbuf();
 
-    typename EFW::PeerContext *peer_connection = nullptr;
-    auto &rpc = self_ctx->get_erpc();
+        auto req = reinterpret_cast<typename EFW::RequestType *>(req_raw.get_buf());
+        auto resp = reinterpret_cast<typename EFW::ResponseType *>(resp_raw.get_buf());
 
-    auto alloc_fn = std::function<typename EFW::ResponseType *(size_t)>([&](size_t s) {
-        rpc.resize_msg_buffer(resp_raw, sizeof(typename EFW::ResponseType) + s);
-        return reinterpret_cast<typename EFW::ResponseType *>(resp_raw.get_buf());
+        typename EFW::PeerContext *peer_connection = nullptr;
+        auto &rpc = self_ctx->get_erpc();
+
+        auto alloc_fn = std::function<typename EFW::ResponseType *(size_t)>([&](size_t s) {
+            rpc.resize_msg_buffer(resp_raw, sizeof(typename EFW::ResponseType) + s);
+            return reinterpret_cast<typename EFW::ResponseType *>(resp_raw.get_buf());
+        });
+        req->__func_flex = &alloc_fn;
+
+        if (ESTABLISH) {
+            peer_connection = new typename EFW::PeerContext();
+        } else {
+            peer_connection =
+                dynamic_cast<typename EFW::PeerContext *>(self_ctx->get_connection(req->mac_id));
+        }
+
+        *resp = EFW::func(*self_ctx, *peer_connection, *req);
+        rpc.enqueue_response(req_wrap, resp_raw);
     });
-    req->__func_flex = &alloc_fn;
-
-    if (ESTABLISH) {
-        peer_connection = new typename EFW::PeerContext();
-    } else {
-        peer_connection =
-            dynamic_cast<typename EFW::PeerContext *>(self_ctx->get_connection(req->mac_id));
-    }
-
-    *resp = EFW::func(*self_ctx, *peer_connection, *req);
-    rpc.enqueue_response(req_wrap, resp_raw);
 }
 
 template <typename RpcFunc>
@@ -101,35 +110,41 @@ template <
 void msgq_call_target(msgq::MsgBuffer &req_raw, void *ctx) {
     auto self_ctx = reinterpret_cast<typename EFW::SelfContext *>(ctx);
 
-    auto req = reinterpret_cast<typename EFW::RequestType *>(req_raw.get_buf());
+    CortScheduler &cort_sched = self_ctx->get_cort_sched();
+    // mutable防止引用析构
+    cort_sched.addTask([self_ctx, req_raw]() mutable {
+        auto req = reinterpret_cast<typename EFW::RequestType *>(req_raw.get_buf());
 
-    typename EFW::PeerContext *peer_connection = nullptr;
-    msgq::MsgQueueRPC *rpc;
-    msgq::MsgBuffer resp_raw;
-    if (ESTABLISH) {
-        peer_connection = new typename EFW::PeerContext();
-        auto reply = EFW::func(*self_ctx, *peer_connection, *req);
-        rpc = peer_connection->msgq_rpc;
-        resp_raw = rpc->alloc_msg_buffer(sizeof(typename EFW::ResponseType));
-        auto resp = reinterpret_cast<typename EFW::ResponseType *>(resp_raw.get_buf());
+        typename EFW::PeerContext *peer_connection = nullptr;
+        msgq::MsgQueueRPC *rpc;
+        msgq::MsgBuffer resp_raw;
+        if (ESTABLISH) {
+            peer_connection = new typename EFW::PeerContext();
+            auto reply = EFW::func(*self_ctx, *peer_connection, *req);
+            rpc = peer_connection->msgq_rpc;
+            resp_raw = rpc->alloc_msg_buffer(sizeof(typename EFW::ResponseType));
+            auto resp = reinterpret_cast<typename EFW::ResponseType *>(resp_raw.get_buf());
 
-        *resp = reply;
-    } else {
-        /**
-         * 为了减少从func返回值到msg buffer的拷贝，总是优先申请，然后将返回值直接填入
-         * ? 可能存在func是一个长请求，导致优先申请的msg暂时无法发送，使得后面的msg发送阻塞（队头阻塞）
-         */
-        peer_connection =
-            dynamic_cast<typename EFW::PeerContext *>(self_ctx->get_connection(req->mac_id));
-        rpc = peer_connection->msgq_rpc;
-        resp_raw = rpc->alloc_msg_buffer(sizeof(typename EFW::ResponseType));
-        auto resp = reinterpret_cast<typename EFW::ResponseType *>(resp_raw.get_buf());
-        *resp = EFW::func(*self_ctx, *peer_connection, *req);
-    }
-    rpc->enqueue_response(req_raw, resp_raw);
+            *resp = reply;
+        } else {
+            /**
+             * 为了减少从func返回值到msg buffer的拷贝，总是优先申请，然后将返回值直接填入
+             * ?
+             * 可能存在func是一个长请求，导致优先申请的msg暂时无法发送，使得后面的msg发送阻塞（队头阻塞）
+             */
+            peer_connection =
+                dynamic_cast<typename EFW::PeerContext *>(self_ctx->get_connection(req->mac_id));
+            rpc = peer_connection->msgq_rpc;
+            resp_raw = rpc->alloc_msg_buffer(sizeof(typename EFW::ResponseType));
+            auto resp = reinterpret_cast<typename EFW::ResponseType *>(resp_raw.get_buf());
+            *resp = EFW::func(*self_ctx, *peer_connection, *req);
+        }
 
-    // 发送端的buffer将由接收端释放
-    rpc->free_msg_buffer(req_raw);
+        rpc->enqueue_response(req_raw, resp_raw);
+
+        // 发送端的buffer将由接收端释放
+        rpc->free_msg_buffer(req_raw);
+    });
 }
 
 template <
@@ -140,31 +155,35 @@ template <
 void msgq_call_target(msgq::MsgBuffer &req_raw, void *ctx) {
     auto self_ctx = reinterpret_cast<typename EFW::SelfContext *>(ctx);
 
-    auto req = reinterpret_cast<typename EFW::RequestType *>(req_raw.get_buf());
+    CortScheduler &cort_sched = self_ctx->get_cort_sched();
+    // mutable防止引用析构
+    cort_sched.addTask([self_ctx, req_raw]() mutable {
+        auto req = reinterpret_cast<typename EFW::RequestType *>(req_raw.get_buf());
 
-    typename EFW::PeerContext *peer_connection = nullptr;
-    msgq::MsgQueueRPC *rpc;
-    msgq::MsgBuffer resp_raw;
+        typename EFW::PeerContext *peer_connection = nullptr;
+        msgq::MsgQueueRPC *rpc;
+        msgq::MsgBuffer resp_raw;
 
-    auto alloc_fn = std::function<typename EFW::ResponseType *(size_t)>([&](size_t s) {
-        resp_raw =
-            peer_connection->msgq_rpc->alloc_msg_buffer(sizeof(typename EFW::ResponseType) + s);
-        return reinterpret_cast<typename EFW::ResponseType *>(resp_raw.get_buf());
+        auto alloc_fn = std::function<typename EFW::ResponseType *(size_t)>([&](size_t s) {
+            resp_raw =
+                peer_connection->msgq_rpc->alloc_msg_buffer(sizeof(typename EFW::ResponseType) + s);
+            return reinterpret_cast<typename EFW::ResponseType *>(resp_raw.get_buf());
+        });
+        req->__func_flex = &alloc_fn;
+
+        if (ESTABLISH) {
+            peer_connection = new typename EFW::PeerContext();
+        } else {
+            peer_connection =
+                dynamic_cast<typename EFW::PeerContext *>(self_ctx->get_connection(req->mac_id));
+        }
+        rpc = peer_connection->msgq_rpc;
+        EFW::func(*self_ctx, *peer_connection, *req);
+        rpc->enqueue_response(req_raw, resp_raw);
+
+        // 发送端的buffer将由接收端释放
+        rpc->free_msg_buffer(req_raw);
     });
-    req->__func_flex = &alloc_fn;
-
-    if (ESTABLISH) {
-        peer_connection = new typename EFW::PeerContext();
-    } else {
-        peer_connection =
-            dynamic_cast<typename EFW::PeerContext *>(self_ctx->get_connection(req->mac_id));
-    }
-    rpc = peer_connection->msgq_rpc;
-    EFW::func(*self_ctx, *peer_connection, *req);
-    rpc->enqueue_response(req_raw, resp_raw);
-
-    // 发送端的buffer将由接收端释放
-    rpc->free_msg_buffer(req_raw);
 }
 
 template <typename RpcFunc>

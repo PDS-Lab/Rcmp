@@ -16,6 +16,8 @@
 
 using namespace std::chrono_literals;
 
+DaemonContext::DaemonContext() : m_cort_sched(8) {}
+
 DaemonContext &DaemonContext::getInstance() {
     static DaemonContext daemon_ctx;
     return daemon_ctx;
@@ -190,6 +192,8 @@ DaemonConnection *DaemonContext::get_connection(mac_id_t mac_id) {
     }
 }
 
+CortScheduler &DaemonContext::get_cort_sched() { return m_cort_sched; }
+
 erpc::IBRpcWrap &DaemonContext::get_erpc() { return m_erpc_ctx.rpc_set[0]; }
 
 ibv_mr *DaemonContext::get_mr(void *p) {
@@ -246,6 +250,7 @@ int main(int argc, char *argv[]) {
     while (true) {
         daemon_ctx.m_msgq_manager.rpc->run_event_loop_once();
         daemon_ctx.get_erpc().run_event_loop_once();
+        daemon_ctx.get_cort_sched().runOnce();
     }
 
     return 0;

@@ -1,6 +1,7 @@
 #include "proto/rpc_master.hpp"
 
 #include "common.hpp"
+#include "cort_sched.hpp"
 #include "log.hpp"
 
 namespace rpc_master {
@@ -130,7 +131,9 @@ LatchRemotePageReply latchRemotePage(MasterContext& master_context,
     bool ret = master_context.m_page_directory.find(req.page_id, &page_meta);
     DLOG_ASSERT(ret, "Can't find this page %lu", req.page_id);
 
-    while (!page_meta->latch.try_lock()) {
+    if (!page_meta->latch.try_lock()) {
+        this_cort::reset_resume_cond([&page_meta]() { return page_meta->latch.try_lock(); });
+        this_cort::yield();
     }
 
     MasterToDaemonConnection* dest_daemon = dynamic_cast<MasterToDaemonConnection*>(

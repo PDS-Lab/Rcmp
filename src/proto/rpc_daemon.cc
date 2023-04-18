@@ -7,6 +7,7 @@
 
 #include "common.hpp"
 #include "config.hpp"
+#include "cort_sched.hpp"
 #include "log.hpp"
 #include "proto/rpc.hpp"
 #include "proto/rpc_adaptor.hpp"
@@ -41,9 +42,9 @@ JoinRackReply joinRack(DaemonContext& daemon_context, DaemonToClientConnection& 
     rpc.enqueue_request(daemon_context.m_master_connection.peer_session, JoinClientRPC::rpc_type,
                         req_raw, resp_raw, erpc_general_promise_flag_cb, static_cast<void*>(&pro));
 
-    while (fu.wait_for(1ns) == std::future_status::timeout) {
-        rpc.run_event_loop_once();
-    }
+    this_cort::reset_resume_cond(
+        [&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
+    this_cort::yield();
 
     auto resp = reinterpret_cast<JoinClientRPC::ResponseType*>(resp_raw.get_buf());
 
@@ -175,9 +176,9 @@ retry:
                                                             wd_req_raw, msgq_general_bool_flag_cb,
                                                             static_cast<void*>(&pro));
 
-                while (fu.wait_for(0s) == std::future_status::timeout) {
-                    client_connection.msgq_rpc->run_event_loop_once();
-                }
+                this_cort::reset_resume_cond(
+                    [&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
+                this_cort::yield();
 
                 msgq::MsgBuffer wd_resp_raw = fu.get();
                 auto wd_resp =
@@ -208,9 +209,9 @@ retry:
         }
 
         // 1.3 一起等待latch完成
-        while (fu.wait_for(0s) == std::future_status::timeout) {
-            rpc.run_event_loop_once();
-        }
+        this_cort::reset_resume_cond(
+            [&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
+        this_cort::yield();
 
         auto resp = reinterpret_cast<LatchRemotePageRPC::ResponseType*>(resp_raw.get_buf());
 
@@ -249,9 +250,9 @@ retry:
             rpc.enqueue_request(dd_conn->peer_session, CrossRackConnectRPC::rpc_type, req_raw,
                                 resp_raw, erpc_general_promise_flag_cb, static_cast<void*>(&pro));
 
-            while (fu.wait_for(1ns) == std::future_status::timeout) {
-                rpc.run_event_loop_once();
-            }
+            this_cort::reset_resume_cond(
+                [&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
+            this_cort::yield();
 
             auto resp = reinterpret_cast<CrossRackConnectRPC::ResponseType*>(resp_raw.get_buf());
 
@@ -297,9 +298,9 @@ retry:
                                 req_raw, resp_raw, erpc_general_promise_flag_cb,
                                 static_cast<void*>(&pro));
 
-            while (fu.wait_for(1ns) == std::future_status::timeout) {
-                rpc.run_event_loop_once();
-            }
+            this_cort::reset_resume_cond(
+                [&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
+            this_cort::yield();
 
             auto resp = reinterpret_cast<GetPageRDMARefRPC::ResponseType*>(resp_raw.get_buf());
             rem_page_md_cache->page_version = page_cur_version;
@@ -333,8 +334,9 @@ retry:
                     break;
             }
             auto fu = dest_daemon_conn->rdma_conn->submit(ba);
-            while (fu.try_get() == 1) {
-            }
+
+            this_cort::reset_resume_cond([&fu]() { return fu.try_get() == 0; });
+            this_cort::yield();
         }
 
         // 5. unlatch
@@ -354,9 +356,9 @@ retry:
                                 UnLatchRemotePageRPC::rpc_type, req_raw, resp_raw,
                                 erpc_general_bool_flag_cb, static_cast<void*>(&pro));
 
-            while (fu.wait_for(0s) == std::future_status::timeout) {
-                rpc.run_event_loop_once();
-            }
+            this_cort::reset_resume_cond(
+                [&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
+            this_cort::yield();
 
             rpc.free_msg_buffer(req_raw);
             rpc.free_msg_buffer(resp_raw);
@@ -445,10 +447,9 @@ AllocReply alloc(DaemonContext& daemon_context, DaemonToClientConnection& client
                             static_cast<void*>(&pro));
 
         // 等待期间可能出现由于本地page不足而发生page swap
-
-        while (fu.wait_for(1ns) == std::future_status::timeout) {
-            rpc.run_event_loop_once();
-        }
+        this_cort::reset_resume_cond(
+            [&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
+        this_cort::yield();
 
         auto resp = reinterpret_cast<PageAllocRPC::ResponseType*>(resp_raw.get_buf());
 

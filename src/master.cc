@@ -2,6 +2,7 @@
 
 #include "cmdline.h"
 #include "common.hpp"
+#include "cort_sched.hpp"
 #include "eRPC/erpc.h"
 #include "impl.hpp"
 #include "log.hpp"
@@ -14,6 +15,8 @@ MasterContext &MasterContext::getInstance() {
     return master_ctx;
 }
 
+MasterContext::MasterContext() : m_cort_sched(8) {}
+
 MasterConnection *MasterContext::get_connection(mac_id_t mac_id) {
     DLOG_ASSERT(mac_id != m_master_id, "Can't find self connection");
     MasterConnection *ctx;
@@ -21,6 +24,8 @@ MasterConnection *MasterContext::get_connection(mac_id_t mac_id) {
     DLOG_ASSERT(ret, "Can't find mac %d", mac_id);
     return ctx;
 }
+
+CortScheduler &MasterContext::get_cort_sched() { return m_cort_sched; }
 
 erpc::IBRpcWrap &MasterContext::get_erpc() { return m_erpc_ctx.rpc_set[0]; }
 
@@ -109,6 +114,7 @@ int main(int argc, char *argv[]) {
     master_ctx.m_erpc_ctx.running = true;
     while (master_ctx.m_erpc_ctx.running) {
         master_ctx.get_erpc().run_event_loop_once();
+        master_ctx.get_cort_sched().runOnce();
     }
 
     return 0;

@@ -162,6 +162,15 @@ class SpinFuture<void> {
 
 inline SpinFuture<void> SpinPromise<void>::get_future() { return SpinFuture<void>(this); }
 
+struct NOCOPYABLE {
+    NOCOPYABLE() = default;
+    ~NOCOPYABLE() = default;
+    NOCOPYABLE(const NOCOPYABLE &) = delete;
+    NOCOPYABLE(NOCOPYABLE &&) = delete;
+    NOCOPYABLE& operator=(const NOCOPYABLE&) = delete;
+    NOCOPYABLE& operator=(NOCOPYABLE&&) = delete;
+};
+
 template <typename R, typename... Args>
 struct function_traits_helper {
     static constexpr std::size_t count = sizeof...(Args);

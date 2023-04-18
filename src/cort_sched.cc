@@ -14,6 +14,7 @@ CortTask::CortTask(CortScheduler *sched)
 void CortTask::reset_resume_cond(std::function<bool()> cond_fn) { resume_condition = cond_fn; }
 
 void CortTask::resume() {
+    // 优先判断resume条件，减少无效切换开销
     if (resume_condition()) {
         current_cort = this;
         resume_condition = truly_cond_fn;
@@ -53,6 +54,7 @@ void CortScheduler::addCort() {
 }
 
 CortScheduler::CortScheduler(int prealloc_cort) {
+    // 预分配协程资源
     for (int i = 0; i < prealloc_cort; ++i) {
         addCort();
     }
@@ -73,6 +75,7 @@ void CortScheduler::resumeCort(std::list<CortTask>::iterator &it) {
 }
 
 void CortScheduler::runOnce() {
+    // TODO: 部分cort进行待命，减少无效resume次数
     for (auto it = active_cort_list.begin(); it != active_cort_list.end(); ++it) {
         resumeCort(it);
     }

@@ -9,7 +9,15 @@ using coro_t = boost::coroutines2::coroutine<void>;
 
 namespace this_cort {
 
+/**
+ * @brief 切出协程
+ */
 void yield();
+/**
+ * @brief 设置resume判断检查
+ * 
+ * @param fn 返回true代表可以resume继续
+ */
 void reset_resume_cond(std::function<bool()> fn);
 
 }

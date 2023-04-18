@@ -347,6 +347,8 @@ Status PoolContext::__StopPerf() {
 
 }  // namespace rchms
 
+ClientContext::ClientContext() : m_cort_sched(8) {}
+
 ClientConnection *ClientContext::get_connection(mac_id_t mac_id) {
     DLOG_ASSERT(mac_id != m_client_id, "Can't find self connection");
     if (mac_id == m_local_rack_daemon_connection.daemon_id) {
@@ -354,3 +356,5 @@ ClientConnection *ClientContext::get_connection(mac_id_t mac_id) {
     }
     DLOG_FATAL("Can't find mac %d", mac_id);
 }
+
+CortScheduler &ClientContext::get_cort_sched() { return m_cort_sched; }

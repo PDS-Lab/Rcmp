@@ -43,6 +43,9 @@ void MsgQueueRPC::enqueue_response(MsgBuffer& req_buf, MsgBuffer& resp_buf) {
     resp_buf.m_msg->msg_type = MsgHeader::RESP;
     resp_buf.m_msg->cb = req_buf.m_msg->cb;
     resp_buf.m_msg->arg = req_buf.m_msg->arg;
+
+    DLOG("cb: %p, arg: %p", resp_buf.m_msg->cb, resp_buf.m_msg->arg);
+
     resp_buf.m_q->enqueue_msg();
 }
 

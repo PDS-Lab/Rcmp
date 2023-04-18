@@ -11,6 +11,7 @@
 #include "allocator.hpp"
 #include "common.hpp"
 #include "concurrent_hashmap.hpp"
+#include "cort_sched.hpp"
 #include "cxl.hpp"
 #include "eRPC/erpc.h"
 #include "lock.hpp"
@@ -20,6 +21,7 @@
 #include "rdma_rc.hpp"
 #include "stats.hpp"
 #include "udp_server.hpp"
+#include "utils.hpp"
 
 /************************  Master   **********************/
 
@@ -64,7 +66,7 @@ struct ClusterManager {
     std::unique_ptr<IDGenerator> mac_id_allocator;
 };
 
-struct MasterContext {
+struct MasterContext: public NOCOPYABLE {
     rchms::MasterOptions m_options;
 
     mac_id_t m_master_id;  // 节点id，由master分配
@@ -81,16 +83,14 @@ struct MasterContext {
     } m_erpc_ctx;
 
     rdma_rc::RDMAConnection m_listen_conn;
+    CortScheduler m_cort_sched;
 
-    MasterContext() = default;
-    MasterContext(MasterContext &) = delete;
-    MasterContext(MasterContext &&) = delete;
-    MasterContext &operator=(MasterContext &) = delete;
-    MasterContext &operator=(MasterContext &&) = delete;
+    MasterContext();
 
     static MasterContext &getInstance();
     MasterConnection *get_connection(mac_id_t mac_id);
     erpc::IBRpcWrap &get_erpc();
+    CortScheduler &get_cort_sched();
 };
 
 /************************  Daemon   **********************/
@@ -140,7 +140,7 @@ struct RemotePageMetaCache {
     RemotePageMetaCache(size_t max_recent_record);
 };
 
-struct DaemonContext {
+struct DaemonContext: public NOCOPYABLE {
     rchms::DaemonOptions m_options;
 
     mac_id_t m_daemon_id;  // 节点id，由master分配
@@ -169,6 +169,8 @@ struct DaemonContext {
     std::vector<ibv_mr *> m_rdma_page_mr_table;  // 为cxl注册的mr，初始化长度后不可更改
     std::unordered_map<void *, ibv_mr *> m_rdma_mr_table;
 
+    CortScheduler m_cort_sched;
+
     std::array<std::list<page_id_t>, page_size / min_slab_size> m_can_alloc_slab_class_lists;
 
     struct {
@@ -177,11 +179,7 @@ struct DaemonContext {
         std::vector<erpc::IBRpcWrap> rpc_set;
     } m_erpc_ctx;
 
-    DaemonContext() = default;
-    DaemonContext(DaemonContext &) = delete;
-    DaemonContext(DaemonContext &&) = delete;
-    DaemonContext &operator=(DaemonContext &) = delete;
-    DaemonContext &operator=(DaemonContext &&) = delete;
+    DaemonContext();
 
     static DaemonContext &getInstance();
 
@@ -193,6 +191,7 @@ struct DaemonContext {
 
     DaemonConnection *get_connection(mac_id_t mac_id);
     erpc::IBRpcWrap &get_erpc();
+    CortScheduler &get_cort_sched();
     ibv_mr *get_mr(void *p);
 };
 
@@ -213,7 +212,7 @@ struct ClientToDaemonConnection : public ClientConnection {
     mac_id_t daemon_id;
 };
 
-struct ClientContext {
+struct ClientContext : public NOCOPYABLE {
     rchms::ClientOptions m_options;
 
     mac_id_t m_client_id;
@@ -233,7 +232,12 @@ struct ClientContext {
     volatile bool m_msgq_stop;
     std::thread m_msgq_worker;
 
+    CortScheduler m_cort_sched;
+
+    ClientContext();
+
     ClientConnection *get_connection(mac_id_t mac_id);
+    CortScheduler &get_cort_sched();
 };
 
 struct rchms::PoolContext::PoolContextImpl : public ClientContext {};
