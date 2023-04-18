@@ -4,43 +4,48 @@
 #include <boost/coroutine2/coroutine.hpp>
 #include <functional>
 #include <list>
-#include <vector>
 
 using coro_t = boost::coroutines2::coroutine<void>;
 
 namespace this_cort {
 
 void yield();
+void reset_resume_cond(std::function<bool()> fn);
 
 }
 
 struct CortScheduler;
 
 struct CortTask {
-    CortTask(std::function<void()> &&fn);
+    enum State : uint8_t {
+        READY,
+        SUSPEND,
+        DONE,
+    };
 
-    void reset_resume_cond(std::function<bool()> &&cond_fn);
+    CortTask(CortScheduler *sched);
+
+    void reset_resume_cond(std::function<bool()> cond_fn);
 
     void resume();
 
-    bool valid() const;
-    bool isPinnable() const;
-
-    CortTask &operator=(CortTask &&other);
-
-    size_t pinnable_idx;
-    bool cut_down;
-    std::function<bool()> resume_condition;
-    coro_t::pull_type cort_source;
+    State state;
     CortScheduler *sched;
-    coro_t::push_type *sink;
+    coro_t::pull_type *pull;
+    coro_t::push_type *push;
+    std::function<void()> fn;
+    std::function<bool()> resume_condition;
 };
 
 struct CortScheduler {
-    void addPinnableTask(std::function<void()> &&fn);
-    void addTask(std::function<void()> &&fn);
-    void run();
+    CortScheduler(int prealloc_cort);
 
-    std::vector<std::function<void()>> pinnable_func_list;
+    void addTask(std::function<void()> fn);
+    void runOnce();
+
     std::list<CortTask> active_cort_list;
+    std::list<CortTask> wait_cort_list;
+
+    void addCort();
+    void resumeCort(std::list<CortTask>::iterator &it);
 };

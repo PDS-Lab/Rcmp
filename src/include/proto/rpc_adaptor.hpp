@@ -115,6 +115,10 @@ void msgq_call_target(msgq::MsgBuffer &req_raw, void *ctx) {
 
         *resp = reply;
     } else {
+        /**
+         * 为了减少从func返回值到msg buffer的拷贝，总是优先申请，然后将返回值直接填入
+         * ? 可能存在func是一个长请求，导致优先申请的msg暂时无法发送，使得后面的msg发送阻塞（队头阻塞）
+         */
         peer_connection =
             dynamic_cast<typename EFW::PeerContext *>(self_ctx->get_connection(req->mac_id));
         rpc = peer_connection->msgq_rpc;

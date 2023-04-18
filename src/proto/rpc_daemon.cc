@@ -312,8 +312,7 @@ retry:
 
         // 4. 调用dio读写远端内存
         {
-            static thread_local rdma_rc::RDMABatch ba;
-            ba.clear();
+            rdma_rc::RDMABatch ba;
             switch (req.type) {
                 case GetPageCXLRefOrProxyRequest::READ:
                     dest_daemon_conn->rdma_conn->prep_read(

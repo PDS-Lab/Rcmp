@@ -1,77 +1,79 @@
 #include "cort_sched.hpp"
 
-#include <vector>
-
 bool truly_cond_fn() { return true; }
 
-static thread_local coro_t::push_type *t_sink = nullptr;
+static thread_local CortTask *current_cort = nullptr;
 
-void this_cort::yield() { (*t_sink)(); }
+void this_cort::yield() { current_cort->push->operator()(); }
 
-CortTask::CortTask(std::function<void()> &&fn)
-    : cort_source(std::move(fn)),
-      resume_condition(truly_cond_fn),
-      pinnable_idx(-1ul),
-      cut_down(false),
-      sink(nullptr) {}
+void this_cort::reset_resume_cond(std::function<bool()> fn) { current_cort->reset_resume_cond(fn); }
 
-void CortTask::reset_resume_cond(std::function<bool()> &&cond_fn) {
-    resume_condition = std::move(cond_fn);
-}
+CortTask::CortTask(CortScheduler *sched)
+    : pull(nullptr), resume_condition(truly_cond_fn), push(nullptr), sched(sched) {}
+
+void CortTask::reset_resume_cond(std::function<bool()> cond_fn) { resume_condition = cond_fn; }
 
 void CortTask::resume() {
     if (resume_condition()) {
+        current_cort = this;
         resume_condition = truly_cond_fn;
-        t_sink = sink;
-        cort_source();
-        sink = t_sink;
+        pull->operator()();
     }
 }
 
-bool CortTask::valid() const { return !cort_source; }
+void CortScheduler::addTask(std::function<void()> fn) {
+    auto wait_it = wait_cort_list.begin();
+    if (wait_it == wait_cort_list.end()) {
+        addCort();
+        wait_it = wait_cort_list.begin();
+    }
 
-bool CortTask::isPinnable() const { return pinnable_idx != -1ul; }
+    wait_it->fn = fn;
 
-CortTask &CortTask::operator=(CortTask &&other) {
-    cort_source = std::move(other.cort_source);
-    std::swap(resume_condition, other.resume_condition);
-    std::swap(pinnable_idx, other.pinnable_idx);
-    std::swap(cut_down, other.cut_down);
-    std::swap(sink, other.sink);
+    active_cort_list.splice(active_cort_list.end(), wait_cort_list, wait_it);
 
-    return *this;
+    resumeCort(wait_it);
 }
 
-void CortScheduler::addPinnableTask(std::function<void()> &&fn) {
-    pinnable_func_list.emplace_back(fn);
-    addTask(std::move(fn));
-}
-
-void CortScheduler::addTask(std::function<void()> &&fn) {
-    active_cort_list.emplace_back([fn](coro_t::push_type &sink) {
-        t_sink = &sink;
-        fn();
+void CortScheduler::addCort() {
+    wait_cort_list.emplace_back(this);
+    auto &cort = wait_cort_list.back();
+    cort.state = CortTask::READY;
+    cort.pull = new coro_t::pull_type([&cort](coro_t::push_type &push) {
+        push();
+        cort.push = &push;
+        while (true) {
+            cort.state = CortTask::SUSPEND;
+            cort.fn();
+            cort.state = CortTask::DONE;
+            cort.fn = nullptr;
+            this_cort::yield();
+        }
     });
 }
 
-void CortScheduler::run() {
-    while (!active_cort_list.empty()) {
-        for (auto it = active_cort_list.begin(); it != active_cort_list.end(); ++it) {
-            auto &cort = *it;
+CortScheduler::CortScheduler(int prealloc_cort) {
+    for (int i = 0; i < prealloc_cort; ++i) {
+        addCort();
+    }
+}
 
-            cort.resume();
+void CortScheduler::resumeCort(std::list<CortTask>::iterator &it) {
+    auto &cort = *it;
 
-            if (cort.isPinnable() && !cort.cut_down) {
-                if (cort.valid()) {
-                    // TODO: reuse list node
-                    it = --active_cort_list.erase(it);
-                    addTask(std::move(pinnable_func_list[cort.pinnable_idx]));
-                } else {
-                    addTask(std::move(pinnable_func_list[cort.pinnable_idx]));
-                }
-            } else if (cort.valid() && (cort.cut_down || (!cort.cut_down && !cort.isPinnable()))) {
-                it = --active_cort_list.erase(it);
-            }
-        }
+    cort.resume();
+
+    if (cort.state == CortTask::DONE) {
+        cort.state = CortTask::READY;
+        auto it_tmp = it;
+        it_tmp--;
+        wait_cort_list.splice(wait_cort_list.begin(), active_cort_list, it);
+        it = it_tmp;
+    }
+}
+
+void CortScheduler::runOnce() {
+    for (auto it = active_cort_list.begin(); it != active_cort_list.end(); ++it) {
+        resumeCort(it);
     }
 }

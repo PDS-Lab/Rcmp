@@ -547,7 +547,7 @@ RDMAFuture RDMAConnection::submit(RDMABatch &b) {
         goto need_retry;
     }
 
-    b.m_sge_wrs_.clear();
+    b.clear();
 
     return fu;
 

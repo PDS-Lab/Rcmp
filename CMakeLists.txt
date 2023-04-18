@@ -11,6 +11,13 @@ endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+find_package(Boost REQUIRED COMPONENTS context fiber)
+
+if(Boost_FOUND)
+else()
+    message(err: Boost fiber not found)
+endif()
+
 link_directories("third_party/eRPC/")
 include_directories("include" "src/include" "third_party")
 add_subdirectory(src)
