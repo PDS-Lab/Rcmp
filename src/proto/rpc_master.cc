@@ -81,7 +81,6 @@ AllocPageReply allocPage(MasterContext& master_context, MasterToDaemonConnection
 
     if (rack_table->current_allocated_page_num < rack_table->max_free_page_num) {
         // 采取就近原则分配page到daemon所在rack
-        page_rack_metadata->version = 1;
         page_rack_metadata->rack_id = daemon_connection.rack_id;
         page_rack_metadata->daemon_id = daemon_connection.daemon_id;
         rack_table->current_allocated_page_num++;
@@ -145,7 +144,6 @@ LatchRemotePageReply latchRemotePage(MasterContext& master_context,
     //      dest_daemon->ip.c_str(), dest_daemon->port);
 
     LatchRemotePageReply reply;
-    reply.version = page_meta->version;
     reply.dest_rack_id = page_meta->rack_id;
     reply.dest_daemon_id = page_meta->daemon_id;
     reply.dest_daemon_ipv4 = dest_daemon->ip;

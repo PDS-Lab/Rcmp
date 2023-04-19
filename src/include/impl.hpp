@@ -26,7 +26,6 @@
 /************************  Master   **********************/
 
 struct PageRackMetadata {
-    uint64_t version;  // 页面有效性版本号，从1开始，每次递增2
     uint32_t rack_id;
     mac_id_t daemon_id;
     SpinMutex latch;
@@ -127,13 +126,13 @@ struct PageMetadata {
     offset_t cxl_memory_offset;  // 相对于format.page_data_start_addr
     SingleAllocator slab_allocator;
     std::unordered_set<DaemonToClientConnection *> ref_client;
+    std::unordered_set<DaemonToDaemonConnection *> ref_daemon;
 
     PageMetadata(size_t slab_size);
 };
 
 struct RemotePageMetaCache {
     FreqStats stats;
-    uint64_t page_version;
     uintptr_t remote_page_addr;
     uint32_t remote_page_rkey;
 

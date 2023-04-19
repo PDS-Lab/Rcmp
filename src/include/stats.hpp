@@ -8,6 +8,7 @@
 class Histogram {
    public:
     Histogram(int numBuckets, double minValue, double maxValue);
+    ~Histogram() = default;
 
     void addValue(double value);
     void clear();
@@ -30,6 +31,7 @@ class Histogram {
 class FreqStats {
    public:
     FreqStats(size_t max_recent_record);
+    ~FreqStats() = default;
 
     void add(uint64_t t);
     void clear();

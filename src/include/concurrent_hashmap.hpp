@@ -11,16 +11,15 @@ class ConcurrentHashMap {
     constexpr static const size_t BucketNum = 32;
 
    public:
-    ConcurrentHashMap() {
-        for (int i = 0; i < BucketNum; ++i) {
-            m_maps[i] = std::unordered_map<K, V>();
-        }
-    }
+    ConcurrentHashMap() = default;
+    ~ConcurrentHashMap() = default;
 
     bool insert(K key, V val) {
         int index = hash(key);
-        SharedLockGuard guard(m_locks[index], true);
-        auto& map = m_maps[index];
+        auto& shard = m_shards[index];
+
+        SharedLockGuard guard(shard.m_lock, true);
+        auto& map = shard.m_map;
         auto it = map.find(key);
         if (it == map.end()) {
             map.insert({key, val});
@@ -31,8 +30,10 @@ class ConcurrentHashMap {
 
     bool find(K key, V* val) {
         int index = hash(key);
-        SharedLockGuard guard(m_locks[index], false);
-        auto& map = m_maps[index];
+        auto& shard = m_shards[index];
+
+        SharedLockGuard guard(shard.m_lock, false);
+        auto& map = shard.m_map;
         auto it = map.find(key);
         if (it != map.end()) {
             *val = it->second;
@@ -43,8 +44,10 @@ class ConcurrentHashMap {
 
     bool erase(K key) {
         int index = hash(key);
-        SharedLockGuard guard(m_locks[index], true);
-        auto& map = m_maps[index];
+        auto& shard = m_shards[index];
+
+        SharedLockGuard guard(shard.m_lock, true);
+        auto& map = shard.m_map;
         auto it = map.find(key);
         if (it != map.end()) {
             map.erase(it);
@@ -55,7 +58,7 @@ class ConcurrentHashMap {
 
     bool empty() const {
         for (int i = 0; i < BucketNum; ++i) {
-            if (!m_maps[i].empty()) {
+            if (!m_shards[i].m_map.empty()) {
                 return false;
             }
         }
@@ -65,14 +68,18 @@ class ConcurrentHashMap {
     int size() const {
         int count = 0;
         for (int i = 0; i < BucketNum; ++i) {
-            count += m_maps[i].size();
+            count += m_shards[i].m_map.size();
         }
         return count;
     }
 
    private:
-    std::unordered_map<K, V> m_maps[BucketNum];
-    CACHE_ALIGN SharedMutex m_locks[BucketNum];
+    struct Shard {
+        CACHE_ALIGN SharedMutex m_lock;
+        std::unordered_map<K, V> m_map;
+    };
 
-    static int hash(K key) { return std::hash<K>()(key) % BucketNum; }
+    Shard m_shards[BucketNum];
+
+    static size_t hash(K key) { return std::hash<K>()(key) % BucketNum; }
 };
