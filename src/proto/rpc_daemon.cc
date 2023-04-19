@@ -139,13 +139,35 @@ retry:
 
         auto& rpc = daemon_context.get_erpc();
 
+        SpinPromise<msgq::MsgBuffer> wd_pro;
+        SpinFuture<msgq::MsgBuffer> wd_fu = wd_pro.get_future();
+        if (req.type == GetPageCXLRefOrProxyRequest::WRITE) {
+            // 1. 如果是写操作，则并行获取cn的write buf
+            using LatchRemotePageRPC = RPC_TYPE_STRUCT(rpc_master::latchRemotePage);
+            using GetCurrentWriteDataRPC = RPC_TYPE_STRUCT(rpc_client::getCurrentWriteData);
+            auto wd_req_raw = client_connection.msgq_rpc->alloc_msg_buffer(
+                sizeof(LatchRemotePageRPC::RequestType));
+            auto wd_req =
+                reinterpret_cast<GetCurrentWriteDataRPC::RequestType*>(wd_req_raw.get_buf());
+            wd_req->mac_id = daemon_context.m_daemon_id;
+            wd_req->dio_write_buf = req.cn_write_buf;
+            wd_req->dio_write_size = req.cn_write_size;
+
+            client_connection.msgq_rpc->enqueue_request(GetCurrentWriteDataRPC::rpc_type,
+                                                        wd_req_raw, msgq_general_bool_flag_cb,
+                                                        static_cast<void*>(&wd_pro));
+        }
+
         DaemonToDaemonConnection* dest_daemon_conn;
         uintptr_t my_data_buf;
         uint32_t my_rkey;
         uint32_t my_size;
 
+        // printf("freq = %ld, rkey = %d, addr = %ld\n", rem_page_md_cache->stats.freq(),
+            //    rem_page_md_cache->remote_page_rkey, rem_page_md_cache->remote_page_addr);
+        // 如果是第一次访问该page
         if (rem_page_md_cache->stats.freq() == 0) {
-            // 1. 获取mn上page的daemon，并锁定该page
+            // 2. 获取mn上page的daemon，并锁定该page
             using LatchRemotePageRPC = RPC_TYPE_STRUCT(rpc_master::latchRemotePage);
             auto req_raw = rpc.alloc_msg_buffer_or_die(sizeof(LatchRemotePageRPC::RequestType));
             auto resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(LatchRemotePageRPC::ResponseType));
@@ -160,67 +182,17 @@ retry:
                                 LatchRemotePageRPC::rpc_type, req_raw, resp_raw,
                                 erpc_general_bool_flag_cb, static_cast<void*>(&pro));
 
-            switch (req.type) {
-                case GetPageCXLRefOrProxyRequest::WRITE: {
-                    // 1.1 如果是写操作，则并行获取cn的write buf
-                    using GetCurrentWriteDataRPC = RPC_TYPE_STRUCT(rpc_client::getCurrentWriteData);
-                    auto wd_req_raw = client_connection.msgq_rpc->alloc_msg_buffer(
-                        sizeof(LatchRemotePageRPC::RequestType));
-                    auto wd_req = reinterpret_cast<GetCurrentWriteDataRPC::RequestType*>(
-                        wd_req_raw.get_buf());
-                    wd_req->mac_id = daemon_context.m_daemon_id;
-                    wd_req->dio_write_buf = req.cn_write_buf;
-                    wd_req->dio_write_size = req.cn_write_size;
-
-                    SpinPromise<msgq::MsgBuffer> pro;
-                    SpinFuture<msgq::MsgBuffer> fu = pro.get_future();
-                    client_connection.msgq_rpc->enqueue_request(
-                        GetCurrentWriteDataRPC::rpc_type, wd_req_raw, msgq_general_bool_flag_cb,
-                        static_cast<void*>(&pro));
-
-                    this_cort::reset_resume_cond(
-                        [&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
-                    this_cort::yield();
-
-                    msgq::MsgBuffer wd_resp_raw = fu.get();
-                    auto wd_resp = reinterpret_cast<GetCurrentWriteDataRPC::ResponseType*>(
-                        wd_resp_raw.get_buf());
-
-                    ibv_mr* mr = daemon_context.get_mr(wd_resp->data);
-
-                    my_data_buf = reinterpret_cast<uintptr_t>(wd_resp->data);
-                    my_rkey = mr->rkey;
-                    my_size = req.cn_write_size;
-
-                    client_connection.msgq_rpc->free_msg_buffer(wd_resp_raw);
-
-                    // 必须在msgq enqueue之后alloc resp，防止发送阻塞
-                    reply_ptr = req.alloc_flex_resp(0);
-                    break;
-                }
-                case GetPageCXLRefOrProxyRequest::READ: {
-                    // 1.2 如果是读操作，则动态申请读取resp buf
-                    reply_ptr = req.alloc_flex_resp(req.cn_read_size);
-
-                    ibv_mr* mr = daemon_context.get_mr(reply_ptr->read_data);
-                    my_data_buf = reinterpret_cast<uintptr_t>(reply_ptr->read_data);
-                    my_rkey = mr->rkey;
-                    my_size = req.cn_read_size;
-                    break;
-                }
-            }
-
-            // 1.3 一起等待latch完成
+            // 2.1 一起等待latch完成
             this_cort::reset_resume_cond(
                 [&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
             this_cort::yield();
 
             auto resp = reinterpret_cast<LatchRemotePageRPC::ResponseType*>(resp_raw.get_buf());
 
-            // 2. 获取对端连接
+            // 3. 获取对端连接
             DaemonConnection* dest_daemon_conn_tmp;
             ret = daemon_context.m_connect_table.find(resp->dest_daemon_id, &dest_daemon_conn_tmp);
-
+            // printf("ret = %d\n", ret);
             if (!ret) {
                 // 与该daemon建立erpc与RDMA RC
                 DaemonToDaemonConnection* dd_conn = new DaemonToDaemonConnection();
@@ -281,10 +253,9 @@ retry:
             rpc.free_msg_buffer(req_raw);
             rpc.free_msg_buffer(resp_raw);
 
-            DaemonToDaemonConnection* dest_daemon_conn =
-                dynamic_cast<DaemonToDaemonConnection*>(dest_daemon_conn_tmp);
+            dest_daemon_conn = dynamic_cast<DaemonToDaemonConnection*>(dest_daemon_conn_tmp);
 
-            // 3. 获取远端内存rdma ref
+            // 4. 获取远端内存rdma ref
             //// 通过比较page version减少获取rdma ref次数
             // if (rem_page_md_cache->page_version != page_cur_version) {
             {
@@ -311,13 +282,81 @@ retry:
                 auto resp = reinterpret_cast<GetPageRDMARefRPC::ResponseType*>(resp_raw.get_buf());
                 rem_page_md_cache->remote_page_addr = resp->addr + page_offset;
                 rem_page_md_cache->remote_page_rkey = resp->rkey;
+                rem_page_md_cache->remote_page_daemon_conn = dest_daemon_conn;
 
                 rpc.free_msg_buffer(req_raw);
                 rpc.free_msg_buffer(resp_raw);
+                // printf("Get rdma ref\n");
+            }
+        }
+        else
+        {
+            dest_daemon_conn = rem_page_md_cache->remote_page_daemon_conn;
+        }
+
+        // 5. unlatch
+        if (rem_page_md_cache->stats.freq() == 0) {
+            using UnLatchRemotePageRPC = RPC_TYPE_STRUCT(rpc_master::unLatchRemotePage);
+            auto req_raw = rpc.alloc_msg_buffer_or_die(sizeof(UnLatchRemotePageRPC::RequestType));
+            auto resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(UnLatchRemotePageRPC::ResponseType));
+
+            auto unlatch_req =
+                reinterpret_cast<UnLatchRemotePageRPC::RequestType*>(req_raw.get_buf());
+            unlatch_req->mac_id = daemon_context.m_daemon_id;
+            unlatch_req->page_id = page_id;
+
+            SpinPromise<void> pro;
+            SpinFuture<void> fu = pro.get_future();
+            rpc.enqueue_request(daemon_context.m_master_connection.peer_session,
+                                UnLatchRemotePageRPC::rpc_type, req_raw, resp_raw,
+                                erpc_general_bool_flag_cb, static_cast<void*>(&pro));
+
+            this_cort::reset_resume_cond(
+                [&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
+            this_cort::yield();
+
+            rpc.free_msg_buffer(req_raw);
+            rpc.free_msg_buffer(resp_raw);
+        }
+
+        // 6. 申请resp
+        switch (req.type) {
+            case GetPageCXLRefOrProxyRequest::WRITE: {
+                // 6.1 如果是写操作,等待获取CN上的数据
+                using GetCurrentWriteDataRPC = RPC_TYPE_STRUCT(rpc_client::getCurrentWriteData);
+                this_cort::reset_resume_cond(
+                    [&wd_fu]() { return wd_fu.wait_for(0s) != std::future_status::timeout; });
+                this_cort::yield();
+
+                msgq::MsgBuffer wd_resp_raw = wd_fu.get();
+                auto wd_resp =
+                    reinterpret_cast<GetCurrentWriteDataRPC::ResponseType*>(wd_resp_raw.get_buf());
+
+                ibv_mr* mr = daemon_context.get_mr(wd_resp->data);
+
+                my_data_buf = reinterpret_cast<uintptr_t>(wd_resp->data);
+                my_rkey = mr->rkey;
+                my_size = req.cn_write_size;
+
+                client_connection.msgq_rpc->free_msg_buffer(wd_resp_raw);
+
+                // 必须在msgq enqueue之后alloc resp，防止发送阻塞
+                reply_ptr = req.alloc_flex_resp(0);
+                break;
+            }
+            case GetPageCXLRefOrProxyRequest::READ: {
+                // 6.2 如果是读操作，则动态申请读取resp buf
+                reply_ptr = req.alloc_flex_resp(req.cn_read_size);
+
+                ibv_mr* mr = daemon_context.get_mr(reply_ptr->read_data);
+                my_data_buf = reinterpret_cast<uintptr_t>(reply_ptr->read_data);
+                my_rkey = mr->rkey;
+                my_size = req.cn_read_size;
+                break;
             }
         }
 
-        // 4. 调用dio读写远端内存
+        // 7. 调用dio读写远端内存
         {
             rdma_rc::RDMABatch ba;
             switch (req.type) {
@@ -345,30 +384,7 @@ retry:
             this_cort::yield();
         }
 
-        // 5. unlatch
-        if (rem_page_md_cache->stats.freq() == 0) {
-            using UnLatchRemotePageRPC = RPC_TYPE_STRUCT(rpc_master::unLatchRemotePage);
-            auto req_raw = rpc.alloc_msg_buffer_or_die(sizeof(UnLatchRemotePageRPC::RequestType));
-            auto resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(UnLatchRemotePageRPC::ResponseType));
-
-            auto unlatch_req =
-                reinterpret_cast<UnLatchRemotePageRPC::RequestType*>(req_raw.get_buf());
-            unlatch_req->mac_id = daemon_context.m_daemon_id;
-            unlatch_req->page_id = page_id;
-
-            SpinPromise<void> pro;
-            SpinFuture<void> fu = pro.get_future();
-            rpc.enqueue_request(daemon_context.m_master_connection.peer_session,
-                                UnLatchRemotePageRPC::rpc_type, req_raw, resp_raw,
-                                erpc_general_bool_flag_cb, static_cast<void*>(&pro));
-
-            this_cort::reset_resume_cond(
-                [&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
-            this_cort::yield();
-
-            rpc.free_msg_buffer(req_raw);
-            rpc.free_msg_buffer(resp_raw);
-        }
+        
 
         rem_page_md_cache->stats.add(getTimestamp());
 

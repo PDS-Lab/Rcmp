@@ -135,6 +135,7 @@ struct RemotePageMetaCache {
     FreqStats stats;
     uintptr_t remote_page_addr;
     uint32_t remote_page_rkey;
+    DaemonToDaemonConnection* remote_page_daemon_conn;
 
     RemotePageMetaCache(size_t max_recent_record);
 };
