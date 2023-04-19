@@ -280,7 +280,7 @@ retry:
                 this_cort::yield();
 
                 auto resp = reinterpret_cast<GetPageRDMARefRPC::ResponseType*>(resp_raw.get_buf());
-                rem_page_md_cache->remote_page_addr = resp->addr + page_offset;
+                rem_page_md_cache->remote_page_addr = resp->addr;
                 rem_page_md_cache->remote_page_rkey = resp->rkey;
                 rem_page_md_cache->remote_page_daemon_conn = dest_daemon_conn;
 
@@ -362,7 +362,7 @@ retry:
             switch (req.type) {
                 case GetPageCXLRefOrProxyRequest::READ:
                     dest_daemon_conn->rdma_conn->prep_read(
-                        ba, my_data_buf, my_rkey, my_size, rem_page_md_cache->remote_page_addr,
+                        ba, my_data_buf, my_rkey, my_size, (rem_page_md_cache->remote_page_addr + page_offset),
                         rem_page_md_cache->remote_page_rkey, false);
                     // DLOG("read size %u remote addr [%#lx, %u] to local addr [%#lx, %u]", my_size,
                     //      rem_page_md_cache->remote_page_addr,
@@ -370,7 +370,7 @@ retry:
                     break;
                 case GetPageCXLRefOrProxyRequest::WRITE:
                     dest_daemon_conn->rdma_conn->prep_write(
-                        ba, my_data_buf, my_rkey, my_size, rem_page_md_cache->remote_page_addr,
+                        ba, my_data_buf, my_rkey, my_size, (rem_page_md_cache->remote_page_addr + page_offset),
                         rem_page_md_cache->remote_page_rkey, false);
                     // DLOG("write size %u remote addr [%#lx, %u] to local addr [%#lx, %u]",
                     // my_size,
