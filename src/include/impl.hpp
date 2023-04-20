@@ -139,6 +139,19 @@ struct RemotePageMetaCache {
     RemotePageMetaCache(size_t max_recent_record);
 };
 
+struct MsgQueueManager {
+    const static size_t RING_ELEM_SIZE = sizeof(msgq::MsgQueue);
+
+    void *start_addr;
+    uint32_t ring_cnt;
+    std::unique_ptr<SingleAllocator> msgq_allocator;
+    std::unique_ptr<msgq::MsgQueueNexus> nexus;
+    std::unique_ptr<msgq::MsgQueueRPC> rpc;
+
+    msgq::MsgQueue *allocQueue();
+    void freeQueue(msgq::MsgQueue *msgq);
+};
+
 struct DaemonContext: public NOCOPYABLE {
     rchms::DaemonOptions m_options;
 
@@ -155,7 +168,7 @@ struct DaemonContext: public NOCOPYABLE {
     size_t m_current_used_swap_page_num;  // 当前正在swap的页个数
 
     CXLMemFormat m_cxl_format;
-    msgq::MsgQueueManager m_msgq_manager;
+    MsgQueueManager m_msgq_manager;
     DaemonToMasterConnection m_master_connection;
     std::vector<DaemonToClientConnection *> m_client_connect_table;
     std::vector<DaemonToDaemonConnection *> m_other_daemon_connect_table;

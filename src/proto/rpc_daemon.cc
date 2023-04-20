@@ -309,7 +309,7 @@ retry:
                 this_cort::yield();
 
                 auto resp = reinterpret_cast<GetPageRDMARefRPC::ResponseType*>(resp_raw.get_buf());
-                rem_page_md_cache->remote_page_addr = resp->addr + page_offset;
+                rem_page_md_cache->remote_page_addr = resp->addr;
                 rem_page_md_cache->remote_page_rkey = resp->rkey;
 
                 rpc.free_msg_buffer(req_raw);

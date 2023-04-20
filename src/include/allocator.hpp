@@ -1,11 +1,14 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <utility>
 #include <vector>
 
 #include "common.hpp"
+#include "lock.hpp"
 #include "log.hpp"
+#include "utils.hpp"
 
 class IDGenerator {
    public:
@@ -84,11 +87,121 @@ class SingleAllocator : public IDGenerator {
    public:
     SingleAllocator(size_t total_size, size_t unit_size);
 
-    SingleAllocator(size_t unit_size, size_t size, size_t capacity, const void* data, size_t data_size);
+    SingleAllocator(size_t unit_size, size_t size, size_t capacity, const void* data,
+                    size_t data_size);
 
     uintptr_t allocate(size_t n);
     void deallocate(uintptr_t ptr);
 
    private:
     const size_t m_unit;
+};
+
+template <size_t SZ>
+class RingAllocator {
+   public:
+    RingAllocator() : m_prod_head({0}), m_prod_tail({0}), m_tail(0) {}
+    ~RingAllocator() = default;
+
+    const void* base() const { return data; }
+
+    void* alloc(size_t s) {
+    retry:
+        Header *inv_h, *h;
+        po_val_t oh = m_prod_head, nh, ph;
+        do {
+            inv_h = nullptr;
+            nh.pos = oh.pos + s + sizeof(Header);
+            nh.cnt = oh.cnt + 1;
+            if (div_floor(oh.pos, SZ) != div_floor(nh.pos, SZ)) {
+                // invalid tail
+                size_t inv_s = align_ceil(oh.pos, SZ) - oh.pos;
+                nh.pos += inv_s;
+                inv_h = ath(oh.pos);
+                h = ath(SZ);
+            } else {
+                h = ath(oh.pos);
+            }
+            if (nh.pos - m_tail > SZ) {
+                try_gc();
+                if (nh.pos - m_tail > SZ)
+                    return nullptr;
+                else
+                    goto retry;
+            }
+        } while (!m_prod_head.compare_exchange_weak(oh, nh));
+
+        h->invalid = false;
+        h->release = false;
+        h->s = s;
+        if (inv_h != nullptr) {
+            inv_h->invalid = true;
+            inv_h->release = false;
+        }
+
+        oh = m_prod_tail;
+        do {
+            ph = m_prod_head;
+            nh = oh;
+            if ((++nh.cnt) == ph.cnt) {
+                nh.pos = ph.pos;
+            }
+        } while (!m_prod_tail.compare_exchange_weak(oh, nh));
+
+        if (inv_h != nullptr) {
+            free(inv_h->data);
+        }
+
+        return h->data;
+    }
+
+    void free(void* p) {
+        Header* h = (Header*)((char*)p - offsetof(Header, data));
+        h->release = true;
+    }
+
+   private:
+    struct Header {
+        bool invalid : 1;
+        bool release : 1;
+        size_t s : 62;
+        char data[0];
+    };
+
+    union po_val_t {
+        struct {
+            uint32_t pos;
+            uint32_t cnt;
+        };
+        uint64_t raw;
+    };
+
+    std::atomic<po_val_t> m_prod_head;
+    std::atomic<po_val_t> m_prod_tail;
+    size_t m_tail;
+    Mutex m_gc_lck;
+    char data[SZ];
+
+    void try_gc() {
+        if (!m_gc_lck.try_lock()) {
+            return;
+        }
+
+        auto tail = m_tail;
+        Header* h = ath(tail);
+        while (tail < m_prod_tail.load().pos && h->release) {
+            if (h->invalid) {
+                tail = align_ceil(tail, SZ);
+            } else {
+                tail += h->s + sizeof(Header);
+            }
+            if (tail - m_tail > SZ / 2) m_tail = tail;
+            h = ath(tail);
+        }
+        m_tail = tail;
+
+        m_gc_lck.unlock();
+    }
+
+    Header* ath(size_t i) const { return (Header*)(data + (i % SZ)); }
 };

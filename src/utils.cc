@@ -24,7 +24,7 @@ uint64_t rdtsc() { return __builtin_ia32_rdtsc(); }
 uint64_t getTimestamp() {
     struct timeval tv;
     gettimeofday(&tv, nullptr);
-    return ((uint64_t)tv.tv_sec << 32) | tv.tv_usec;
+    return ((uint64_t)tv.tv_sec * 1000000) + tv.tv_usec;
 }
 
 IPv4String::IPv4String(const std::string &ip) { strcpy(raw.ipstr, ip.c_str()); }

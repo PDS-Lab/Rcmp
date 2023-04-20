@@ -63,7 +63,7 @@ void DaemonContext::initRPCNexus() {
     m_msgq_manager.nexus.reset(new msgq::MsgQueueNexus(m_cxl_format.msgq_zone_start_addr));
     m_msgq_manager.start_addr = m_cxl_format.msgq_zone_start_addr;
     m_msgq_manager.msgq_allocator.reset(
-        new SingleAllocator(m_options.cxl_msgq_size, msgq::MsgQueueManager::RING_ELEM_SIZE));
+        new SingleAllocator(m_options.cxl_msgq_size, MsgQueueManager::RING_ELEM_SIZE));
 
     msgq::MsgQueue *public_q = m_msgq_manager.allocQueue();
     DLOG_ASSERT(public_q == m_msgq_manager.nexus->m_public_msgq);
@@ -210,6 +210,18 @@ ibv_mr *DaemonContext::get_mr(void *p) {
 PageMetadata::PageMetadata(size_t slab_size) : slab_allocator(page_size, slab_size) {}
 
 RemotePageMetaCache::RemotePageMetaCache(size_t max_recent_record) : stats(max_recent_record) {}
+
+msgq::MsgQueue *MsgQueueManager::allocQueue() {
+    uintptr_t ring_off = msgq_allocator->allocate(1);
+    DLOG_ASSERT(ring_off != -1, "Can't alloc msg queue");
+    msgq::MsgQueue *r =
+        reinterpret_cast<msgq::MsgQueue *>(reinterpret_cast<uintptr_t>(start_addr) + ring_off);
+    new (r) msgq::MsgQueue();
+    ring_cnt++;
+    return r;
+}
+
+void MsgQueueManager::freeQueue(msgq::MsgQueue *msgq) { DLOG_FATAL("Not Support"); }
 
 int main(int argc, char *argv[]) {
     cmdline::parser cmd;
