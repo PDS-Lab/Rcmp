@@ -14,50 +14,155 @@ class ConcurrentHashMap {
     ConcurrentHashMap() = default;
     ~ConcurrentHashMap() = default;
 
-    bool insert(K key, V val) {
+    /**
+     * @brief
+     * @warning
+     * 重哈希会导致迭代器失效，但无法感知该变化。在大量insert时应该及时更新iterator，或者使用at。
+     */
+    class iterator {
+       public:
+        std::pair<const K, V>* operator->() { return it.operator->(); }
+        bool operator==(const iterator& other) { return hidx == other.hidx && it == other.it; }
+        bool operator!=(const iterator& other) { return hidx != other.hidx || it != other.it; }
+
+       private:
+        friend class ConcurrentHashMap;
+
+        iterator(int hidx, typename std::unordered_map<K, V>::iterator it) : hidx(hidx), it(it) {}
+
+        int hidx;
+        typename std::unordered_map<K, V>::iterator it;
+    };
+
+    const iterator end() { return {0, m_shards[0].m_map.end()}; }
+
+    /**
+     * @brief 与std::unordered_map::insert相同
+     *
+     * @param key
+     * @param val
+     * @return std::pair<iterator, bool>
+     */
+    std::pair<iterator, bool> insert(K key, V val) {
         int index = hash(key);
         auto& shard = m_shards[index];
+        auto& map = shard.m_map;
 
         SharedLockGuard guard(shard.m_lock, true);
-        auto& map = shard.m_map;
-        auto it = map.find(key);
-        if (it == map.end()) {
-            map.insert({key, val});
-            return true;
-        }
-        return false;
+        auto p = map.emplace(key, val);
+        return {{index, p.first}, p.second};
     }
 
-    bool find(K key, V* val) {
+    /**
+     * @brief 与std::unordered_map::find相同
+     *
+     * @param key
+     * @param val
+     * @return std::pair<iterator, bool>
+     */
+    iterator find(K key) {
         int index = hash(key);
         auto& shard = m_shards[index];
+        auto& map = shard.m_map;
 
         SharedLockGuard guard(shard.m_lock, false);
-        auto& map = shard.m_map;
         auto it = map.find(key);
         if (it != map.end()) {
-            *val = it->second;
-            return true;
+            return {index, it};
         }
-        return false;
+        return end();
     }
 
-    bool erase(K key) {
+    /**
+     * @brief 与std::unordered_map::at相同。
+     * @warning 未找到时抛出错误
+     *
+     * @param key
+     * @return V&
+     */
+    V& at(K key) {
         int index = hash(key);
         auto& shard = m_shards[index];
+        auto& map = shard.m_map;
+
+        SharedLockGuard guard(shard.m_lock, false);
+        return map.at(key);
+    }
+
+    /**
+     * @brief 查找一个元素。如果不存在，则调用cotr_fn()插入新元素
+     *
+     * @tparam ConFn
+     * @param key
+     * @param cotr_fn 返回新元素
+     * @return std::pair<iterator, bool> 如果插入成功，返回true；查找成功返回false
+     */
+    template <typename ConFn>
+    std::pair<iterator, bool> find_or_emplace(K key, ConFn&& cotr_fn) {
+        int index = hash(key);
+        auto& shard = m_shards[index];
+        auto& map = shard.m_map;
+
+        do {
+            iterator it = find(key);
+            if (it != end()) {
+                return {it, false};
+            }
+        } while (!shard.m_lock.try_lock());
+
+        auto p = map.emplace(key, cotr_fn());
+        shard.m_lock.unlock();
+        return {{index, p.first}, p.second};
+    }
+
+    /**
+     * @brief 查找一个元素。如果不存在，则调用cotr_fn()尝试插入新元素
+     *
+     * @tparam ConFn
+     * @param key
+     * @param try_cotr_fn 返回std::pair<V, bool>，V是新元素，bool是否需要插入新元素
+     * @return std::pair<iterator, bool> 如果插入成功，返回true；查找成功、插入失败返回false
+     */
+    template <typename ConFn>
+    std::pair<iterator, bool> find_or_emplace_try(K key, ConFn&& try_cotr_fn) {
+        int index = hash(key);
+        auto& shard = m_shards[index];
+        auto& map = shard.m_map;
+
+        do {
+            iterator it = find(key);
+            if (it != end()) {
+                return {it, false};
+            }
+        } while (!shard.m_lock.try_lock());
+
+        std::pair<V, bool> v = try_cotr_fn();
+        if (v.second) {
+            auto p = map.emplace(key, std::move(v.first));
+            shard.m_lock.unlock();
+            return {{index, p.first}, p.second};
+        }
+        shard.m_lock.unlock();
+        return {end(), false};
+    }
+
+    void erase(K key) {
+        iterator it = find(key);
+        erase(it);
+    }
+
+    void erase(iterator it) {
+        if (it == end()) return;
+
+        auto& shard = m_shards[it.hidx];
+        auto& map = shard.m_map;
 
         SharedLockGuard guard(shard.m_lock, true);
-        auto& map = shard.m_map;
-        auto it = map.find(key);
-        if (it != map.end()) {
-            map.erase(it);
-            return true;
-        }
-        return false;
+        map.erase(it.it);
     }
 
     bool empty() const {
-        for (int i = 0; i < BucketNum; ++i) {
+        for (size_t i = 0; i < BucketNum; ++i) {
             if (!m_shards[i].m_map.empty()) {
                 return false;
             }
@@ -65,17 +170,17 @@ class ConcurrentHashMap {
         return true;
     }
 
-    int size() const {
-        int count = 0;
-        for (int i = 0; i < BucketNum; ++i) {
+    size_t size() const {
+        size_t count = 0;
+        for (size_t i = 0; i < BucketNum; ++i) {
             count += m_shards[i].m_map.size();
         }
         return count;
     }
 
    private:
-    struct Shard {
-        CACHE_ALIGN SharedMutex m_lock;
+    struct CACHE_ALIGN Shard {
+        SharedMutex m_lock;
         std::unordered_map<K, V> m_map;
     };
 

@@ -16,8 +16,6 @@
 
 using namespace std::chrono_literals;
 
-DaemonContext::DaemonContext() : m_cort_sched(8) {}
-
 DaemonContext &DaemonContext::getInstance() {
     static DaemonContext daemon_ctx;
     return daemon_ctx;
@@ -40,6 +38,10 @@ void DaemonContext::initCXLPool() {
 
     m_current_used_page_num = 0;
     m_current_used_swap_page_num = 0;
+}
+
+void DaemonContext::initCoroutinePool() {
+    m_cort_sched.reset(new CortScheduler(m_options.prealloc_cort_num));
 }
 
 void DaemonContext::initRPCNexus() {
@@ -86,6 +88,8 @@ void DaemonContext::initRPCNexus() {
                                             bind_msgq_rpc_func<false>(rpc_daemon::__testdataSend2));
     m_msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::__notifyPerf)::rpc_type,
                                             bind_msgq_rpc_func<false>(rpc_daemon::__notifyPerf));
+    m_msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::__stopPerf)::rpc_type,
+                                            bind_msgq_rpc_func<false>(rpc_daemon::__stopPerf));
 }
 
 void DaemonContext::initRDMARC() {
@@ -184,15 +188,14 @@ DaemonConnection *DaemonContext::get_connection(mac_id_t mac_id) {
     DLOG_ASSERT(mac_id != m_daemon_id, "Can't find self connection");
     if (mac_id == master_id) {
         return &m_master_connection;
-    } else {
-        DaemonConnection *ctx;
-        bool ret = m_connect_table.find(mac_id, &ctx);
-        DLOG_ASSERT(ret, "Can't find mac %d", mac_id);
-        return ctx;
     }
+
+    auto it = m_connect_table.find(mac_id);
+    DLOG_ASSERT(it != m_connect_table.end(), "Can't find mac %d", mac_id);
+    return it->second;
 }
 
-CortScheduler &DaemonContext::get_cort_sched() { return m_cort_sched; }
+CortScheduler &DaemonContext::get_cort_sched() { return *m_cort_sched; }
 
 erpc::IBRpcWrap &DaemonContext::get_erpc() { return m_erpc_ctx.rpc_set[0]; }
 
@@ -249,11 +252,13 @@ int main(int argc, char *argv[]) {
     options.swap_zone_size = 2 << 20;
     options.max_client_limit = 2;  // 暂时未使用
     options.cxl_msgq_size = 5 << 10;
+    options.prealloc_cort_num = 8;
 
     DaemonContext &daemon_ctx = DaemonContext::getInstance();
     daemon_ctx.m_options = options;
 
     daemon_ctx.initCXLPool();
+    daemon_ctx.initCoroutinePool();
     daemon_ctx.initRDMARC();
     daemon_ctx.initRPCNexus();
     daemon_ctx.connectWithMaster();

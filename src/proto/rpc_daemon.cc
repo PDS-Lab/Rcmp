@@ -114,9 +114,11 @@ GetPageCXLRefOrProxyReply getPageCXLRefOrProxy(DaemonContext& daemon_context,
     offset_t page_offset = GetPageOffset(req.gaddr);
     GetPageCXLRefOrProxyReply* reply_ptr;
 retry:
-    bool ret = daemon_context.m_page_table.find(page_id, &page_metadata);
+    auto it = daemon_context.m_page_table.find(page_id);
 
-    if (ret) {
+    if (it != daemon_context.m_page_table.end()) {
+        page_metadata = it->second;
+
         page_metadata->ref_client.insert(&client_connection);
 
         reply_ptr = req.alloc_flex_resp(0);
@@ -127,12 +129,9 @@ retry:
     }
 
     RemotePageMetaCache* rem_page_md_cache;
-    ret = daemon_context.m_hot_stats.find(page_id, &rem_page_md_cache);
-
-    if (!ret) {
-        rem_page_md_cache = new RemotePageMetaCache(8);
-        daemon_context.m_hot_stats.insert(page_id, rem_page_md_cache);
-    }
+    auto p = daemon_context.m_hot_stats.find_or_emplace(
+        page_id, []() { return new RemotePageMetaCache(8); });
+    rem_page_md_cache = p.first->second;
 
     if (rem_page_md_cache->stats.freq() < page_hot_dio_swap_watermark) {
         // 启动DirectIO流程
@@ -164,9 +163,11 @@ retry:
         uint32_t my_size;
 
         // printf("freq = %ld, rkey = %d, addr = %ld\n", rem_page_md_cache->stats.freq(),
-            //    rem_page_md_cache->remote_page_rkey, rem_page_md_cache->remote_page_addr);
-        // 如果是第一次访问该page
-        if (rem_page_md_cache->stats.freq() == 0) {
+        //    rem_page_md_cache->remote_page_rkey, rem_page_md_cache->remote_page_addr);
+        if (rem_page_md_cache->stats.freq() > 0) {
+            dest_daemon_conn = rem_page_md_cache->remote_page_daemon_conn;
+        } else {
+            // 如果是第一次访问该page
             // 2. 获取mn上page的daemon，并锁定该page
             using LatchRemotePageRPC = RPC_TYPE_STRUCT(rpc_master::latchRemotePage);
             auto req_raw = rpc.alloc_msg_buffer_or_die(sizeof(LatchRemotePageRPC::RequestType));
@@ -191,12 +192,9 @@ retry:
 
             // 3. 获取对端连接
             DaemonConnection* dest_daemon_conn_tmp;
-            ret = daemon_context.m_connect_table.find(resp->dest_daemon_id, &dest_daemon_conn_tmp);
-            // printf("ret = %d\n", ret);
-            if (!ret) {
+            auto p = daemon_context.m_connect_table.find_or_emplace(resp->dest_daemon_id, [&]() {
                 // 与该daemon建立erpc与RDMA RC
                 DaemonToDaemonConnection* dd_conn = new DaemonToDaemonConnection();
-                dest_daemon_conn_tmp = dd_conn;
                 std::string server_uri = resp->dest_daemon_ipv4.get_string() + ":" +
                                          std::to_string(resp->dest_daemon_erpc_port);
                 dd_conn->peer_session = rpc.create_session(server_uri, 0);
@@ -204,8 +202,6 @@ retry:
                 dd_conn->rack_id = resp->dest_rack_id;
                 dd_conn->ip = resp->dest_daemon_ipv4.get_string();
                 dd_conn->port = resp->dest_daemon_erpc_port;
-
-                daemon_context.m_connect_table.insert(resp->dest_daemon_id, dest_daemon_conn_tmp);
 
                 using CrossRackConnectRPC = RPC_TYPE_STRUCT(rpc_daemon::crossRackConnect);
 
@@ -248,7 +244,11 @@ retry:
                 dd_conn->rdma_conn->connect(peer_ip, peer_port, &param, sizeof(param));
 
                 DLOG("Connection with daemon %d OK", dd_conn->daemon_id);
-            }
+
+                return dd_conn;
+            });
+
+            dest_daemon_conn_tmp = p.first->second;
 
             rpc.free_msg_buffer(req_raw);
             rpc.free_msg_buffer(resp_raw);
@@ -256,8 +256,6 @@ retry:
             dest_daemon_conn = dynamic_cast<DaemonToDaemonConnection*>(dest_daemon_conn_tmp);
 
             // 4. 获取远端内存rdma ref
-            //// 通过比较page version减少获取rdma ref次数
-            // if (rem_page_md_cache->page_version != page_cur_version) {
             {
                 using GetPageRDMARefRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageRDMARef);
 
@@ -288,10 +286,6 @@ retry:
                 rpc.free_msg_buffer(resp_raw);
                 // printf("Get rdma ref\n");
             }
-        }
-        else
-        {
-            dest_daemon_conn = rem_page_md_cache->remote_page_daemon_conn;
         }
 
         // 5. unlatch
@@ -362,7 +356,8 @@ retry:
             switch (req.type) {
                 case GetPageCXLRefOrProxyRequest::READ:
                     dest_daemon_conn->rdma_conn->prep_read(
-                        ba, my_data_buf, my_rkey, my_size, (rem_page_md_cache->remote_page_addr + page_offset),
+                        ba, my_data_buf, my_rkey, my_size,
+                        (rem_page_md_cache->remote_page_addr + page_offset),
                         rem_page_md_cache->remote_page_rkey, false);
                     // DLOG("read size %u remote addr [%#lx, %u] to local addr [%#lx, %u]", my_size,
                     //      rem_page_md_cache->remote_page_addr,
@@ -370,7 +365,8 @@ retry:
                     break;
                 case GetPageCXLRefOrProxyRequest::WRITE:
                     dest_daemon_conn->rdma_conn->prep_write(
-                        ba, my_data_buf, my_rkey, my_size, (rem_page_md_cache->remote_page_addr + page_offset),
+                        ba, my_data_buf, my_rkey, my_size,
+                        (rem_page_md_cache->remote_page_addr + page_offset),
                         rem_page_md_cache->remote_page_rkey, false);
                     // DLOG("write size %u remote addr [%#lx, %u] to local addr [%#lx, %u]",
                     // my_size,
@@ -383,8 +379,6 @@ retry:
             this_cort::reset_resume_cond([&fu]() { return fu.try_get() == 0; });
             this_cort::yield();
         }
-
-        
 
         rem_page_md_cache->stats.add(getTimestamp());
 
@@ -489,8 +483,10 @@ AllocReply alloc(DaemonContext& daemon_context, DaemonToClientConnection& client
 
     page_id_t page_id = slab_list.front();
     PageMetadata* page_metadata;
-    bool ret = daemon_context.m_page_table.find(page_id, &page_metadata);
-    DLOG_ASSERT(ret, "Can't find page id %lu", page_id);
+    auto it = daemon_context.m_page_table.find(page_id);
+    DLOG_ASSERT(it != daemon_context.m_page_table.end(), "Can't find page id %lu", page_id);
+
+    page_metadata = it->second;
 
     DLOG_ASSERT(!page_metadata->slab_allocator.full(), "Can't allocate the page %lu continuely",
                 page_id);
@@ -516,8 +512,10 @@ GetPageRDMARefReply getPageRDMARef(DaemonContext& daemon_context,
                                    DaemonToDaemonConnection& daemon_connection,
                                    GetPageRDMARefRequest& req) {
     PageMetadata* page_meta;
-    bool ret = daemon_context.m_page_table.find(req.page_id, &page_meta);
-    DLOG_ASSERT(ret, "Can't find page %lu", req.page_id);
+    auto it = daemon_context.m_page_table.find(req.page_id);
+    DLOG_ASSERT(it != daemon_context.m_page_table.end(), "Can't find page %lu", req.page_id);
+
+    page_meta = it->second;
 
     uintptr_t local_addr =
         reinterpret_cast<uintptr_t>(daemon_context.m_cxl_format.page_data_start_addr) +
@@ -576,7 +574,7 @@ __notifyPerfReply __notifyPerf(DaemonContext& daemon_context,
 
 __stopPerfReply __stopPerf(DaemonContext& daemon_context,
                            DaemonToClientConnection& client_connection, __stopPerfRequest& req) {
-    exit(0);
+    exit(-1);
 }
 
 }  // namespace rpc_daemon

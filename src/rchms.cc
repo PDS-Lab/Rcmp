@@ -140,8 +140,7 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
 
     // TODO: more page
 
-    bool ret = __impl->m_page_table_cache.find(page_id, &offset);
-    if (!ret) {
+    auto p = __impl->m_page_table_cache.find_or_emplace_try(page_id, [&]() {
         using GetPageRefOrProxyRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageCXLRefOrProxy);
         msgq::MsgBuffer req_raw =
             __impl->m_msgq_rpc->alloc_msg_buffer(sizeof(GetPageRefOrProxyRPC::RequestType));
@@ -166,17 +165,23 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
         if (!resp->refs) {
             memcpy(buf, resp->read_data, size);
             __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
-            return Status::OK;
+            return std::make_pair((offset_t)-1, false);
         }
 
-        offset = resp->offset;
+        offset_t offset = resp->offset;
         __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
 
-        __impl->m_page_table_cache.insert(page_id, offset);
-
         DLOG("get ref: %ld --- %#lx", page_id, offset);
+
+        return std::make_pair(offset, true);
+    });
+
+    // 返回no ref，已经通过ring buffer memcpy读出
+    if (p.first == __impl->m_page_table_cache.end()) {
+        return Status::OK;
     }
 
+    offset = p.first->second;
     memcpy(buf,
            reinterpret_cast<const void *>(
                reinterpret_cast<uintptr_t>(__impl->m_cxl_format.page_data_start_addr) + offset +
@@ -192,8 +197,7 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
 
     // TODO: more page
 
-    bool ret = __impl->m_page_table_cache.find(page_id, &offset);
-    if (!ret) {
+    auto p = __impl->m_page_table_cache.find_or_emplace_try(page_id, [&]() {
         using GetPageRefOrProxyRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageCXLRefOrProxy);
         msgq::MsgBuffer req_raw =
             __impl->m_msgq_rpc->alloc_msg_buffer(sizeof(GetPageRefOrProxyRPC::RequestType));
@@ -207,8 +211,7 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
         SpinPromise<msgq::MsgBuffer> pro;
         SpinFuture<msgq::MsgBuffer> fu = pro.get_future();
         __impl->m_msgq_rpc->enqueue_request(GetPageRefOrProxyRPC::rpc_type, req_raw,
-                                            msgq_general_bool_flag_cb,
-                                            static_cast<void *>(&pro));
+                                            msgq_general_bool_flag_cb, static_cast<void *>(&pro));
 
         while (fu.wait_for(0s) == std::future_status::timeout) {
             __impl->m_msgq_rpc->run_event_loop_once();
@@ -219,17 +222,23 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
 
         if (!resp->refs) {
             __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
-            return Status::OK;
+            return std::make_pair((offset_t)-1, false);
         }
 
-        offset = resp->offset;
+        offset_t offset = resp->offset;
         __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
 
-        __impl->m_page_table_cache.insert(page_id, offset);
-
         DLOG("get ref: %ld --- %#lx", page_id, offset);
+
+        return std::make_pair(offset, true);
+    });
+
+    // 返回no ref，已经通过ring buffer memcpy写入
+    if (p.first == __impl->m_page_table_cache.end()) {
+        return Status::OK;
     }
 
+    offset = p.first->second;
     memcpy(reinterpret_cast<void *>(
                reinterpret_cast<uintptr_t>(__impl->m_cxl_format.page_data_start_addr) + offset +
                in_page_offset),

@@ -182,7 +182,7 @@ struct DaemonContext: public NOCOPYABLE {
     std::vector<ibv_mr *> m_rdma_page_mr_table;  // 为cxl注册的mr，初始化长度后不可更改
     std::unordered_map<void *, ibv_mr *> m_rdma_mr_table;
 
-    CortScheduler m_cort_sched;
+    std::unique_ptr<CortScheduler> m_cort_sched;
 
     std::array<std::list<page_id_t>, page_size / min_slab_size> m_can_alloc_slab_class_lists;
 
@@ -192,11 +192,10 @@ struct DaemonContext: public NOCOPYABLE {
         std::vector<erpc::IBRpcWrap> rpc_set;
     } m_erpc_ctx;
 
-    DaemonContext();
-
     static DaemonContext &getInstance();
 
     void initCXLPool();
+    void initCoroutinePool();
     void initRPCNexus();
     void initRDMARC();
     void connectWithMaster();

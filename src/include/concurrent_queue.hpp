@@ -46,8 +46,8 @@ class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::SP, ConcurrentQueueCon
     }
 
    private:
-    T m_data[SZ];
     std::atomic<uint32_t> m_head;
+    T m_data[SZ];
     std::atomic<uint32_t> m_tail;
 };
 
@@ -60,17 +60,42 @@ class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::SP, ConcurrentQueueCon
 template <typename T, size_t SZ>
 class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::MP, ConcurrentQueueConsumerMode::MC> {
    public:
-    ConcurrentQueue() : m_prod_head({0}), m_prod_tail({0}), m_cons_head({0}), m_cons_tail({0}) {}
+    ConcurrentQueue() = default;
     ~ConcurrentQueue() = default;
 
     size_t capacity() const { return SZ; }
 
+    bool forceEnqueue(T n) {
+        atomic_po_val_t h, oh, nh;
+
+        oh = m_prod_head.fetch_add_one_both(std::memory_order_acquire);
+        while (UNLIKELY(oh.pos >= m_cons_tail.load(std::memory_order_relaxed).pos + SZ)) {
+            h = m_prod_tail.load(std::memory_order_acquire);
+            while (h.cnt == oh.cnt &&
+                   !m_prod_tail.compare_exchange_weak(h, oh, std::memory_order_release,
+                                                      std::memory_order_acquire)) {
+            }
+        }
+
+        m_data[oh.pos % SZ] = std::move(n);
+
+        oh = m_prod_tail.load(std::memory_order_acquire);
+        do {
+            h = m_prod_head.load(std::memory_order_relaxed);
+            nh = oh;
+            if ((++nh.cnt) == h.cnt) nh.pos = h.pos;
+        } while (!m_prod_tail.compare_exchange_weak(oh, nh, std::memory_order_release,
+                                                    std::memory_order_acquire));
+
+        return true;
+    }
+
     bool tryEnqueue(T n) {
-        union po_val_t h, oh, nh;
+        atomic_po_val_t h, oh, nh;
 
         oh = m_prod_head.load(std::memory_order_acquire);
         do {
-            if (oh.pos - m_cons_tail.load(std::memory_order_relaxed).pos == SZ) {
+            if (UNLIKELY(oh.pos - m_cons_tail.load(std::memory_order_relaxed).pos >= SZ)) {
                 return false;
             }
             nh.pos = oh.pos + 1;
@@ -95,7 +120,7 @@ class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::MP, ConcurrentQueueCon
 
     template <typename Iter>
     uint32_t tryDequeue(Iter first, Iter last) {
-        union po_val_t t, ot, nt;
+        atomic_po_val_t t, ot, nt;
         uint32_t l = 0;
         uint32_t count = std::distance(first, last);
 
@@ -126,18 +151,11 @@ class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::MP, ConcurrentQueueCon
     }
 
    private:
-    union po_val_t {
-        struct {
-            uint32_t pos;
-            uint32_t cnt;
-        };
-        uint64_t raw;
-    };
-
-    std::atomic<po_val_t> m_prod_head;
-    std::atomic<po_val_t> m_prod_tail;
-    std::atomic<po_val_t> m_cons_head;
-    std::atomic<po_val_t> m_cons_tail;
+    atomic_po_val_t m_prod_head;
+    atomic_po_val_t m_prod_tail;
 
     T m_data[SZ];
+
+    atomic_po_val_t m_cons_head;
+    atomic_po_val_t m_cons_tail;
 };

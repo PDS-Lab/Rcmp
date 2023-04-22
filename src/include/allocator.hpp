@@ -100,7 +100,7 @@ class SingleAllocator : public IDGenerator {
 template <size_t SZ>
 class RingAllocator {
    public:
-    RingAllocator() : m_prod_head({0}), m_prod_tail({0}), m_tail(0) {}
+    RingAllocator() = default;
     ~RingAllocator() = default;
 
     const void* base() const { return data; }
@@ -108,12 +108,12 @@ class RingAllocator {
     void* alloc(size_t s) {
     retry:
         Header *inv_h, *h;
-        po_val_t oh = m_prod_head, nh, ph;
+        atomic_po_val_t oh = m_prod_head.load(std::memory_order_acquire), nh, ph;
         do {
             inv_h = nullptr;
             nh.pos = oh.pos + s + sizeof(Header);
             nh.cnt = oh.cnt + 1;
-            if (div_floor(oh.pos, SZ) != div_floor(nh.pos, SZ)) {
+            if (UNLIKELY(div_floor(oh.pos, SZ) != div_floor(nh.pos, SZ))) {
                 // invalid tail
                 size_t inv_s = align_ceil(oh.pos, SZ) - oh.pos;
                 nh.pos += inv_s;
@@ -122,14 +122,15 @@ class RingAllocator {
             } else {
                 h = ath(oh.pos);
             }
-            if (nh.pos - m_tail > SZ) {
+            if (UNLIKELY(nh.pos - m_tail > SZ)) {
                 try_gc();
-                if (nh.pos - m_tail > SZ)
+                if (UNLIKELY(nh.pos - m_tail > SZ))
                     return nullptr;
                 else
                     goto retry;
             }
-        } while (!m_prod_head.compare_exchange_weak(oh, nh));
+        } while (!m_prod_head.compare_exchange_weak(oh, nh, std::memory_order_acquire,
+                                                    std::memory_order_acquire));
 
         h->invalid = false;
         h->release = false;
@@ -139,16 +140,17 @@ class RingAllocator {
             inv_h->release = false;
         }
 
-        oh = m_prod_tail;
+        oh = m_prod_tail.load(std::memory_order_acquire);
         do {
-            ph = m_prod_head;
+            ph = m_prod_head.load(std::memory_order_relaxed);
             nh = oh;
             if ((++nh.cnt) == ph.cnt) {
                 nh.pos = ph.pos;
             }
-        } while (!m_prod_tail.compare_exchange_weak(oh, nh));
+        } while (!m_prod_tail.compare_exchange_weak(oh, nh, std::memory_order_release,
+                                                    std::memory_order_acquire));
 
-        if (inv_h != nullptr) {
+        if (UNLIKELY(inv_h != nullptr)) {
             free(inv_h->data);
         }
 
@@ -168,19 +170,13 @@ class RingAllocator {
         char data[0];
     };
 
-    union po_val_t {
-        struct {
-            uint32_t pos;
-            uint32_t cnt;
-        };
-        uint64_t raw;
-    };
+    atomic_po_val_t m_prod_head;
+    atomic_po_val_t m_prod_tail;
 
-    std::atomic<po_val_t> m_prod_head;
-    std::atomic<po_val_t> m_prod_tail;
-    size_t m_tail;
-    Mutex m_gc_lck;
     char data[SZ];
+
+    Mutex m_gc_lck;
+    size_t m_tail;
 
     void try_gc() {
         if (!m_gc_lck.try_lock()) {
@@ -190,12 +186,12 @@ class RingAllocator {
         auto tail = m_tail;
         Header* h = ath(tail);
         while (tail < m_prod_tail.load().pos && h->release) {
-            if (h->invalid) {
+            if (UNLIKELY(h->invalid)) {
                 tail = align_ceil(tail, SZ);
             } else {
                 tail += h->s + sizeof(Header);
             }
-            if (tail - m_tail > SZ / 2) m_tail = tail;
+            if (tail - m_tail > SZ / 4) m_tail = tail;
             h = ath(tail);
         }
         m_tail = tail;

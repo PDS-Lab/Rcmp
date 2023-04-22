@@ -19,10 +19,9 @@ MasterContext::MasterContext() : m_cort_sched(8) {}
 
 MasterConnection *MasterContext::get_connection(mac_id_t mac_id) {
     DLOG_ASSERT(mac_id != m_master_id, "Can't find self connection");
-    MasterConnection *ctx;
-    bool ret = m_cluster_manager.connect_table.find(mac_id, &ctx);
-    DLOG_ASSERT(ret, "Can't find mac %d", mac_id);
-    return ctx;
+    auto it = m_cluster_manager.connect_table.find(mac_id);
+    DLOG_ASSERT(it != m_cluster_manager.connect_table.end(), "Can't find mac %d", mac_id);
+    return it->second;
 }
 
 CortScheduler &MasterContext::get_cort_sched() { return m_cort_sched; }
