@@ -105,34 +105,6 @@ void Close(PoolContext *pool_ctx) {
     delete pool_ctx;
 }
 
-GAddr PoolContext::Alloc(size_t size) {
-    // TODO: more page
-
-    using AllocRPC = RPC_TYPE_STRUCT(rpc_daemon::alloc);
-    msgq::MsgBuffer req_raw = __impl->m_msgq_rpc->alloc_msg_buffer(sizeof(AllocRPC::RequestType));
-    auto req = reinterpret_cast<AllocRPC::RequestType *>(req_raw.get_buf());
-    req->mac_id = __impl->m_client_id;
-    req->size = size;
-
-    std::promise<msgq::MsgBuffer> pro;
-    std::future<msgq::MsgBuffer> fu = pro.get_future();
-    __impl->m_msgq_rpc->enqueue_request(AllocRPC::rpc_type, req_raw, msgq_general_promise_flag_cb,
-                                        static_cast<void *>(&pro));
-
-    while (fu.wait_for(1ns) == std::future_status::timeout) {
-        __impl->m_msgq_rpc->run_event_loop_once();
-    }
-
-    msgq::MsgBuffer resp_raw = fu.get();
-    auto resp = reinterpret_cast<AllocRPC::ResponseType *>(resp_raw.get_buf());
-
-    GAddr gaddr = resp->gaddr;
-
-    __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
-
-    return gaddr;
-}
-
 Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
     page_id_t page_id = GetPageID(gaddr);
     offset_t in_page_offset = GetPageOffset(gaddr);
@@ -246,7 +218,37 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
     return Status::OK;
 }
 
+GAddr PoolContext::Alloc(size_t size) { DLOG_FATAL("Not Support"); }
+
 Status PoolContext::Free(GAddr gaddr, size_t size) { DLOG_FATAL("Not Support"); }
+
+GAddr PoolContext::AllocPage(size_t count) {
+    using AllocRPC = RPC_TYPE_STRUCT(rpc_daemon::allocPage);
+    msgq::MsgBuffer req_raw = __impl->m_msgq_rpc->alloc_msg_buffer(sizeof(AllocRPC::RequestType));
+    auto req = reinterpret_cast<AllocRPC::RequestType *>(req_raw.get_buf());
+    req->mac_id = __impl->m_client_id;
+    req->count = count;
+
+    std::promise<msgq::MsgBuffer> pro;
+    std::future<msgq::MsgBuffer> fu = pro.get_future();
+    __impl->m_msgq_rpc->enqueue_request(AllocRPC::rpc_type, req_raw, msgq_general_promise_flag_cb,
+                                        static_cast<void *>(&pro));
+
+    while (fu.wait_for(0s) == std::future_status::timeout) {
+        __impl->m_msgq_rpc->run_event_loop_once();
+    }
+
+    msgq::MsgBuffer resp_raw = fu.get();
+    auto resp = reinterpret_cast<AllocRPC::ResponseType *>(resp_raw.get_buf());
+
+    GAddr gaddr = GetGAddr(resp->start_page_id, 0);
+
+    __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
+
+    return gaddr;
+}
+
+Status PoolContext::FreePage(GAddr gaddr, size_t count) { DLOG_FATAL("Not Support"); }
 
 /*********************** for test **************************/
 

@@ -34,7 +34,7 @@ int main(int argc, char *argv[]) {
         cout << "> ";
         cin >> cmdstr;
         if (cmdstr == "a") {
-            rchms::GAddr gaddr = pool->Alloc(8);
+            rchms::GAddr gaddr = pool->AllocPage(1);
             cout << gaddr << endl;
         } else if (cmdstr == "r") {
             rchms::GAddr gaddr;
@@ -75,7 +75,7 @@ int main(int argc, char *argv[]) {
             }
         } else if (cmdstr == "?") {
             cout << "Usage:\n"
-                    "\ta \t\t alloc 8B int gaddr\n"
+                    "\ta \t\t alloc 2MB gaddr\n"
                     "\tr <gaddr> \t\t read gaddr 8B int\n"
                     "\tw <gaddr> <int> \t\twrite gaddr 8B int\n"
                     "\t? \t\t for help"

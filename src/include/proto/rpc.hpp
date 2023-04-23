@@ -50,6 +50,8 @@ BIND_RPC_TYPE_STRUCT(rpc_master::unLatchRemotePage);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::joinRack);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::crossRackConnect);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::getPageCXLRefOrProxy);
+BIND_RPC_TYPE_STRUCT(rpc_daemon::allocPage);
+BIND_RPC_TYPE_STRUCT(rpc_daemon::freePage);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::allocPageMemory);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::alloc);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::free);

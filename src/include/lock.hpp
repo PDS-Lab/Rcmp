@@ -50,10 +50,7 @@ class SharedMutex {
 
 class SharedLockGuard {
    public:
-    // 构造函数
     SharedLockGuard(SharedMutex& mutex, bool isWriteLock);
-
-    // 解锁析构函数
     ~SharedLockGuard();
 
    private:

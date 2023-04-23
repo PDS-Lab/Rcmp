@@ -79,6 +79,22 @@ class PoolContext {
      */
     Status Free(GAddr gaddr, size_t size);
 
+    /**
+     * @brief 申请连续内存页。内存申请策略按照客户端所在机柜就近分配。申请失败返回`GNullPtr`
+     *
+     * @param size
+     * @return GAddr
+     */
+    GAddr AllocPage(size_t count);
+
+    /**
+     * @brief 释放连续内存页。
+     * 
+     * @param gaddr 
+     * @return Status 
+     */
+    Status FreePage(GAddr gaddr, size_t count);
+
     template <typename T>
     Status CAS(GAddr gaddr, T &expected, T desired, bool &ret) {
         static_assert(sizeof(T) <= 8, "The compare and swap size mustn't greater than 8B.");

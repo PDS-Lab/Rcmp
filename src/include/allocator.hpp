@@ -25,11 +25,20 @@ class IDGenerator {
     id_t gen();
 
     /**
+     * @brief 生成连续ID。生成失败返回-1。
+     *
+     * @return id_t
+     */
+    id_t multiGen(size_t count);
+
+    /**
      * @brief 回收ID
      *
      * @param id
      */
     void recycle(id_t id);
+
+    void multiRecycle(id_t id, size_t count);
 
     bool empty() const;
 
@@ -77,6 +86,7 @@ class IDGenerator {
     size_t m_capacity;
     size_t m_gen_cur;
     std::vector<uint64_t> m_bset;
+    Mutex m_lck;
 };
 
 /**

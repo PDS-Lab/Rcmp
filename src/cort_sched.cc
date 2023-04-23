@@ -60,6 +60,8 @@ CortScheduler::CortScheduler(int prealloc_cort) {
     }
 }
 
+bool CortScheduler::empty() const { return active_cort_list.empty(); }
+
 void CortScheduler::resumeCort(std::list<CortTask>::iterator &it) {
     auto &cort = *it;
 

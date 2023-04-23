@@ -124,11 +124,8 @@ struct DaemonToDaemonConnection : public DaemonConnection {
 
 struct PageMetadata {
     offset_t cxl_memory_offset;  // 相对于format.page_data_start_addr
-    SingleAllocator slab_allocator;
     std::unordered_set<DaemonToClientConnection *> ref_client;
     std::unordered_set<DaemonToDaemonConnection *> ref_daemon;
-
-    PageMetadata(size_t slab_size);
 };
 
 struct RemotePageMetaCache {
@@ -184,8 +181,6 @@ struct DaemonContext: public NOCOPYABLE {
 
     std::unique_ptr<CortScheduler> m_cort_sched;
 
-    std::array<std::list<page_id_t>, page_size / min_slab_size> m_can_alloc_slab_class_lists;
-
     struct {
         volatile bool running;
         std::unique_ptr<erpc::NexusWrap> nexus;
@@ -236,9 +231,7 @@ struct ClientContext : public NOCOPYABLE {
     std::unique_ptr<UDPServer<msgq::MsgUDPConnPacket>> m_udp_conn_recver;
     std::unique_ptr<msgq::MsgQueueRPC> m_msgq_rpc;
     std::unique_ptr<msgq::MsgQueueNexus> m_msgq_nexus;
-    // ClientToMasterConnection m_master_connection;
     ClientToDaemonConnection m_local_rack_daemon_connection;
-    // ConcurrentHashMap<mac_id_t, ClientToDaemonConnection *> m_other_rack_daemon_connection;
     ConcurrentHashMap<page_id_t, offset_t> m_page_table_cache;
 
     volatile bool m_msgq_stop;

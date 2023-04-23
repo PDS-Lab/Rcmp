@@ -74,7 +74,6 @@ JoinClientReply joinClient(MasterContext& master_context,
 AllocPageReply allocPage(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
                          AllocPageRequest& req) {
     RackMacTable* rack_table;
-    PageRackMetadata* page_meta = new PageRackMetadata();
 
     auto it = master_context.m_cluster_manager.cluster_rack_table.find(daemon_connection.rack_id);
     DLOG_ASSERT(it != master_context.m_cluster_manager.cluster_rack_table.end(),
@@ -82,26 +81,32 @@ AllocPageReply allocPage(MasterContext& master_context, MasterToDaemonConnection
 
     rack_table = it->second;
 
-    page_id_t new_page_id = master_context.m_page_id_allocator->gen();
+    page_id_t new_page_id = master_context.m_page_id_allocator->multiGen(req.count);
     DLOG_ASSERT(new_page_id != invalid_page_id, "no unusable page");
 
-    if (rack_table->current_allocated_page_num < rack_table->max_free_page_num) {
-        // 采取就近原则分配page到daemon所在rack
+    size_t current_rack_alloc_page_num =
+        std::min(req.count, rack_table->max_free_page_num - rack_table->current_allocated_page_num);
+    size_t other_rack_alloc_page_num = req.count - current_rack_alloc_page_num;
+
+    // 采取就近原则分配page到daemon所在rack
+    for (size_t c = 0; c < current_rack_alloc_page_num; ++c) {
+        PageRackMetadata* page_meta = new PageRackMetadata();
         page_meta->rack_id = daemon_connection.rack_id;
         page_meta->daemon_id = daemon_connection.daemon_id;
-        rack_table->current_allocated_page_num++;
-    } else {
-        // TODO: 如果daemon没有多余page，则向其他rack daemon注册，调用allocPageMemory(req.slab_size)
+        DLOG("alloc page: %lu ---> rack %d", new_page_id + c, rack_table->daemon_connect->rack_id);
+        master_context.m_page_directory.insert(new_page_id + c, page_meta);
+    }
+    rack_table->current_allocated_page_num += current_rack_alloc_page_num;
+
+    if (other_rack_alloc_page_num > 0) {
+        // TODO: 如果daemon没有多余page，则向其他rack daemon注册allocPageMemory
         // TODO: 启动migrate机制
         DLOG_FATAL("Not Support");
     }
 
-    DLOG("alloc page: %lu ---> rack %d", new_page_id, rack_table->daemon_connect->rack_id);
-
-    master_context.m_page_directory.insert(new_page_id, page_meta);
-
     AllocPageReply reply;
-    reply.page_id = new_page_id;
+    reply.start_page_id = new_page_id;
+    reply.start_count = current_rack_alloc_page_num;
     return reply;
 }
 
@@ -110,9 +115,9 @@ FreePageReply freePage(MasterContext& master_context, MasterToDaemonConnection& 
     RackMacTable* rack_table;
     PageRackMetadata* page_meta;
 
-    auto it = master_context.m_page_directory.find(req.page_id);
+    auto it = master_context.m_page_directory.find(req.start_page_id);
     DLOG_ASSERT(it != master_context.m_page_directory.end(), "Can't free this page id %lu",
-                req.page_id);
+                req.start_page_id);
 
     page_meta = it->second;
 
@@ -127,8 +132,8 @@ FreePageReply freePage(MasterContext& master_context, MasterToDaemonConnection& 
 
     rack_table = rack_table_it->second;
 
-    master_context.m_page_directory.erase(req.page_id);
-    master_context.m_page_id_allocator->recycle(req.page_id);
+    master_context.m_page_directory.erase(req.start_page_id);
+    master_context.m_page_id_allocator->recycle(req.start_page_id);
     rack_table->current_allocated_page_num--;
     delete page_meta;
 

@@ -81,6 +81,8 @@ void DaemonContext::initRPCNexus() {
     m_msgq_manager.nexus->register_req_func(
         RPC_TYPE_STRUCT(rpc_daemon::getPageCXLRefOrProxy)::rpc_type,
         bind_msgq_rpc_func<false>(rpc_daemon::getPageCXLRefOrProxy));
+    m_msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::allocPage)::rpc_type,
+                                            bind_msgq_rpc_func<false>(rpc_daemon::allocPage));
 
     m_msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::__testdataSend1)::rpc_type,
                                             bind_msgq_rpc_func<false>(rpc_daemon::__testdataSend1));
@@ -209,8 +211,6 @@ ibv_mr *DaemonContext::get_mr(void *p) {
             align_floor(reinterpret_cast<uintptr_t>(p), mem_region_aligned_size))];
     }
 }
-
-PageMetadata::PageMetadata(size_t slab_size) : slab_allocator(page_size, slab_size) {}
 
 RemotePageMetaCache::RemotePageMetaCache(size_t max_recent_record) : stats(max_recent_record) {}
 

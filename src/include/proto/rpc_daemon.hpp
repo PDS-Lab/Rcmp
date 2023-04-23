@@ -90,7 +90,6 @@ GetPageCXLRefOrProxyReply getPageCXLRefOrProxy(DaemonContext& daemon_context,
 
 struct AllocPageMemoryRequest : public RequestMsg {
     page_id_t page_id;
-    size_t slab_size;
 };
 struct AllocPageMemoryReply : public ResponseMsg {
     bool ret;
@@ -106,6 +105,41 @@ struct AllocPageMemoryReply : public ResponseMsg {
 AllocPageMemoryReply allocPageMemory(DaemonContext& daemon_context,
                                      DaemonToMasterConnection& master_connection,
                                      AllocPageMemoryRequest& req);
+
+struct AllocPageRequest : public RequestMsg {
+    size_t count;
+};
+struct AllocPageReply : public ResponseMsg {
+    page_id_t start_page_id;
+};
+/**
+ * @brief
+ * 申请page。
+ *
+ * @param daemon_context
+ * @param client_connection
+ * @param req
+ * @return AllocPageReply 如果page被派到daemon上，则`need_self_alloc_page_memory`为true
+ */
+AllocPageReply allocPage(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
+                         AllocPageRequest& req);
+
+struct FreePageRequest : public RequestMsg {
+    page_id_t start_page_id;
+    size_t count;
+};
+struct FreePageReply : public ResponseMsg {
+    bool ret;
+};
+/**
+ * @brief 释放page。
+ *
+ * @param daemon_context
+ * @param client_connection
+ * @param req
+ */
+FreePageReply freePage(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
+                       FreePageRequest& req);
 
 struct AllocRequest : public RequestMsg {
     size_t size;
@@ -227,10 +261,9 @@ __notifyPerfReply __notifyPerf(DaemonContext& daemon_context,
                                DaemonToClientConnection& client_connection,
                                __notifyPerfRequest& req);
 
-                            struct __stopPerfRequest : public RequestMsg {};
+struct __stopPerfRequest : public RequestMsg {};
 struct __stopPerfReply : public ResponseMsg {};
 __stopPerfReply __stopPerf(DaemonContext& daemon_context,
-                               DaemonToClientConnection& client_connection,
-                               __stopPerfRequest& req);
+                           DaemonToClientConnection& client_connection, __stopPerfRequest& req);
 
 }  // namespace rpc_daemon
