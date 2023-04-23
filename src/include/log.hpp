@@ -144,8 +144,10 @@ struct helper<const char *> {
             char fmt[] = "Because " #val_a " = %???, " #val_b " = %???";             \
             char tmp[sizeof(fmt) + 42];                                              \
             snprintf(fmt, sizeof(fmt), "Because " #val_a " = %s, " #val_b " = %s",   \
-                     type_fmt_str_detail::helper<decltype(val_a)>::type_str,         \
-                     type_fmt_str_detail::helper<decltype(val_b)>::type_str);        \
+                     type_fmt_str_detail::helper<                                    \
+                         std::remove_reference<decltype(val_a)>::type>::type_str,    \
+                     type_fmt_str_detail::helper<                                    \
+                         std::remove_reference<decltype(val_b)>::type>::type_str);   \
             snprintf(tmp, sizeof(tmp), fmt, a, b);                                   \
             DLOG_FATAL("Assertion `" #val_a " " #op " " #val_b "` failed. %s", tmp); \
         }                                                                            \

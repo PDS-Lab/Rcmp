@@ -76,7 +76,6 @@ struct MasterContext: public NOCOPYABLE {
     std::unique_ptr<IDGenerator> m_page_id_allocator;
 
     struct {
-        volatile bool running;
         std::unique_ptr<erpc::NexusWrap> nexus;
         std::vector<erpc::IBRpcWrap> rpc_set;
     } m_erpc_ctx;
@@ -87,6 +86,12 @@ struct MasterContext: public NOCOPYABLE {
     MasterContext();
 
     static MasterContext &getInstance();
+
+    void initCluster();
+    void initRDMARC();
+    void initRPCNexus();
+    void initCoroutinePool();
+
     MasterConnection *get_connection(mac_id_t mac_id);
     erpc::IBRpcWrap &get_erpc();
     CortScheduler &get_cort_sched();

@@ -128,7 +128,6 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
                                             msgq_general_bool_flag_cb, static_cast<void *>(&pro));
 
         while (fu.wait_for(0s) == std::future_status::timeout) {
-            __impl->m_msgq_rpc->run_event_loop_once();
         }
 
         msgq::MsgBuffer resp_raw = fu.get();
@@ -186,7 +185,6 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
                                             msgq_general_bool_flag_cb, static_cast<void *>(&pro));
 
         while (fu.wait_for(0s) == std::future_status::timeout) {
-            __impl->m_msgq_rpc->run_event_loop_once();
         }
 
         msgq::MsgBuffer resp_raw = fu.get();
@@ -235,7 +233,6 @@ GAddr PoolContext::AllocPage(size_t count) {
                                         static_cast<void *>(&pro));
 
     while (fu.wait_for(0s) == std::future_status::timeout) {
-        __impl->m_msgq_rpc->run_event_loop_once();
     }
 
     msgq::MsgBuffer resp_raw = fu.get();
@@ -270,7 +267,6 @@ Status PoolContext::__TestDataSend1(int *array, size_t size) {
                                         msgq_general_promise_flag_cb, static_cast<void *>(&pro));
 
     while (fu.wait_for(1ns) == std::future_status::timeout) {
-        __impl->m_msgq_rpc->run_event_loop_once();
     }
 
     msgq::MsgBuffer resp_raw = fu.get();
@@ -303,7 +299,6 @@ Status PoolContext::__TestDataSend2(int *array, size_t size) {
                                         msgq_general_promise_flag_cb, static_cast<void *>(&pro));
 
     while (fu.wait_for(1ns) == std::future_status::timeout) {
-        __impl->m_msgq_rpc->run_event_loop_once();
     }
 
     msgq::MsgBuffer resp_raw = fu.get();
@@ -329,7 +324,6 @@ Status PoolContext::__NotifyPerf() {
     __impl->m_msgq_rpc->enqueue_request(__notify_rpc::rpc_type, req_raw,
                                         msgq_general_promise_flag_cb, static_cast<void *>(&pro));
     while (fu.wait_for(1ns) == std::future_status::timeout) {
-        __impl->m_msgq_rpc->run_event_loop_once();
     }
     msgq::MsgBuffer resp_raw = fu.get();
     __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
@@ -348,7 +342,6 @@ Status PoolContext::__StopPerf() {
     __impl->m_msgq_rpc->enqueue_request(__stop_rpc::rpc_type, req_raw, msgq_general_promise_flag_cb,
                                         static_cast<void *>(&pro));
     while (fu.wait_for(1ns) == std::future_status::timeout) {
-        __impl->m_msgq_rpc->run_event_loop_once();
     }
     msgq::MsgBuffer resp_raw = fu.get();
     __impl->m_msgq_rpc->free_msg_buffer(resp_raw);

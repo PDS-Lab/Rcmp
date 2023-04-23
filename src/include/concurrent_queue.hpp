@@ -60,7 +60,12 @@ class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::SP, ConcurrentQueueCon
 template <typename T, size_t SZ>
 class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::MP, ConcurrentQueueConsumerMode::MC> {
    public:
-    ConcurrentQueue() = default;
+    ConcurrentQueue() {
+        m_prod_head.raw = 0;
+        m_prod_tail.raw = 0;
+        m_cons_head.raw = 0;
+        m_cons_tail.raw = 0;
+    }
     ~ConcurrentQueue() = default;
 
     size_t capacity() const { return SZ; }

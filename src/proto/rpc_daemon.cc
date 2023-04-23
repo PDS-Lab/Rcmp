@@ -411,18 +411,21 @@ retry:
 AllocPageMemoryReply allocPageMemory(DaemonContext& daemon_context,
                                      DaemonToMasterConnection& master_connection,
                                      AllocPageMemoryRequest& req) {
-    DLOG_ASSERT(daemon_context.m_current_used_page_num < daemon_context.m_max_data_page_num,
-                "Can't allocate more page memory");
+    DLOG_ASSERT(
+        daemon_context.m_current_used_page_num + req.count < daemon_context.m_max_data_page_num,
+        "Can't allocate more page memory");
 
-    offset_t cxl_memory_offset = daemon_context.m_cxl_page_allocator->allocate(1);
-    DLOG_ASSERT(cxl_memory_offset != -1, "Can't allocate cxl memory");
+    for (size_t c = 0; c < req.count; ++c) {
+        offset_t cxl_memory_offset = daemon_context.m_cxl_page_allocator->allocate(1);
+        DLOG_ASSERT(cxl_memory_offset != -1, "Can't allocate cxl memory");
 
-    PageMetadata* page_metadata = new PageMetadata();
-    page_metadata->cxl_memory_offset = cxl_memory_offset;
+        PageMetadata* page_metadata = new PageMetadata();
+        page_metadata->cxl_memory_offset = cxl_memory_offset;
 
-    daemon_context.m_page_table.insert(req.page_id, page_metadata);
+        daemon_context.m_page_table.insert(req.start_page_id + c, page_metadata);
 
-    DLOG("new page %ld ---> %#lx", req.page_id, cxl_memory_offset);
+        DLOG("new page %ld ---> %#lx", req.start_page_id + c, cxl_memory_offset);
+    }
 
     AllocPageMemoryReply reply;
     reply.ret = true;
@@ -459,12 +462,11 @@ AllocPageReply allocPage(DaemonContext& daemon_context, DaemonToClientConnection
 
     page_id_t start_page_id = resp->start_page_id;
 
-    for (size_t c = 0; c < resp->start_count; ++c) {
-        AllocPageMemoryRequest req;
-        req.mac_id = daemon_context.m_daemon_id;
-        req.page_id = start_page_id + c;
-        allocPageMemory(daemon_context, daemon_context.m_master_connection, req);
-    }
+    AllocPageMemoryRequest local_req;
+    local_req.mac_id = daemon_context.m_daemon_id;
+    local_req.start_page_id = start_page_id;
+    local_req.count = resp->start_count;
+    allocPageMemory(daemon_context, daemon_context.m_master_connection, local_req);
 
     rpc.free_msg_buffer(req_raw);
     rpc.free_msg_buffer(resp_raw);

@@ -89,7 +89,8 @@ GetPageCXLRefOrProxyReply getPageCXLRefOrProxy(DaemonContext& daemon_context,
                                                GetPageCXLRefOrProxyRequest& req);
 
 struct AllocPageMemoryRequest : public RequestMsg {
-    page_id_t page_id;
+    page_id_t start_page_id;
+    size_t count;
 };
 struct AllocPageMemoryReply : public ResponseMsg {
     bool ret;

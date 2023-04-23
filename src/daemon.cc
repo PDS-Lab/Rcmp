@@ -177,11 +177,20 @@ void DaemonContext::connectWithMaster() {
 }
 
 void DaemonContext::registerCXLMR() {
-    for (uintptr_t cxl_start_ptr = reinterpret_cast<uintptr_t>(m_cxl_format.start_addr);
-         cxl_start_ptr < reinterpret_cast<uintptr_t>(m_cxl_format.end_addr);
-         cxl_start_ptr += mem_region_aligned_size) {
+    uintptr_t cxl_start_ptr = reinterpret_cast<uintptr_t>(m_cxl_format.start_addr);
+    while (cxl_start_ptr < reinterpret_cast<uintptr_t>(m_cxl_format.end_addr)) {
         ibv_mr *mr = m_listen_conn.register_memory(reinterpret_cast<void *>(cxl_start_ptr),
                                                    mem_region_aligned_size);
+        m_rdma_page_mr_table.push_back(mr);
+        cxl_start_ptr += mem_region_aligned_size;
+    }
+
+    // 继续注册尾部不足mem region的内存
+    if (cxl_start_ptr != reinterpret_cast<uintptr_t>(m_cxl_format.end_addr)) {
+        cxl_start_ptr -= mem_region_aligned_size;
+        ibv_mr *mr = m_listen_conn.register_memory(
+            reinterpret_cast<void *>(cxl_start_ptr),
+            reinterpret_cast<uintptr_t>(m_cxl_format.end_addr) - cxl_start_ptr);
         m_rdma_page_mr_table.push_back(mr);
     }
 }
@@ -254,20 +263,20 @@ int main(int argc, char *argv[]) {
     options.cxl_msgq_size = 5 << 10;
     options.prealloc_cort_num = 8;
 
-    DaemonContext &daemon_ctx = DaemonContext::getInstance();
-    daemon_ctx.m_options = options;
+    DaemonContext &daemon_context = DaemonContext::getInstance();
+    daemon_context.m_options = options;
 
-    daemon_ctx.initCXLPool();
-    daemon_ctx.initCoroutinePool();
-    daemon_ctx.initRDMARC();
-    daemon_ctx.initRPCNexus();
-    daemon_ctx.connectWithMaster();
-    daemon_ctx.registerCXLMR();
+    daemon_context.initCXLPool();
+    daemon_context.initCoroutinePool();
+    daemon_context.initRDMARC();
+    daemon_context.initRPCNexus();
+    daemon_context.connectWithMaster();
+    daemon_context.registerCXLMR();
 
     while (true) {
-        daemon_ctx.m_msgq_manager.rpc->run_event_loop_once();
-        daemon_ctx.get_erpc().run_event_loop_once();
-        daemon_ctx.get_cort_sched().runOnce();
+        daemon_context.m_msgq_manager.rpc->run_event_loop_once();
+        daemon_context.get_erpc().run_event_loop_once();
+        daemon_context.get_cort_sched().runOnce();
     }
 
     return 0;

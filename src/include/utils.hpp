@@ -198,21 +198,19 @@ struct atomic_po_val_t {
         uint64_t raw;
     };
 
-    atomic_po_val_t() : raw(0) {}
-
-    atomic_po_val_t load(std::memory_order __m = std::memory_order_seq_cst) const {
+    inline atomic_po_val_t load(std::memory_order __m = std::memory_order_seq_cst) const {
         atomic_po_val_t o;
         o.raw = __atomic_load_n(&raw, (int)__m);
         return o;
     }
 
-    atomic_po_val_t fetch_add_one_both(std::memory_order __m = std::memory_order_seq_cst) {
+    inline atomic_po_val_t fetch_add_one_both(std::memory_order __m = std::memory_order_seq_cst) {
         atomic_po_val_t o;
-        o.raw = __atomic_fetch_add(&raw, (1ull << 32) | 1ul, (int)__m);
+        o.raw = __atomic_fetch_add(&raw, (1ull << 32) | 1ull, (int)__m);
         return o;
     }
 
-    bool compare_exchange_weak(atomic_po_val_t &expected, atomic_po_val_t desired,
+    inline bool compare_exchange_weak(atomic_po_val_t &expected, atomic_po_val_t desired,
                                std::memory_order __s = std::memory_order_seq_cst,
                                std::memory_order __f = std::memory_order_seq_cst) {
         return __atomic_compare_exchange_n(&raw, &expected.raw, desired.raw, true, (int)__s,

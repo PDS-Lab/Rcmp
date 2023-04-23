@@ -10,6 +10,8 @@ template <typename K, typename V>
 class ConcurrentHashMap {
     constexpr static const size_t BucketNum = 32;
 
+    using HashTable = std::unordered_map<K, V>;
+
    public:
     ConcurrentHashMap() = default;
     ~ConcurrentHashMap() = default;
@@ -28,10 +30,10 @@ class ConcurrentHashMap {
        private:
         friend class ConcurrentHashMap;
 
-        iterator(int hidx, typename std::unordered_map<K, V>::iterator it) : hidx(hidx), it(it) {}
+        iterator(int hidx, typename HashTable::iterator it) : hidx(hidx), it(it) {}
 
         int hidx;
-        typename std::unordered_map<K, V>::iterator it;
+        typename HashTable::iterator it;
     };
 
     const iterator end() { return {0, m_shards[0].m_map.end()}; }
@@ -161,6 +163,27 @@ class ConcurrentHashMap {
         map.erase(it.it);
     }
 
+    /**
+     * @brief 遍历表
+     *
+     * @tparam F
+     * @param f bool(std::pair<const K, V> &)，返回false代表终止遍历
+     */
+    template <typename F>
+    void foreach_all(F&& f) {
+        for (size_t i = 0; i < BucketNum; ++i) {
+            auto& shard = m_shards[i];
+            auto& map = shard.m_map;
+
+            SharedLockGuard guard(shard.m_lock, false);
+            for (auto& p : map) {
+                if (!f(p)) {
+                    return;
+                }
+            }
+        }
+    }
+
     bool empty() const {
         for (size_t i = 0; i < BucketNum; ++i) {
             if (!m_shards[i].m_map.empty()) {
@@ -181,7 +204,7 @@ class ConcurrentHashMap {
    private:
     struct CACHE_ALIGN Shard {
         SharedMutex m_lock;
-        std::unordered_map<K, V> m_map;
+        HashTable m_map;
     };
 
     Shard m_shards[BucketNum];
