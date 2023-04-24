@@ -90,7 +90,7 @@ GetPageCXLRefOrProxyReply getPageCXLRefOrProxy(DaemonContext& daemon_context,
 
 struct AllocPageMemoryRequest : public RequestMsg {
     page_id_t page_id;
-    size_t slab_size;
+    // size_t slab_size;
 };
 struct AllocPageMemoryReply : public ResponseMsg {
     bool ret;
@@ -106,6 +106,34 @@ struct AllocPageMemoryReply : public ResponseMsg {
 AllocPageMemoryReply allocPageMemory(DaemonContext& daemon_context,
                                      DaemonToMasterConnection& master_connection,
                                      AllocPageMemoryRequest& req);
+/**
+ * @brief 在swap区申请一个page物理地址空间，只在需要迁移页面且本地的page区已满时调用
+ *
+ * @param daemon_context
+ * @param req
+ * @return void
+ */
+void allocSwapPageMemory(DaemonContext& daemon_context, AllocPageMemoryRequest& req);
+
+/**
+ * @brief 广播有当前page的ref的DN，删除其ref
+ *
+ * @param daemon_context
+ * @param page_id
+ * @param page_meta
+ * @return void
+ */
+void delPageRefBroadcast(DaemonContext& daemon_context, page_id_t page_id, PageMetadata* page_meta);
+
+/**
+ * @brief 通知当前rack下所有访问过该page的client删除相应的缓存
+ *
+ * @param daemon_context
+ * @param page_id
+ * @param page_meta
+ * @return void
+ */
+void delPageCacheBroadcast(DaemonContext& daemon_context, page_id_t page_id, PageMetadata* page_meta);
 
 struct AllocRequest : public RequestMsg {
     size_t size;
@@ -154,7 +182,7 @@ struct GetPageRDMARefReply : public ResponseMsg {
  * id，则会触发远程调用。
  *
  * @param daemon_context
- * @param client_connection
+ * @param daemon_connection
  * @param req
  * @return GetPageRDMARefReply
  */
@@ -162,16 +190,44 @@ GetPageRDMARefReply getPageRDMARef(DaemonContext& daemon_context,
                                    DaemonToDaemonConnection& daemon_connection,
                                    GetPageRDMARefRequest& req);
 
+struct DelPageRDMARefRequest : public RequestMsg {
+    page_id_t page_id;
+};
+struct DelPageRDMARefReply : public ResponseMsg {
+    bool isDel;
+};
+/**
+ * @brief 获取page的引用。如果本地Page Table没有该page
+ * id，则会触发远程调用。
+ *
+ * @param daemon_context
+ * @param daemon_connection
+ * @param req
+ * @return GetPageRDMARefReply
+ */
+DelPageRDMARefReply delPageRDMARef(DaemonContext& daemon_context,
+                                   DaemonToDaemonConnection& daemon_connection,
+                                   DelPageRDMARefRequest& req);
+
 struct TryMigratePageRequest : public RequestMsg {
     page_id_t page_id;
+    page_id_t swap_page_id;
     uint64_t score;
     uintptr_t swapout_page_addr;  // 当swapout_page_addr == 0且swapout_page_rkey == 0时代表不换出页
     uintptr_t swapin_page_addr;
     uint32_t swapout_page_rkey;
     uint32_t swapin_page_rkey;
+    // SingleAllocator slab_allocator;
+    std::unique_ptr<SingleAllocator> slab_allocator;
+    TryMigratePageRequest(){}
+    // TryMigratePageRequest(SingleAllocator &s_allocator) : slab_allocator(s_allocator) {}
 };
 struct TryMigratePageReply : public ResponseMsg {
     bool swaped;
+    // SingleAllocator slab_allocator;
+    std::unique_ptr<SingleAllocator> slab_allocator;
+    TryMigratePageReply() {}
+    // TryMigratePageReply(SingleAllocator &s_allocator) : slab_allocator(s_allocator) {}
 };
 TryMigratePageReply tryMigratePage(DaemonContext& daemon_context,
                                    DaemonToDaemonConnection& daemon_connection,
@@ -227,10 +283,9 @@ __notifyPerfReply __notifyPerf(DaemonContext& daemon_context,
                                DaemonToClientConnection& client_connection,
                                __notifyPerfRequest& req);
 
-                            struct __stopPerfRequest : public RequestMsg {};
+struct __stopPerfRequest : public RequestMsg {};
 struct __stopPerfReply : public ResponseMsg {};
 __stopPerfReply __stopPerf(DaemonContext& daemon_context,
-                               DaemonToClientConnection& client_connection,
-                               __stopPerfRequest& req);
+                           DaemonToClientConnection& client_connection, __stopPerfRequest& req);
 
 }  // namespace rpc_daemon

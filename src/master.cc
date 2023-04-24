@@ -79,6 +79,9 @@ int main(int argc, char *argv[]) {
     master_ctx.m_erpc_ctx.nexus->register_req_func(
         RPC_TYPE_STRUCT(rpc_master::unLatchRemotePage)::rpc_type,
         bind_erpc_func<false>(rpc_master::unLatchRemotePage));
+    master_ctx.m_erpc_ctx.nexus->register_req_func(
+        RPC_TYPE_STRUCT(rpc_master::unLatchPageAndBalance)::rpc_type,
+        bind_erpc_func<false>(rpc_master::unLatchPageAndBalance));
 
     erpc::SMHandlerWrap smhw;
     smhw.set_empty();

@@ -34,8 +34,10 @@ GetCurrentWriteDataReply getCurrentWriteData(ClientContext& client_context,
                                              ClientToDaemonConnection& daemon_connection,
                                              GetCurrentWriteDataRequest& req);
 
-struct GetPagePastAccessFreqRequest : public RequestMsg {};
+struct GetPagePastAccessFreqRequest : public RequestMsg {
+};
 struct GetPagePastAccessFreqReply : public ResponseMsg {
+    page_id_t oldest_page_id;
     uint64_t last_access_ts;
 };
 GetPagePastAccessFreqReply getPagePastAccessFreq(ClientContext& client_context,

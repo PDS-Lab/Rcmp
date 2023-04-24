@@ -13,6 +13,7 @@ class IDGenerator {
 
     IDGenerator();
     IDGenerator(size_t size, size_t capacity, const void* data, size_t data_size);
+    IDGenerator(const IDGenerator &idGenerator);
 
     /**
      * @brief 生成ID。生成失败返回-1。
@@ -86,8 +87,12 @@ class SingleAllocator : public IDGenerator {
 
     SingleAllocator(size_t unit_size, size_t size, size_t capacity, const void* data, size_t data_size);
 
+    SingleAllocator(const SingleAllocator &sAllocator);
+
     uintptr_t allocate(size_t n);
     void deallocate(uintptr_t ptr);
+
+    // size_t getUintSize();
 
    private:
     const size_t m_unit;

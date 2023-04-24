@@ -15,6 +15,13 @@ IDGenerator::IDGenerator(size_t size, size_t capacity, const void* data, size_t 
                   reinterpret_cast<const uint64_t*>(data) + (data_size / sizeof(uint64_t)));
 }
 
+IDGenerator::IDGenerator(const IDGenerator& idGenerator)
+    : m_gen_cur(idGenerator.m_gen_cur),
+      m_size(idGenerator.m_size),
+      m_capacity(idGenerator.m_capacity) {
+    m_bset.assign(idGenerator.m_bset.begin(), idGenerator.m_bset.end());
+}
+
 IDGenerator::id_t IDGenerator::gen() {
     if (UNLIKELY(m_size >= m_capacity)) {
         return -1;
@@ -64,8 +71,11 @@ SingleAllocator::SingleAllocator(size_t total_size, size_t unit_size) : m_unit(u
 }
 
 SingleAllocator::SingleAllocator(size_t unit_size, size_t size, size_t capacity, const void* data,
-                     size_t data_size)
+                                 size_t data_size)
     : m_unit(unit_size), IDGenerator(size, capacity, data, data_size) {}
+
+SingleAllocator::SingleAllocator(const SingleAllocator &sAllocator)
+    : m_unit(sAllocator.m_unit), IDGenerator(sAllocator) {}
 
 uintptr_t SingleAllocator::allocate(size_t n) {
     DLOG_ASSERT(n == 1, "Allocator can only allocate 1 element");
@@ -77,3 +87,8 @@ uintptr_t SingleAllocator::allocate(size_t n) {
 }
 
 void SingleAllocator::deallocate(uintptr_t ptr) { recycle(ptr / m_unit); }
+
+// size_t SingleAllocator::getUintSize()
+// {
+//     return m_unit;
+// }

@@ -46,6 +46,7 @@ BIND_RPC_TYPE_STRUCT(rpc_master::freePage);
 // BIND_RPC_TYPE_STRUCT(rpc_master::getRackDaemonByPageID);
 BIND_RPC_TYPE_STRUCT(rpc_master::latchRemotePage);
 BIND_RPC_TYPE_STRUCT(rpc_master::unLatchRemotePage);
+BIND_RPC_TYPE_STRUCT(rpc_master::unLatchPageAndBalance);
 
 BIND_RPC_TYPE_STRUCT(rpc_daemon::joinRack);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::crossRackConnect);
@@ -54,6 +55,8 @@ BIND_RPC_TYPE_STRUCT(rpc_daemon::allocPageMemory);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::alloc);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::free);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::getPageRDMARef);
+BIND_RPC_TYPE_STRUCT(rpc_daemon::delPageRDMARef);
+BIND_RPC_TYPE_STRUCT(rpc_daemon::tryMigratePage);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::__testdataSend1);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::__testdataSend2);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::__notifyPerf);

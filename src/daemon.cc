@@ -51,6 +51,10 @@ void DaemonContext::initRPCNexus() {
                                         bind_erpc_func<true>(rpc_daemon::crossRackConnect));
     m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::getPageRDMARef)::rpc_type,
                                         bind_erpc_func<true>(rpc_daemon::getPageRDMARef));
+    m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::delPageRDMARef)::rpc_type,
+                                        bind_erpc_func<true>(rpc_daemon::delPageRDMARef));
+    m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::tryMigratePage)::rpc_type,
+                                        bind_erpc_func<true>(rpc_daemon::tryMigratePage));
 
     erpc::SMHandlerWrap smhw;
     smhw.set_empty();
@@ -207,7 +211,7 @@ ibv_mr *DaemonContext::get_mr(void *p) {
     }
 }
 
-PageMetadata::PageMetadata(size_t slab_size) : slab_allocator(page_size, slab_size) {}
+// PageMetadata::PageMetadata(size_t slab_size) : slab_allocator(page_size, slab_size) {}
 
 RemotePageMetaCache::RemotePageMetaCache(size_t max_recent_record) : stats(max_recent_record) {}
 

@@ -40,6 +40,12 @@ PoolContext::PoolContext(ClientOptions options) {
     __impl->m_msgq_nexus->register_req_func(
         RPC_TYPE_STRUCT(rpc_client::getCurrentWriteData)::rpc_type,
         bind_msgq_rpc_func<false>(rpc_client::getCurrentWriteData));
+    __impl->m_msgq_nexus->register_req_func(
+        RPC_TYPE_STRUCT(rpc_client::getPagePastAccessFreq)::rpc_type,
+        bind_msgq_rpc_func<false>(rpc_client::getPagePastAccessFreq));
+    __impl->m_msgq_nexus->register_req_func(
+        RPC_TYPE_STRUCT(rpc_client::removePageCache)::rpc_type,
+        bind_msgq_rpc_func<false>(rpc_client::removePageCache));
 
     // 3. 发送join rack rpc
     using JoinRackRPC = RPC_TYPE_STRUCT(rpc_daemon::joinRack);
@@ -136,11 +142,21 @@ GAddr PoolContext::Alloc(size_t size) {
 Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
     page_id_t page_id = GetPageID(gaddr);
     offset_t in_page_offset = GetPageOffset(gaddr);
-    offset_t offset;
+    // offset_t offset;
+    LocalPageCache *pageCache;
 
     // TODO: more page
+    SharedMutex *cache_lock;
+    bool ret = __impl->m_ptl_cache_lock.find(page_id, &cache_lock);
+    if (!ret)
+    {
+        cache_lock = new SharedMutex();
+        __impl->m_ptl_cache_lock.insert(page_id, cache_lock);
+    }
+    // 上读锁
+    while (!cache_lock->try_lock_shared()) ;
 
-    bool ret = __impl->m_page_table_cache.find(page_id, &offset);
+    ret = __impl->m_page_table_cache.find(page_id, &pageCache);
     if (!ret) {
         using GetPageRefOrProxyRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageCXLRefOrProxy);
         msgq::MsgBuffer req_raw =
@@ -169,30 +185,54 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
             return Status::OK;
         }
 
-        offset = resp->offset;
+        pageCache = new LocalPageCache(8);
+        pageCache->offset = resp->offset;
+        
         __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
 
-        __impl->m_page_table_cache.insert(page_id, offset);
+        __impl->m_page_table_cache.insert(page_id, pageCache);
+        __impl->m_page.insert(page_id);
 
-        DLOG("get ref: %ld --- %#lx", page_id, offset);
+
+        DLOG("get ref: %ld --- %#lx", page_id, pageCache->offset);
     }
 
     memcpy(buf,
            reinterpret_cast<const void *>(
-               reinterpret_cast<uintptr_t>(__impl->m_cxl_format.page_data_start_addr) + offset +
+               reinterpret_cast<uintptr_t>(__impl->m_cxl_format.page_data_start_addr) + pageCache->offset +
                in_page_offset),
            size);
+
+    // 更新page访问请况统计
+    pageCache->stats.add(getTimestamp());
+    // size_t freq = pageCache->stats.freq();
+    // if (freq>__impl->m_max_freq)
+    // {
+    //     __impl->m_max_freq = freq;
+    //     __impl->m_max_freq_page = page_id;
+    // }
+    // 解锁
+    cache_lock->unlock_shared();
     return Status::OK;
 }
 
 Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
     page_id_t page_id = GetPageID(gaddr);
     offset_t in_page_offset = GetPageOffset(gaddr);
-    offset_t offset;
+    LocalPageCache *pageCache;
 
     // TODO: more page
+    SharedMutex *cache_lock;
+    bool ret = __impl->m_ptl_cache_lock.find(page_id, &cache_lock);
+    if (!ret)
+    {
+        cache_lock = new SharedMutex();
+        __impl->m_ptl_cache_lock.insert(page_id, cache_lock);
+    }
+    // 上读锁
+    while (!cache_lock->try_lock_shared()) ;
 
-    bool ret = __impl->m_page_table_cache.find(page_id, &offset);
+    ret = __impl->m_page_table_cache.find(page_id, &pageCache);
     if (!ret) {
         using GetPageRefOrProxyRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageCXLRefOrProxy);
         msgq::MsgBuffer req_raw =
@@ -222,18 +262,31 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
             return Status::OK;
         }
 
-        offset = resp->offset;
+        pageCache = new LocalPageCache(8);
+        pageCache->offset = resp->offset;
         __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
 
-        __impl->m_page_table_cache.insert(page_id, offset);
+        __impl->m_page_table_cache.insert(page_id, pageCache);
+        __impl->m_page.insert(page_id);
 
-        DLOG("get ref: %ld --- %#lx", page_id, offset);
+        DLOG("get ref: %ld --- %#lx", page_id, pageCache->offset);
     }
 
     memcpy(reinterpret_cast<void *>(
-               reinterpret_cast<uintptr_t>(__impl->m_cxl_format.page_data_start_addr) + offset +
+               reinterpret_cast<uintptr_t>(__impl->m_cxl_format.page_data_start_addr) + pageCache->offset +
                in_page_offset),
            buf, size);
+
+    // 更新page访问请况统计
+    pageCache->stats.add(getTimestamp());
+    // size_t freq = pageCache->stats.freq();
+    // if (freq>__impl->m_max_freq)
+    // {
+    //     __impl->m_max_freq = freq;
+    //     __impl->m_max_freq_page = page_id;
+    // }
+    // 解锁
+    cache_lock->unlock_shared();
     return Status::OK;
 }
 
