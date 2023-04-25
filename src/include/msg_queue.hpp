@@ -5,6 +5,8 @@
 #include <vector>
 
 #include "allocator.hpp"
+#include "concurrent_queue.hpp"
+#include "config.hpp"
 
 /**
  * @brief
@@ -27,14 +29,14 @@ using msgq_handler_t = void (*)(MsgBuffer &req, void *ctx);
 using msgq_callback_t = void (*)(MsgBuffer &resp, void *arg);
 
 struct MsgHeader final {
-    bool invalid_flag : 1;
     enum : uint8_t { REQ, RESP } msg_type : 1;
     uint8_t rpc_type;
-    size_t size : 32;  // 实际数据大小
+    size_t size : 32;          // 实际数据大小
+    offset_t buf_offset : 16;  // 根据MsgQueue::m_ring的地址
     msgq_callback_t cb;
     void *arg;
 
-    uint8_t data[0];
+    static_assert(msgq_ring_buf_len < (1ul << 16), "");
 };
 
 struct MsgBuffer {
@@ -42,36 +44,21 @@ struct MsgBuffer {
     void *get_buf() const;
 
     MsgQueue *m_q;
-    MsgHeader *m_msg;  // 指向MsgHeader的地址
-    size_t m_size;     // 实际数据大小
+    MsgHeader m_msg;
 };
 
 struct MsgQueue final {
-    MsgQueue();
-    ~MsgQueue();
+    MsgQueue() = default;
+    ~MsgQueue() = default;
 
-    MsgHeader *alloc_msg_buffer(size_t size);
-    void enqueue_msg();
-    void dequeue_msg(std::vector<MsgHeader *> &hv);
-    void free_msg_buffer();
+    offset_t alloc_msg_buffer(size_t size);
+    void enqueue_msg(MsgBuffer &msg_buf);
+    uint32_t dequeue_msg(MsgHeader *hv, size_t max_deq);
+    void free_msg_buffer(MsgBuffer &msg_buf);
 
-    union po_val_t {
-        struct {
-            uint32_t pos;
-            uint32_t cnt;
-        };
-        uint64_t raw;
-    };
-
-    volatile po_val_t m_prod_head;
-    volatile po_val_t m_prod_tail;
-    volatile po_val_t m_cons_head;
-    volatile po_val_t m_cons_tail;
-
-    uint8_t m_ring[0];
-
-    MsgHeader *at(size_t i);
-    static void update_ht(volatile po_val_t *ht, volatile po_val_t *ht_);
+    ConcurrentQueue<MsgHeader, 64, ConcurrentQueueProducerMode::MP, ConcurrentQueueConsumerMode::MC>
+        msgq_q;
+    RingAllocator<msgq_ring_buf_len> m_ra;
 };
 
 struct MsgQueueNexus {
@@ -135,20 +122,6 @@ struct MsgQueueRPC {
     MsgQueue *m_send_queue;
     MsgQueue *m_recv_queue;
     void *m_ctx;
-};
-
-struct MsgQueueManager {
-    const static size_t RING_BUF_LEN = 2048;
-    const static size_t RING_ELEM_SIZE = sizeof(MsgQueue) + RING_BUF_LEN;
-
-    void *start_addr;
-    uint32_t ring_cnt;
-    std::unique_ptr<SingleAllocator> msgq_allocator;
-    std::unique_ptr<MsgQueueNexus> nexus;
-    std::unique_ptr<MsgQueueRPC> rpc;
-
-    MsgQueue *allocQueue();
-    void freeQueue(MsgQueue *msgq);
 };
 
 }  // namespace msgq

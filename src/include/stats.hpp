@@ -31,6 +31,7 @@ class Histogram {
 class FreqStats {
    public:
     FreqStats(size_t max_recent_record);
+    FreqStats();
     ~FreqStats() = default;
 
     void add(uint64_t t);

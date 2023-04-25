@@ -16,8 +16,6 @@
 
 using namespace std::chrono_literals;
 
-DaemonContext::DaemonContext() : m_cort_sched(8) {}
-
 DaemonContext &DaemonContext::getInstance() {
     static DaemonContext daemon_ctx;
     return daemon_ctx;
@@ -40,6 +38,10 @@ void DaemonContext::initCXLPool() {
 
     m_current_used_page_num = 0;
     m_current_used_swap_page_num = 0;
+}
+
+void DaemonContext::initCoroutinePool() {
+    m_cort_sched.reset(new CortScheduler(m_options.prealloc_cort_num));
 }
 
 void DaemonContext::initRPCNexus() {
@@ -67,7 +69,7 @@ void DaemonContext::initRPCNexus() {
     m_msgq_manager.nexus.reset(new msgq::MsgQueueNexus(m_cxl_format.msgq_zone_start_addr));
     m_msgq_manager.start_addr = m_cxl_format.msgq_zone_start_addr;
     m_msgq_manager.msgq_allocator.reset(
-        new SingleAllocator(m_options.cxl_msgq_size, msgq::MsgQueueManager::RING_ELEM_SIZE));
+        new SingleAllocator(m_options.cxl_msgq_size, MsgQueueManager::RING_ELEM_SIZE));
 
     msgq::MsgQueue *public_q = m_msgq_manager.allocQueue();
     DLOG_ASSERT(public_q == m_msgq_manager.nexus->m_public_msgq);
@@ -83,6 +85,8 @@ void DaemonContext::initRPCNexus() {
     m_msgq_manager.nexus->register_req_func(
         RPC_TYPE_STRUCT(rpc_daemon::getPageCXLRefOrProxy)::rpc_type,
         bind_msgq_rpc_func<false>(rpc_daemon::getPageCXLRefOrProxy));
+    m_msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::allocPage)::rpc_type,
+                                            bind_msgq_rpc_func<false>(rpc_daemon::allocPage));
 
     m_msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::__testdataSend1)::rpc_type,
                                             bind_msgq_rpc_func<false>(rpc_daemon::__testdataSend1));
@@ -90,6 +94,8 @@ void DaemonContext::initRPCNexus() {
                                             bind_msgq_rpc_func<false>(rpc_daemon::__testdataSend2));
     m_msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::__notifyPerf)::rpc_type,
                                             bind_msgq_rpc_func<false>(rpc_daemon::__notifyPerf));
+    m_msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::__stopPerf)::rpc_type,
+                                            bind_msgq_rpc_func<false>(rpc_daemon::__stopPerf));
 }
 
 void DaemonContext::initRDMARC() {
@@ -175,11 +181,20 @@ void DaemonContext::connectWithMaster() {
 }
 
 void DaemonContext::registerCXLMR() {
-    for (uintptr_t cxl_start_ptr = reinterpret_cast<uintptr_t>(m_cxl_format.start_addr);
-         cxl_start_ptr < reinterpret_cast<uintptr_t>(m_cxl_format.end_addr);
-         cxl_start_ptr += mem_region_aligned_size) {
+    uintptr_t cxl_start_ptr = reinterpret_cast<uintptr_t>(m_cxl_format.start_addr);
+    while (cxl_start_ptr < reinterpret_cast<uintptr_t>(m_cxl_format.end_addr)) {
         ibv_mr *mr = m_listen_conn.register_memory(reinterpret_cast<void *>(cxl_start_ptr),
                                                    mem_region_aligned_size);
+        m_rdma_page_mr_table.push_back(mr);
+        cxl_start_ptr += mem_region_aligned_size;
+    }
+
+    // 继续注册尾部不足mem region的内存
+    if (cxl_start_ptr != reinterpret_cast<uintptr_t>(m_cxl_format.end_addr)) {
+        cxl_start_ptr -= mem_region_aligned_size;
+        ibv_mr *mr = m_listen_conn.register_memory(
+            reinterpret_cast<void *>(cxl_start_ptr),
+            reinterpret_cast<uintptr_t>(m_cxl_format.end_addr) - cxl_start_ptr);
         m_rdma_page_mr_table.push_back(mr);
     }
 }
@@ -188,15 +203,14 @@ DaemonConnection *DaemonContext::get_connection(mac_id_t mac_id) {
     DLOG_ASSERT(mac_id != m_daemon_id, "Can't find self connection");
     if (mac_id == master_id) {
         return &m_master_connection;
-    } else {
-        DaemonConnection *ctx;
-        bool ret = m_connect_table.find(mac_id, &ctx);
-        DLOG_ASSERT(ret, "Can't find mac %d", mac_id);
-        return ctx;
     }
+
+    auto it = m_connect_table.find(mac_id);
+    DLOG_ASSERT(it != m_connect_table.end(), "Can't find mac %d", mac_id);
+    return it->second;
 }
 
-CortScheduler &DaemonContext::get_cort_sched() { return m_cort_sched; }
+CortScheduler &DaemonContext::get_cort_sched() { return *m_cort_sched; }
 
 erpc::IBRpcWrap &DaemonContext::get_erpc() { return m_erpc_ctx.rpc_set[0]; }
 
@@ -211,9 +225,19 @@ ibv_mr *DaemonContext::get_mr(void *p) {
     }
 }
 
-// PageMetadata::PageMetadata(size_t slab_size) : slab_allocator(page_size, slab_size) {}
-
 RemotePageMetaCache::RemotePageMetaCache(size_t max_recent_record) : stats(max_recent_record) {}
+
+msgq::MsgQueue *MsgQueueManager::allocQueue() {
+    uintptr_t ring_off = msgq_allocator->allocate(1);
+    DLOG_ASSERT(ring_off != -1, "Can't alloc msg queue");
+    msgq::MsgQueue *r =
+        reinterpret_cast<msgq::MsgQueue *>(reinterpret_cast<uintptr_t>(start_addr) + ring_off);
+    new (r) msgq::MsgQueue();
+    ring_cnt++;
+    return r;
+}
+
+void MsgQueueManager::freeQueue(msgq::MsgQueue *msgq) { DLOG_FATAL("Not Support"); }
 
 int main(int argc, char *argv[]) {
     cmdline::parser cmd;
@@ -241,20 +265,22 @@ int main(int argc, char *argv[]) {
     options.swap_zone_size = 2 << 20;
     options.max_client_limit = 2;  // 暂时未使用
     options.cxl_msgq_size = 5 << 10;
+    options.prealloc_cort_num = 8;
 
-    DaemonContext &daemon_ctx = DaemonContext::getInstance();
-    daemon_ctx.m_options = options;
+    DaemonContext &daemon_context = DaemonContext::getInstance();
+    daemon_context.m_options = options;
 
-    daemon_ctx.initCXLPool();
-    daemon_ctx.initRDMARC();
-    daemon_ctx.initRPCNexus();
-    daemon_ctx.connectWithMaster();
-    daemon_ctx.registerCXLMR();
+    daemon_context.initCXLPool();
+    daemon_context.initCoroutinePool();
+    daemon_context.initRDMARC();
+    daemon_context.initRPCNexus();
+    daemon_context.connectWithMaster();
+    daemon_context.registerCXLMR();
 
     while (true) {
-        daemon_ctx.m_msgq_manager.rpc->run_event_loop_once();
-        daemon_ctx.get_erpc().run_event_loop_once();
-        daemon_ctx.get_cort_sched().runOnce();
+        daemon_context.m_msgq_manager.rpc->run_event_loop_once();
+        daemon_context.get_erpc().run_event_loop_once();
+        daemon_context.get_cort_sched().runOnce();
     }
 
     return 0;

@@ -27,22 +27,88 @@ IDGenerator::id_t IDGenerator::gen() {
         return -1;
     }
 
+    std::lock_guard<Mutex> guard(m_lck);
+
     while (true) {
         int idx = ffsll(~m_bset[m_gen_cur]);
         if (idx == 0) {
             m_gen_cur = (m_gen_cur + 1) % m_bset.size();
         } else {
             ++m_size;
-            m_bset[m_gen_cur] |= (1ul << (idx - 1));
+            m_bset[m_gen_cur] |= (1ull << (idx - 1));
             return m_gen_cur * 64 + idx - 1;
         }
     }
 }
 
+IDGenerator::id_t IDGenerator::multiGen(size_t count) {
+    if (count == 1) {
+        return gen();
+    }
+
+    if (UNLIKELY(m_size + count > m_capacity)) {
+        return -1;
+    }
+
+    std::lock_guard<Mutex> guard(m_lck);
+
+    id_t start = -1;
+    size_t c = 0;
+    size_t m_gen_cur_tmp = m_gen_cur;
+    do {
+        // TODO: ffsll优化
+        for (int j = 0; j < 64; j++) {
+            if ((m_bset[m_gen_cur] & (1ull << j)) == 0) {
+                if (c == 0) {
+                    start = m_gen_cur * 64 + j;
+                }
+                c++;
+                if (c == count) {
+                    // TODO: 赋值展开
+                    for (size_t k = start; k < start + count; k++) {
+                        m_bset[k / 64] |= (1ull << (k % 64));
+                    }
+                    m_size += count;
+                    return start;
+                }
+            } else {
+                c = 0;
+            }
+        }
+        m_gen_cur = (m_gen_cur + 1) % m_bset.size();
+
+        // 防止回环
+        if (m_gen_cur == 0) {
+            c = 0;
+        }
+    } while (m_gen_cur != m_gen_cur_tmp);
+
+    return -1;
+}
+
 void IDGenerator::recycle(IDGenerator::id_t id) {
     DLOG_ASSERT(m_bset[id / 64] & (1ul << (id & 0x3F)), "IDGenerator double recycle");
-    m_bset[id / 64] ^= (1ul << (id & 0x3F));
+
+    std::lock_guard<Mutex> guard(m_lck);
+
+    m_bset[id / 64] ^= (1ul << (id % 64));
     --m_size;
+}
+
+void IDGenerator::multiRecycle(id_t id, size_t count) {
+    if (count == 1) {
+        recycle(id);
+        return;
+    }
+
+    std::lock_guard<Mutex> guard(m_lck);
+
+    while (count--) {
+        DLOG_ASSERT(m_bset[id / 64] & (1ul << (id & 0x3F)), "IDGenerator double recycle");
+        m_bset[id / 64] ^= (1ul << (id % 64));
+        id++;
+    }
+    m_size -= count;
 }
 
 bool IDGenerator::empty() const { return size() == 0; }
@@ -54,6 +120,8 @@ size_t IDGenerator::size() const { return m_size; }
 size_t IDGenerator::capacity() const { return m_capacity; }
 
 void IDGenerator::addCapacity(size_t n) {
+    std::lock_guard<Mutex> guard(m_lck);
+
     m_capacity += n;
     if (m_bset.capacity() * 64 < m_capacity) {
         m_bset.resize(div_ceil(m_capacity, 64), 0);

@@ -49,32 +49,34 @@ JoinClientReply joinClient(MasterContext& master_context,
                            MasterToClientConnection& client_connection, JoinClientRequest& req);
 
 struct AllocPageRequest : public RequestMsg {
-    size_t slab_size;
+    size_t count;
 };
 struct AllocPageReply : public ResponseMsg {
-    page_id_t page_id;
+    page_id_t start_page_id;  // 分配的起始页id
+    size_t start_count;       // 实际在请求方rack分配的个数
 };
 /**
  * @brief
- * 申请一个page。该操作会希望在daemon端调用`allocPageMemory()`进行分配CXL物理地址。如果该daemon已满，本操作会随机向其他daemon发送该函数进行分配，此时原daemon不应将page
- * id加入到Page Table中。
+ * 申请一个page。该操作会希望在daemon端调用`allocPageMemory()`进行分配CXL物理地址。
+ * 如果该daemon已满，本操作会随机向其他daemon发送该函数进行分配。
  *
  * @param master_context
  * @param daemon_connection
  * @param req
- * @return AllocPageReply 如果page被派到daemon上，则`need_self_alloc_page_memory`为true
+ * @return AllocPageReply
  */
 AllocPageReply allocPage(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
                          AllocPageRequest& req);
 
 struct FreePageRequest : public RequestMsg {
-    page_id_t page_id;
+    page_id_t start_page_id;
+    size_t count;
 };
 struct FreePageReply : public ResponseMsg {
     bool ret;
 };
 /**
- * @brief 释放page。该操作需要保证daemon本身持有这个页时才能释放这个page。
+ * @brief 释放page。
  *
  * @param master_context
  * @param daemon_connection

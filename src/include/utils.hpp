@@ -22,7 +22,7 @@
 #endif  // NDEBUG
 
 template <typename D>
-D div_ceil(D x, uint64_t div) {
+constexpr D div_ceil(D x, uint64_t div) {
     return (x + div - 1) / div;
 }
 
@@ -167,8 +167,8 @@ struct NOCOPYABLE {
     ~NOCOPYABLE() = default;
     NOCOPYABLE(const NOCOPYABLE &) = delete;
     NOCOPYABLE(NOCOPYABLE &&) = delete;
-    NOCOPYABLE& operator=(const NOCOPYABLE&) = delete;
-    NOCOPYABLE& operator=(NOCOPYABLE&&) = delete;
+    NOCOPYABLE &operator=(const NOCOPYABLE &) = delete;
+    NOCOPYABLE &operator=(NOCOPYABLE &&) = delete;
 };
 
 template <typename R, typename... Args>
@@ -188,6 +188,35 @@ template <typename R, typename... Args>
 struct function_traits<R (*)(Args...)> : public function_traits_helper<R, Args...> {};
 template <typename R, typename... Args>
 struct function_traits<R (&)(Args...)> : public function_traits_helper<R, Args...> {};
+
+struct atomic_po_val_t {
+    union {
+        struct {
+            uint32_t pos;
+            uint32_t cnt;
+        };
+        uint64_t raw;
+    };
+
+    inline atomic_po_val_t load(std::memory_order __m = std::memory_order_seq_cst) const {
+        atomic_po_val_t o;
+        o.raw = __atomic_load_n(&raw, (int)__m);
+        return o;
+    }
+
+    inline atomic_po_val_t fetch_add_one_both(std::memory_order __m = std::memory_order_seq_cst) {
+        atomic_po_val_t o;
+        o.raw = __atomic_fetch_add(&raw, (1ull << 32) | 1ull, (int)__m);
+        return o;
+    }
+
+    inline bool compare_exchange_weak(atomic_po_val_t &expected, atomic_po_val_t desired,
+                               std::memory_order __s = std::memory_order_seq_cst,
+                               std::memory_order __f = std::memory_order_seq_cst) {
+        return __atomic_compare_exchange_n(&raw, &expected.raw, desired.raw, true, (int)__s,
+                                           (int)__f);
+    }
+};
 
 inline void __DEBUG_START_PERF() {
     system(("sudo perf record -F 99 -g -p " + std::to_string(getpid()) + " &").c_str());

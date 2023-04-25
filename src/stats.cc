@@ -71,6 +71,7 @@ int Histogram::getPercentile(double percentile) const {
 int Histogram::getBucket(double value) const { return (value - m_minValue) / m_bucketWidth; }
 
 FreqStats::FreqStats(size_t max_recent_record) : m_cnt(0), m_max_recent_record(max_recent_record) {}
+FreqStats::FreqStats() : m_cnt(0), m_max_recent_record(8) {}
 
 void FreqStats::add(uint64_t t) {
     if (m_time_q.size() >= m_max_recent_record) {

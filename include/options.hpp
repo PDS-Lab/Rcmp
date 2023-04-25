@@ -18,8 +18,8 @@ class ClientOptions {
 
 class DaemonOptions {
    public:
-    std::string master_ip;       // MN的IP
-    uint16_t master_port;        // MN的端口
+    std::string master_ip;  // MN的IP
+    uint16_t master_port;   // MN的端口
 
     std::string daemon_ip;
     std::string daemon_rdma_ip;  // daemon的rdma网卡ip
@@ -34,6 +34,8 @@ class DaemonOptions {
 
     size_t max_client_limit;  // 最大client数量限制
     size_t swap_zone_size;    // 交换区大小
+
+    int prealloc_cort_num;  // 预分配协程个数
 };
 
 class MasterOptions {

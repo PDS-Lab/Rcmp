@@ -17,7 +17,8 @@ constexpr static GAddr GNullPtr = 0;
 class PoolContext;
 
 /**
- * @brief 打开内存池。成功后返回内存池上下文指针，否则返回`nullptr`。返回对象由new操作生成，应由`Close()`关闭并删除
+ * @brief
+ * 打开内存池。成功后返回内存池上下文指针，否则返回`nullptr`。返回对象由new操作生成，应由`Close()`关闭并删除
  *
  * @param master_ip MN的IP地址
  * @param master_port MN的端口号
@@ -36,7 +37,7 @@ class PoolContext {
    private:
     /**
      * @brief `PoolContext`内部实现
-     * 
+     *
      */
     class PoolContextImpl;
 
@@ -62,37 +63,63 @@ class PoolContext {
     Status Read(GAddr gaddr, size_t size, void *buf);
     /**
      * @brief 从`buf`写入`gaddr`地址、大小为`size`的数据
-     * 
-     * @param gaddr 
-     * @param size 
-     * @param buf 
-     * @return Status 
+     *
+     * @param gaddr
+     * @param size
+     * @param buf
+     * @return Status
      */
     Status Write(GAddr gaddr, size_t size, void *buf);
     /**
      * @brief 释放内存
-     * 
-     * @param gaddr 
-     * @param size 
-     * @return Status 
+     *
+     * @param gaddr
+     * @param size
+     * @return Status
      */
     Status Free(GAddr gaddr, size_t size);
 
     /**
-     * @brief 测试数据发送
-     * 
-     * @param array 
+     * @brief 申请连续内存页。内存申请策略按照客户端所在机柜就近分配。申请失败返回`GNullPtr`
+     *
      * @param size
+     * @return GAddr
+     */
+    GAddr AllocPage(size_t count);
+
+    /**
+     * @brief 释放连续内存页。
+     * 
+     * @param gaddr 
      * @return Status 
+     */
+    Status FreePage(GAddr gaddr, size_t count);
+
+    template <typename T>
+    Status CAS(GAddr gaddr, T &expected, T desired, bool &ret) {
+        static_assert(sizeof(T) <= 8, "The compare and swap size mustn't greater than 8B.");
+        return CAS(gaddr, &expected, &desired, sizeof(T), ret);
+    }
+
+    Status CAS(GAddr gaddr, void *expected, void *desired, size_t s, bool &ret);
+
+    /*********************** for test ***********************/
+
+    /**
+     * @brief 测试数据发送
+     *
+     * @param array
+     * @param size
+     * @return Status
      */
     Status __TestDataSend1(int *array, size_t size);
 
     /**
      * @brief 测试数据发送
-     * 
-     * @param array 
+     *
+     * @param array
      * @param size
-     * @return Status 
+     * @return Status
      */
     Status __TestDataSend2(int *array, size_t size);
 

@@ -48,6 +48,7 @@ struct CortTask {
 struct CortScheduler {
     CortScheduler(int prealloc_cort);
 
+    bool empty() const;
     void addTask(std::function<void()> fn);
     void runOnce();
 

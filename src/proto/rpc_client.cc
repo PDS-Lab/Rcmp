@@ -21,17 +21,18 @@ GetPagePastAccessFreqReply getPagePastAccessFreq(ClientContext& client_context,
     page_id_t oldest_page = 0;
     uint64_t last_time = UINT64_MAX;
     uint64_t last_time_tmp = 0;
-    bool ret;
 
     // m_page中存的是该CN访问过的所有Page的id
     for (auto page_id: client_context.m_page)
     {
-        ret = client_context.m_ptl_cache_lock.find(page_id, &cache_lock);
-        DLOG_ASSERT(ret, "Can't find page %lu's cache lock.", page_id);
+        auto p_lock = client_context.m_ptl_cache_lock.find(page_id);
+        DLOG_ASSERT(p_lock != client_context.m_ptl_cache_lock.end(), "Can't find page %lu's cache lock.", page_id);
+        cache_lock = p_lock->second;
         while (!cache_lock->try_lock_shared()) ;
 
-        ret = client_context.m_page_table_cache.find(page_id, &pageCache);
-        DLOG_ASSERT(ret, "Can't find page %lu's cache.", page_id);
+        auto p_cache = client_context.m_page_table_cache.find(page_id);
+        DLOG_ASSERT(p_cache != client_context.m_page_table_cache.end(), "Can't find page %lu's cache.", page_id);
+        pageCache = p_cache->second;
         last_time_tmp = pageCache->stats.last();
 
         cache_lock->unlock_shared();
@@ -53,15 +54,17 @@ RemovePageCacheReply removePageCache(ClientContext& client_context,
                                    ClientToDaemonConnection& daemon_connection,
                                    RemovePageCacheRequest& req) {
     SharedMutex *cache_lock;
-    bool ret = client_context.m_ptl_cache_lock.find(req.page_id, &cache_lock);
-    DLOG_ASSERT(ret, "Can't find page %lu's cache lock.", req.page_id);
+    auto p_lock = client_context.m_ptl_cache_lock.find(req.page_id);
+    DLOG_ASSERT(p_lock != client_context.m_ptl_cache_lock.end(), "Can't find page %lu's cache lock.", req.page_id);
+    cache_lock = p_lock->second;
     // 上写锁
     while (!cache_lock->try_lock()) ;
 
 
     LocalPageCache *pageCache;
-    ret = client_context.m_page_table_cache.find(req.page_id, &pageCache);
-    DLOG_ASSERT(ret, "Can't find page %lu's cache.", req.page_id);
+    auto p_cache = client_context.m_page_table_cache.find(req.page_id);
+    DLOG_ASSERT(p_cache != client_context.m_page_table_cache.end(), "Can't find page %lu's cache.", req.page_id);
+    pageCache = p_cache->second;
 
     // 清除该page的cache
     client_context.m_page_table_cache.erase(req.page_id);

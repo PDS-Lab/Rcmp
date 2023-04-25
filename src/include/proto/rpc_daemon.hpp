@@ -89,8 +89,8 @@ GetPageCXLRefOrProxyReply getPageCXLRefOrProxy(DaemonContext& daemon_context,
                                                GetPageCXLRefOrProxyRequest& req);
 
 struct AllocPageMemoryRequest : public RequestMsg {
-    page_id_t page_id;
-    // size_t slab_size;
+    page_id_t start_page_id;
+    size_t count;
 };
 struct AllocPageMemoryReply : public ResponseMsg {
     bool ret;
@@ -151,6 +151,42 @@ struct AllocReply : public ResponseMsg {
  */
 AllocReply alloc(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
                  AllocRequest& req);
+struct AllocPageRequest : public RequestMsg {
+    size_t count;
+};
+struct AllocPageReply : public ResponseMsg {
+    page_id_t start_page_id;  // 分配的起始页id
+    size_t start_count;       // 实际在请求方rack分配的个数
+};
+/**
+ * @brief
+ * 申请一个page
+ *
+ * @param daemon_context
+ * @param client_connection
+ * @param req
+ * @return AllocPageReply
+ */
+AllocPageReply allocPage(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
+                         AllocPageRequest& req);
+
+struct FreePageRequest : public RequestMsg {
+    page_id_t start_page_id;
+    size_t count;
+};
+struct FreePageReply : public ResponseMsg {
+    bool ret;
+};
+/**
+ * @brief 释放page。
+ *
+ * @param master_context
+ * @param daemon_connection
+ * @param req
+ */
+FreePageReply freePage(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
+                       FreePageRequest& req);
+
 
 struct FreeRequest : public RequestMsg {
     rchms::GAddr gaddr;

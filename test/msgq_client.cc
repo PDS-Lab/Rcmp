@@ -1,6 +1,5 @@
 #include <cassert>
 
-#include "../test/common_sta.h"
 #include "log.hpp"
 #include "rchms.hpp"
 

@@ -114,26 +114,11 @@ GetPageCXLRefOrProxyReply getPageCXLRefOrProxy(DaemonContext& daemon_context,
     offset_t page_offset = GetPageOffset(req.gaddr);
     GetPageCXLRefOrProxyReply* reply_ptr;
 retry:
-    bool ret = daemon_context.m_page_table.find(page_id, &page_metadata);
-    // DLOG("getPageCXLRefOrProxy: m_page_table.find page %lu, ret = %d", page_id, ret);
-    if (ret) {
-        page_metadata->ref_client.insert(&client_connection);
-
-        reply_ptr = req.alloc_flex_resp(0);
-
-        reply_ptr->refs = true;
-        reply_ptr->offset = page_metadata->cxl_memory_offset;
-        return {};
-    }
-
-    RemotePageMetaCache* rem_page_md_cache;
     SharedMutex* ref_lock;
 
-    ret = daemon_context.m_page_ref_lock.find(page_id, &ref_lock);
-    if (!ret) {
-        ref_lock = new SharedMutex();
-        daemon_context.m_page_ref_lock.insert(page_id, ref_lock);
-    }
+    auto p_lock =
+        daemon_context.m_page_ref_lock.find_or_emplace(page_id, []() { return new SharedMutex(); });
+    ref_lock = p_lock.first->second;
 
     // 给page ref加读锁
     if (!ref_lock->try_lock_shared()) {
@@ -141,12 +126,11 @@ retry:
         this_cort::yield();
     }
 
-    // 判断是否已迁移到本地，若已迁移到本地，则m_hot_stats中对应的page
-    // ref已被删除；但能够在本地的page table中找到
-    ret = daemon_context.m_page_table.find(page_id, &page_metadata);
-    if (ret) {
-        // 若已迁移到本地，给page ref取消读锁
-        ref_lock->unlock_shared();
+    auto it = daemon_context.m_page_table.find(page_id);
+
+    if (it != daemon_context.m_page_table.end()) {
+        page_metadata = it->second;
+
         page_metadata->ref_client.insert(&client_connection);
 
         reply_ptr = req.alloc_flex_resp(0);
@@ -154,15 +138,14 @@ retry:
         reply_ptr->refs = true;
         reply_ptr->offset = page_metadata->cxl_memory_offset;
 
+        ref_lock->unlock_shared();
         return {};
     }
 
-    ret = daemon_context.m_hot_stats.find(page_id, &rem_page_md_cache);
-
-    if (!ret) {
-        rem_page_md_cache = new RemotePageMetaCache(8);
-        daemon_context.m_hot_stats.insert(page_id, rem_page_md_cache);
-    }
+    RemotePageMetaCache* rem_page_md_cache;
+    auto p = daemon_context.m_hot_stats.find_or_emplace(
+        page_id, []() { return new RemotePageMetaCache(8); });
+    rem_page_md_cache = p.first->second;
 
     auto& rpc = daemon_context.get_erpc();
     DaemonToDaemonConnection* dest_daemon_conn;
@@ -193,8 +176,10 @@ retry:
 
         // printf("freq = %ld, rkey = %d, addr = %ld\n", rem_page_md_cache->stats.freq(),
         //    rem_page_md_cache->remote_page_rkey, rem_page_md_cache->remote_page_addr);
-        // 如果是第一次访问该page
-        if (rem_page_md_cache->stats.freq() == 0) {
+        if (rem_page_md_cache->stats.freq() > 0) {
+            dest_daemon_conn = rem_page_md_cache->remote_page_daemon_conn;
+        } else {
+            // 如果是第一次访问该page
             // 2. 获取mn上page的daemon，并锁定该page
             using LatchRemotePageRPC = RPC_TYPE_STRUCT(rpc_master::latchRemotePage);
             auto req_raw = rpc.alloc_msg_buffer_or_die(sizeof(LatchRemotePageRPC::RequestType));
@@ -220,13 +205,9 @@ retry:
 
             // 3. 获取对端连接
             DaemonConnection* dest_daemon_conn_tmp;
-            ret = daemon_context.m_connect_table.find(resp->dest_daemon_id, &dest_daemon_conn_tmp);
-            // DLOG("m_connect_table.find: resp->dest_daemon_id = %u, ret = %d,
-            // dest_daemon_erpc_port = %d", resp->dest_daemon_id, ret, resp->dest_daemon_erpc_port);
-            if (!ret) {
+            auto p = daemon_context.m_connect_table.find_or_emplace(resp->dest_daemon_id, [&]() {
                 // 与该daemon建立erpc与RDMA RC
                 DaemonToDaemonConnection* dd_conn = new DaemonToDaemonConnection();
-                dest_daemon_conn_tmp = dd_conn;
                 std::string server_uri = resp->dest_daemon_ipv4.get_string() + ":" +
                                          std::to_string(resp->dest_daemon_erpc_port);
                 // DLOG("server_uri = %s", server_uri.c_str());
@@ -237,8 +218,6 @@ retry:
                 dd_conn->port = resp->dest_daemon_erpc_port;
                 // DLOG("First connect daemon: %u. peer_session = %d", dd_conn->daemon_id,
                 // dd_conn->peer_session);
-
-                daemon_context.m_connect_table.insert(resp->dest_daemon_id, dest_daemon_conn_tmp);
 
                 using CrossRackConnectRPC = RPC_TYPE_STRUCT(rpc_daemon::crossRackConnect);
 
@@ -281,7 +260,11 @@ retry:
                 dd_conn->rdma_conn->connect(peer_ip, peer_port, &param, sizeof(param));
 
                 DLOG("Connection with daemon %d OK", dd_conn->daemon_id);
-            }
+
+                return dd_conn;
+            });
+
+            dest_daemon_conn_tmp = p.first->second;
 
             rpc.free_msg_buffer(req_raw);
             rpc.free_msg_buffer(resp_raw);
@@ -289,8 +272,6 @@ retry:
             dest_daemon_conn = dynamic_cast<DaemonToDaemonConnection*>(dest_daemon_conn_tmp);
 
             // 4. 获取远端内存rdma ref
-            //// 通过比较page version减少获取rdma ref次数
-            // if (rem_page_md_cache->page_version != page_cur_version) {
             {
                 using GetPageRDMARefRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageRDMARef);
 
@@ -321,8 +302,6 @@ retry:
                 rpc.free_msg_buffer(resp_raw);
                 // printf("Get rdma ref\n");
             }
-        } else {
-            dest_daemon_conn = rem_page_md_cache->remote_page_daemon_conn;
         }
 
         // 5. unlatch
@@ -457,10 +436,6 @@ retry:
         // 给page ref取消读锁
         ref_lock->unlock_shared();
         // 检查此page是否已经被其他交换走?? 如何确保没有其他cn的读写会造成页的迁移？？
-        // ret = daemon_context.m_hot_stats.find(page_id, &rem_page_md_cache);
-        // if (!ret) {
-        //     goto retry;
-        // }
 
         dest_daemon_conn = rem_page_md_cache->remote_page_daemon_conn;
 
@@ -472,22 +447,26 @@ retry:
         ibv_mr* mr;
         // 交换的情况，需要将自己的一个page交换到对方, 这个读写过程由对方完成
         AllocPageMemoryRequest inner_req;
-        inner_req.page_id = page_id;  // 此时以要换进页的page id来申请分配一个页
+        inner_req.start_page_id = page_id;  // 此时以要换进页的page id来申请分配一个页
+        inner_req.count = 1;  // 此时以要换进页的page id来申请分配一个页
         inner_req.mac_id = daemon_context.m_daemon_id;
 
         if (daemon_context.m_max_data_page_num > daemon_context.m_current_used_page_num) {
             // page还有剩余，则直接迁移到本地page上
+            rem_page_md_cache = p.first->second;
             allocPageMemory(daemon_context, daemon_context.m_master_connection, inner_req);
-            bool ret = daemon_context.m_page_table.find(page_id, &page_metadata);
-            DLOG_ASSERT(ret, "Can't find page %lu", page_id);
+            auto p = daemon_context.m_page_table.find(page_id);
+            DLOG_ASSERT(p != daemon_context.m_page_table.end(), "Can't find page %lu", page_id);
+            page_metadata = p->second;
             // DLOG("DN %u: swap page: allocPageMemory Page %lu", daemon_context.m_daemon_id,
             // page_id);
 
         } else {
             // 若page没有剩余，先迁移到swap区，之后再交换
             allocSwapPageMemory(daemon_context, inner_req);
-            bool ret = daemon_context.m_swap_page_table.find(page_id, &page_metadata);
-            DLOG_ASSERT(ret, "Can't find swap page %lu", page_id);
+            auto p = daemon_context.m_swap_page_table.find(page_id);
+            DLOG_ASSERT(p != daemon_context.m_swap_page_table.end(), "Can't find swap page %lu", page_id);
+            page_metadata = p->second;
             // DLOG("DN %u: swap page: allocSwapPageMemory Page %lu", daemon_context.m_daemon_id,
             //  page_id);
             /* 2
@@ -560,7 +539,8 @@ retry:
             // 通知当前rack下所有访问过该page的client删除相应的缓存
             delPageCacheBroadcast(daemon_context, swap_page_id, page_metadata);
 
-            ret = daemon_context.m_page_table.find(swap_page_id, &swap_page_metadata);
+            auto p_swap_page_meta = daemon_context.m_page_table.find(swap_page_id);
+            swap_page_metadata = p_swap_page_meta->second;
             swapout_addr =
                 reinterpret_cast<uintptr_t>(daemon_context.m_cxl_format.page_data_start_addr) +
                 swap_page_metadata->cxl_memory_offset;
@@ -726,98 +706,82 @@ retry:
 AllocPageMemoryReply allocPageMemory(DaemonContext& daemon_context,
                                      DaemonToMasterConnection& master_connection,
                                      AllocPageMemoryRequest& req) {
-    DLOG_ASSERT(daemon_context.m_current_used_page_num < daemon_context.m_max_data_page_num,
-                "Can't allocate more page memory");
+    DLOG_ASSERT(
+        daemon_context.m_current_used_page_num + req.count < daemon_context.m_max_data_page_num,
+        "Can't allocate more page memory");
 
-    offset_t cxl_memory_offset = daemon_context.m_cxl_page_allocator->allocate(1);
-    DLOG_ASSERT(cxl_memory_offset != -1, "Can't allocate cxl memory");
-    daemon_context.m_current_used_page_num++;
+    for (size_t c = 0; c < req.count; ++c) {
+        offset_t cxl_memory_offset = daemon_context.m_cxl_page_allocator->allocate(1);
+        DLOG_ASSERT(cxl_memory_offset != -1, "Can't allocate cxl memory");
+        daemon_context.m_current_used_page_num++;
 
-    PageMetadata* page_metadata = new PageMetadata();
-    page_metadata->cxl_memory_offset = cxl_memory_offset;
+        PageMetadata* page_metadata = new PageMetadata();
+        page_metadata->cxl_memory_offset = cxl_memory_offset;
 
-    daemon_context.m_page_table.insert(req.page_id, page_metadata);
+        daemon_context.m_page_table.insert(req.start_page_id + c, page_metadata);
 
-    DLOG("new page %ld ---> %#lx", req.page_id, cxl_memory_offset);
+        DLOG("new page %ld ---> %#lx", req.start_page_id + c, cxl_memory_offset);
+    }
 
     AllocPageMemoryReply reply;
     reply.ret = true;
     return reply;
 }
 
+AllocPageReply allocPage(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
+                         AllocPageRequest& req) {
+    DLOG("alloc %lu new pages", req.count);
+
+    // 向Master调用allocPage
+    auto& rpc = daemon_context.get_erpc();
+
+    using PageAllocRPC = RPC_TYPE_STRUCT(rpc_master::allocPage);
+
+    auto req_raw = rpc.alloc_msg_buffer_or_die(sizeof(PageAllocRPC::RequestType));
+    auto resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(PageAllocRPC::ResponseType));
+
+    auto page_alloc_req = reinterpret_cast<PageAllocRPC::RequestType*>(req_raw.get_buf());
+    page_alloc_req->mac_id = daemon_context.m_daemon_id;
+    page_alloc_req->count = req.count;
+
+    std::promise<void> pro;
+    std::future<void> fu = pro.get_future();
+    rpc.enqueue_request(daemon_context.m_master_connection.peer_session, PageAllocRPC::rpc_type,
+                        req_raw, resp_raw, erpc_general_promise_flag_cb, static_cast<void*>(&pro));
+
+    // 等待期间可能出现由于本地page不足而发生page swap
+    this_cort::reset_resume_cond(
+        [&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
+    this_cort::yield();
+
+    auto resp = reinterpret_cast<PageAllocRPC::ResponseType*>(resp_raw.get_buf());
+
+    page_id_t start_page_id = resp->start_page_id;
+
+    AllocPageMemoryRequest local_req;
+    local_req.mac_id = daemon_context.m_daemon_id;
+    local_req.start_page_id = start_page_id;
+    local_req.count = resp->start_count;
+    allocPageMemory(daemon_context, daemon_context.m_master_connection, local_req);
+
+    rpc.free_msg_buffer(req_raw);
+    rpc.free_msg_buffer(resp_raw);
+
+    AllocPageReply reply;
+    reply.start_page_id = start_page_id;
+    return reply;
+}
+
+FreePageReply freePage(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
+                       FreePageRequest& req) {
+    DLOG_FATAL("Not Support");
+}
+
+
+
 AllocReply alloc(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
                  AllocRequest& req) {
-    // alloc size aligned by cache line
-    size_t aligned_size = align_ceil(req.size, min_slab_size);
-
-    size_t slab_cls = aligned_size / min_slab_size - 1;
-    std::list<page_id_t>& slab_list = daemon_context.m_can_alloc_slab_class_lists[slab_cls];
-
-    // TODO: 不再做slab分配
-
-    if (slab_list.empty()) {
-        DLOG("alloc a new page");
-
-        size_t slab_size = (slab_cls + 1) * min_slab_size;
-
-        // 向Master调用allocPage(slab_size)
-        auto& rpc = daemon_context.get_erpc();
-
-        using PageAllocRPC = RPC_TYPE_STRUCT(rpc_master::allocPage);
-
-        auto req_raw = rpc.alloc_msg_buffer_or_die(sizeof(PageAllocRPC::RequestType));
-        auto resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(PageAllocRPC::ResponseType));
-
-        auto page_alloc_req = reinterpret_cast<PageAllocRPC::RequestType*>(req_raw.get_buf());
-        page_alloc_req->mac_id = daemon_context.m_daemon_id;
-        page_alloc_req->slab_size = page_alloc_req->slab_size;
-
-        std::promise<void> pro;
-        std::future<void> fu = pro.get_future();
-        rpc.enqueue_request(daemon_context.m_master_connection.peer_session, PageAllocRPC::rpc_type,
-                            req_raw, resp_raw, erpc_general_promise_flag_cb,
-                            static_cast<void*>(&pro));
-
-        // 等待期间可能出现由于本地page不足而发生page swap
-        this_cort::reset_resume_cond(
-            [&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
-        this_cort::yield();
-
-        auto resp = reinterpret_cast<PageAllocRPC::ResponseType*>(resp_raw.get_buf());
-
-        AllocPageMemoryRequest inner_req;
-        inner_req.page_id = resp->page_id;
-        // inner_req.slab_size = slab_size;
-        inner_req.mac_id = daemon_context.m_daemon_id;
-        allocPageMemory(daemon_context, daemon_context.m_master_connection, inner_req);
-        PageMetadata* page_metadata;
-        bool ret = daemon_context.m_page_table.find(resp->page_id, &page_metadata);
-        DLOG_ASSERT(ret, "Can't find page %lu", resp->page_id);
-        page_metadata->slab_allocator.reset(new SingleAllocator(page_size, slab_size));
-        slab_list.push_back(resp->page_id);
-
-        rpc.free_msg_buffer(req_raw);
-        rpc.free_msg_buffer(resp_raw);
-    }
-
-    page_id_t page_id = slab_list.front();
-    PageMetadata* page_metadata;
-    bool ret = daemon_context.m_page_table.find(page_id, &page_metadata);
-    DLOG_ASSERT(ret, "Can't find page id %lu", page_id);
-
-    DLOG_ASSERT(!page_metadata->slab_allocator->full(), "Can't allocate the page %lu continuely",
-                page_id);
-
-    offset_t page_offset = page_metadata->slab_allocator->allocate(1);
-    DLOG_ASSERT(page_offset != -1, "Can't alloc page slab, because page %lu is full", page_id);
-
-    if (page_metadata->slab_allocator->full()) {
-        slab_list.erase(slab_list.begin());
-    }
-
-    AllocReply reply;
-    reply.gaddr = GetGAddr(page_id, page_offset);
-    return reply;
+    DLOG_FATAL("Not Support");
 }
 
 FreeReply free(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
@@ -829,8 +793,10 @@ GetPageRDMARefReply getPageRDMARef(DaemonContext& daemon_context,
                                    DaemonToDaemonConnection& daemon_connection,
                                    GetPageRDMARefRequest& req) {
     PageMetadata* page_meta;
-    bool ret = daemon_context.m_page_table.find(req.page_id, &page_meta);
-    DLOG_ASSERT(ret, "Can't find page %lu", req.page_id);
+    auto it = daemon_context.m_page_table.find(req.page_id);
+    DLOG_ASSERT(it != daemon_context.m_page_table.end(), "Can't find page %lu", req.page_id);
+
+    page_meta = it->second;
 
     uintptr_t local_addr =
         reinterpret_cast<uintptr_t>(daemon_context.m_cxl_format.page_data_start_addr) +
@@ -840,7 +806,8 @@ GetPageRDMARefReply getPageRDMARef(DaemonContext& daemon_context,
     DLOG_ASSERT(mr->addr != nullptr, "The page %lu isn't registered to rdma memory", req.page_id);
 
     DaemonConnection* daemon_conn_temp;
-    ret = daemon_context.m_connect_table.find(req.mac_id, &daemon_conn_temp);
+    auto it_daemon_conn = daemon_context.m_connect_table.find(req.mac_id);
+    daemon_conn_temp = it_daemon_conn->second;
     DaemonToDaemonConnection* daemon_conn =
         dynamic_cast<DaemonToDaemonConnection*>(daemon_conn_temp);
 
@@ -865,8 +832,9 @@ DelPageRDMARefReply delPageRDMARef(DaemonContext& daemon_context,
                                    DaemonToDaemonConnection& daemon_connection,
                                    DelPageRDMARefRequest& req) {
     SharedMutex* ref_lock;
-    bool ret = daemon_context.m_page_ref_lock.find(req.page_id, &ref_lock);
-    DLOG_ASSERT(ret, "Can't find page %lu's ref lock", req.page_id);
+    auto it_lock = daemon_context.m_page_ref_lock.find(req.page_id);
+    DLOG_ASSERT(it_lock != daemon_context.m_page_ref_lock.end(), "Can't find page %lu's ref lock", req.page_id);
+    ref_lock = it_lock->second;
 
     // DLOG("DN %u: delPageRDMARef page %lu lock", daemon_context.m_daemon_id, req.page_id);
     // 给page ref加写锁
@@ -875,9 +843,8 @@ DelPageRDMARefReply delPageRDMARef(DaemonContext& daemon_context,
         this_cort::yield();
     }
 
-    RemotePageMetaCache* rem_page_md_cache;
-    ret = daemon_context.m_hot_stats.find(req.page_id, &rem_page_md_cache);
-    DLOG_ASSERT(ret, "Can't find page %lu's ref", req.page_id);
+    auto it = daemon_context.m_hot_stats.find(req.page_id);
+    DLOG_ASSERT(it != daemon_context.m_hot_stats.end(), "Can't find page %lu's ref", req.page_id);
 
     // 清除该page的ref
     daemon_context.m_hot_stats.erase(req.page_id);
@@ -891,20 +858,22 @@ DelPageRDMARefReply delPageRDMARef(DaemonContext& daemon_context,
 }
 
 void allocSwapPageMemory(DaemonContext& daemon_context, AllocPageMemoryRequest& req) {
-    DLOG_ASSERT(daemon_context.m_current_used_swap_page_num < daemon_context.m_max_swap_page_num,
-                "Can't allocate more page memory");
+    DLOG_ASSERT(
+        daemon_context.m_current_used_swap_page_num + req.count < daemon_context.m_max_swap_page_num,
+        "Can't allocate more page memory");
 
-    offset_t cxl_memory_offset = daemon_context.m_cxl_page_allocator->allocate(1);
-    DLOG_ASSERT(cxl_memory_offset != -1, "Can't allocate cxl memory");
-    daemon_context.m_current_used_swap_page_num++;
+    for (size_t c = 0; c < req.count; ++c) {
+        offset_t cxl_memory_offset = daemon_context.m_cxl_page_allocator->allocate(1);
+        DLOG_ASSERT(cxl_memory_offset != -1, "Can't allocate cxl memory");
+        daemon_context.m_current_used_swap_page_num++;
 
-    PageMetadata* page_metadata = new PageMetadata();
-    // page_metadata->slab_allocator.reset(new SingleAllocator(page_size, req.slab_size));
-    page_metadata->cxl_memory_offset = cxl_memory_offset;
+        PageMetadata* page_metadata = new PageMetadata();
+        page_metadata->cxl_memory_offset = cxl_memory_offset;
 
-    daemon_context.m_swap_page_table.insert(req.page_id, page_metadata);
+        daemon_context.m_swap_page_table.insert(req.start_page_id + c, page_metadata);
 
-    DLOG("new swap page %ld ---> %#lx", req.page_id, cxl_memory_offset);
+        DLOG("new page %ld ---> %#lx", req.start_page_id + c, cxl_memory_offset);
+    }
 }
 
 void delPageRefBroadcast(DaemonContext& daemon_context, page_id_t page_id,
@@ -974,8 +943,9 @@ TryMigratePageReply tryMigratePage(DaemonContext& daemon_context,
                                    TryMigratePageRequest& req) {
     // 获取预交换的page的本地元数据
     PageMetadata* page_meta;
-    bool ret = daemon_context.m_page_table.find(req.page_id, &page_meta);
-    DLOG_ASSERT(ret, "Can't find page %lu", req.page_id);
+    auto p_page_meta = daemon_context.m_page_table.find(req.page_id);
+    DLOG_ASSERT(p_page_meta != daemon_context.m_page_table.end(), "Can't find page %lu", req.page_id);
+    page_meta = p_page_meta->second;
     DLOG("DN: %u recv tryMigratePage for page %lu. swap page = %lu", daemon_context.m_daemon_id,
          req.page_id, req.swap_page_id);
 
@@ -997,7 +967,8 @@ TryMigratePageReply tryMigratePage(DaemonContext& daemon_context,
     uint32_t lkey = mr->lkey;
 
     DaemonConnection* daemon_conn_temp;
-    ret = daemon_context.m_connect_table.find(req.mac_id, &daemon_conn_temp);
+    auto p_daemon_conn = daemon_context.m_connect_table.find(req.mac_id);
+    daemon_conn_temp = p_daemon_conn->second;
     DaemonToDaemonConnection* daemon_conn =
         dynamic_cast<DaemonToDaemonConnection*>(daemon_conn_temp);
 
@@ -1017,24 +988,25 @@ TryMigratePageReply tryMigratePage(DaemonContext& daemon_context,
         isSwape = true;
         // 交换的情况，需要读对方的page到本地
         AllocPageMemoryRequest inner_req;
-        inner_req.page_id = req.swap_page_id;  // 此时以要换进页的page id来申请分配一个页
+        inner_req.start_page_id = req.swap_page_id;  // 此时以要换进页的page id来申请分配一个页
+        inner_req.count = 1;
         inner_req.mac_id = daemon_context.m_daemon_id;
 
         if (daemon_context.m_max_data_page_num > daemon_context.m_current_used_page_num) {
             // page还有剩余，则直接迁移到本地page上
             allocPageMemory(daemon_context, daemon_context.m_master_connection, inner_req);
-            bool ret = daemon_context.m_page_table.find(req.swap_page_id, &local_page_meta);
-            DLOG_ASSERT(ret, "Can't find page %lu", req.swap_page_id);
+            auto p = daemon_context.m_page_table.find(req.swap_page_id);
+            DLOG_ASSERT(p != daemon_context.m_page_table.end(), "Can't find page %lu", req.swap_page_id);
+            local_page_meta = p->second;
             isFull = false;
         } else {
             // 若page没有剩余，先迁移到swap区，之后再交换
             allocSwapPageMemory(daemon_context, inner_req);
-            bool ret = daemon_context.m_swap_page_table.find(req.swap_page_id, &local_page_meta);
-            DLOG_ASSERT(ret, "Can't find swap page %lu", req.swap_page_id);
+            auto p = daemon_context.m_swap_page_table.find(req.swap_page_id);
+            DLOG_ASSERT(p != daemon_context.m_swap_page_table.end(), "Can't find page %lu", req.swap_page_id);
+            local_page_meta = p->second;
             isFull = true;
         }
-        // 获取slab_allocator
-        // local_page_meta->slab_allocator.reset(new SingleAllocator(*(req.slab_allocator)));
 
         uintptr_t swapin_addr =
             reinterpret_cast<uintptr_t>(daemon_context.m_cxl_format.page_data_start_addr) +
@@ -1051,8 +1023,6 @@ TryMigratePageReply tryMigratePage(DaemonContext& daemon_context,
     // DLOG("DN %u: reply", daemon_context.m_daemon_id);
     TryMigratePageReply reply;
     reply.swaped = isSwape;
-    // 交换page分配器的元数据
-    // reply.slab_allocator.reset(new SingleAllocator(*(page_meta->slab_allocator)));
     // 回收迁移走的页面
     daemon_context.m_cxl_page_allocator->deallocate(page_meta->cxl_memory_offset);
     daemon_context.m_current_used_page_num--;
@@ -1104,7 +1074,7 @@ __notifyPerfReply __notifyPerf(DaemonContext& daemon_context,
 
 __stopPerfReply __stopPerf(DaemonContext& daemon_context,
                            DaemonToClientConnection& client_connection, __stopPerfRequest& req) {
-    exit(0);
+    exit(-1);
 }
 
 }  // namespace rpc_daemon

@@ -19,3 +19,5 @@ constexpr static size_t page_id_bits = sizeof(rchms::GAddr) * 8 - offset_bits;
  * @brief 当水位大于等于该值，则进行page swap，否则dio
  */
 constexpr static size_t page_hot_dio_swap_watermark = UINT64_MAX;
+
+constexpr static size_t msgq_ring_buf_len = 512;

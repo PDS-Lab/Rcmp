@@ -20,17 +20,16 @@
 #include <cstring>
 #include <ctime>
 
-#define DLOG_STREAM(stream, format, ...)                                                   \
-    do {                                                                                   \
-        struct timeval tv;                                                                 \
-        struct tm tm;                                                                      \
-        char tbuf[28];                                                                     \
-        gettimeofday(&tv, NULL);                                                           \
-        localtime_r(&tv.tv_sec, &tm);                                                      \
-        size_t l = strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S.", &tm);                \
-        sprintf(tbuf + l, "%06d", (int)tv.tv_usec);                                        \
-        fprintf(stream, "[%s] [%#lx] %s:%d: " format "\n", tbuf, pthread_self(), __FILE__, \
-                __LINE__, ##__VA_ARGS__);                                                  \
+#define DLOG_STREAM(stream, format, ...)                                               \
+    do {                                                                               \
+        struct timeval tv;                                                             \
+        struct tm tm;                                                                  \
+        char tbuf[28] = {0};                                                           \
+        gettimeofday(&tv, NULL);                                                       \
+        localtime_r(&tv.tv_sec, &tm);                                                  \
+        strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S", &tm);                        \
+        fprintf(stream, "[%s.%06d] [%#lx] %s:%d: " format "\n", tbuf, (int)tv.tv_usec, \
+                pthread_self(), __FILE__, __LINE__, ##__VA_ARGS__);                    \
     } while (0)
 
 #define DLOG_INFO(format, ...) DLOG_STREAM(stderr, "[INFO] " format, ##__VA_ARGS__)
@@ -145,8 +144,10 @@ struct helper<const char *> {
             char fmt[] = "Because " #val_a " = %???, " #val_b " = %???";             \
             char tmp[sizeof(fmt) + 42];                                              \
             snprintf(fmt, sizeof(fmt), "Because " #val_a " = %s, " #val_b " = %s",   \
-                     type_fmt_str_detail::helper<decltype(val_a)>::type_str,         \
-                     type_fmt_str_detail::helper<decltype(val_b)>::type_str);        \
+                     type_fmt_str_detail::helper<                                    \
+                         std::remove_reference<decltype(val_a)>::type>::type_str,    \
+                     type_fmt_str_detail::helper<                                    \
+                         std::remove_reference<decltype(val_b)>::type>::type_str);   \
             snprintf(tmp, sizeof(tmp), fmt, a, b);                                   \
             DLOG_FATAL("Assertion `" #val_a " " #op " " #val_b "` failed. %s", tmp); \
         }                                                                            \

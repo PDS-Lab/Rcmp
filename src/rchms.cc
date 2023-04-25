@@ -111,54 +111,22 @@ void Close(PoolContext *pool_ctx) {
     delete pool_ctx;
 }
 
-GAddr PoolContext::Alloc(size_t size) {
-    // TODO: more page
-
-    using AllocRPC = RPC_TYPE_STRUCT(rpc_daemon::alloc);
-    msgq::MsgBuffer req_raw = __impl->m_msgq_rpc->alloc_msg_buffer(sizeof(AllocRPC::RequestType));
-    auto req = reinterpret_cast<AllocRPC::RequestType *>(req_raw.get_buf());
-    req->mac_id = __impl->m_client_id;
-    req->size = size;
-
-    std::promise<msgq::MsgBuffer> pro;
-    std::future<msgq::MsgBuffer> fu = pro.get_future();
-    __impl->m_msgq_rpc->enqueue_request(AllocRPC::rpc_type, req_raw, msgq_general_promise_flag_cb,
-                                        static_cast<void *>(&pro));
-
-    while (fu.wait_for(1ns) == std::future_status::timeout) {
-        __impl->m_msgq_rpc->run_event_loop_once();
-    }
-
-    msgq::MsgBuffer resp_raw = fu.get();
-    auto resp = reinterpret_cast<AllocRPC::ResponseType *>(resp_raw.get_buf());
-
-    GAddr gaddr = resp->gaddr;
-
-    __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
-
-    return gaddr;
-}
-
 Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
     page_id_t page_id = GetPageID(gaddr);
     offset_t in_page_offset = GetPageOffset(gaddr);
-    // offset_t offset;
     LocalPageCache *pageCache;
 
     // TODO: more page
     SharedMutex *cache_lock;
-    bool ret = __impl->m_ptl_cache_lock.find(page_id, &cache_lock);
-    if (!ret)
-    {
-        cache_lock = new SharedMutex();
-        __impl->m_ptl_cache_lock.insert(page_id, cache_lock);
-    }
+    auto p_lock = __impl->m_ptl_cache_lock.find_or_emplace(
+        page_id, []() { return new SharedMutex(); });
+    cache_lock = p_lock.first->second;
+    
     // 上读锁
     // DLOG("CN %u: Read page %lu lock", __impl->m_client_id, page_id);
     while (!cache_lock->try_lock_shared()) ;
 
-    ret = __impl->m_page_table_cache.find(page_id, &pageCache);
-    if (!ret) {
+    auto p = __impl->m_page_table_cache.find_or_emplace_try(page_id, [&]() {
         using GetPageRefOrProxyRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageCXLRefOrProxy);
         msgq::MsgBuffer req_raw =
             __impl->m_msgq_rpc->alloc_msg_buffer(sizeof(GetPageRefOrProxyRPC::RequestType));
@@ -174,7 +142,6 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
                                             msgq_general_bool_flag_cb, static_cast<void *>(&pro));
 
         while (fu.wait_for(0s) == std::future_status::timeout) {
-            __impl->m_msgq_rpc->run_event_loop_once();
         }
 
         msgq::MsgBuffer resp_raw = fu.get();
@@ -183,23 +150,28 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
         if (!resp->refs) {
             memcpy(buf, resp->read_data, size);
             __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
-            cache_lock->unlock_shared();
-            // DLOG("CN %u: write page %lu unlock", __impl->m_client_id, page_id);
-            return Status::OK;
+            return std::make_pair((LocalPageCache *)-1, false);
         }
 
-        pageCache = new LocalPageCache(8);
+        LocalPageCache *pageCache = new LocalPageCache(8);
         pageCache->offset = resp->offset;
         
         __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
 
-        __impl->m_page_table_cache.insert(page_id, pageCache);
         __impl->m_page.insert(page_id);
 
-
         DLOG("get ref: %ld --- %#lx", page_id, pageCache->offset);
+
+        return std::make_pair(pageCache, true);
+    });
+
+    // 返回no ref，已经通过ring buffer memcpy读出
+    if (p.first == __impl->m_page_table_cache.end()) {
+        cache_lock->unlock_shared();
+        return Status::OK;
     }
 
+    pageCache = p.first->second;
     memcpy(buf,
            reinterpret_cast<const void *>(
                reinterpret_cast<uintptr_t>(__impl->m_cxl_format.page_data_start_addr) + pageCache->offset +
@@ -221,18 +193,14 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
 
     // TODO: more page
     SharedMutex *cache_lock;
-    bool ret = __impl->m_ptl_cache_lock.find(page_id, &cache_lock);
-    if (!ret)
-    {
-        cache_lock = new SharedMutex();
-        __impl->m_ptl_cache_lock.insert(page_id, cache_lock);
-    }
+    auto p_lock = __impl->m_ptl_cache_lock.find_or_emplace(
+        page_id, []() { return new SharedMutex(); });
+    cache_lock = p_lock.first->second;
     // 上读锁
     // DLOG("CN %u: write page %lu lock", __impl->m_client_id, page_id);
     while (!cache_lock->try_lock_shared()) ;
 
-    ret = __impl->m_page_table_cache.find(page_id, &pageCache);
-    if (!ret) {
+    auto p = __impl->m_page_table_cache.find_or_emplace_try(page_id, [&]() {
         using GetPageRefOrProxyRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageCXLRefOrProxy);
         msgq::MsgBuffer req_raw =
             __impl->m_msgq_rpc->alloc_msg_buffer(sizeof(GetPageRefOrProxyRPC::RequestType));
@@ -246,11 +214,9 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
         SpinPromise<msgq::MsgBuffer> pro;
         SpinFuture<msgq::MsgBuffer> fu = pro.get_future();
         __impl->m_msgq_rpc->enqueue_request(GetPageRefOrProxyRPC::rpc_type, req_raw,
-                                            msgq_general_bool_flag_cb,
-                                            static_cast<void *>(&pro));
+                                            msgq_general_bool_flag_cb, static_cast<void *>(&pro));
 
         while (fu.wait_for(0s) == std::future_status::timeout) {
-            __impl->m_msgq_rpc->run_event_loop_once();
         }
 
         msgq::MsgBuffer resp_raw = fu.get();
@@ -258,21 +224,27 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
 
         if (!resp->refs) {
             __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
-            cache_lock->unlock_shared();
-            // DLOG("CN %u: write page %lu unlock", __impl->m_client_id, page_id);
-            return Status::OK;
+            return std::make_pair((LocalPageCache *)-1, false);
         }
 
-        pageCache = new LocalPageCache(8);
+        LocalPageCache *pageCache = new LocalPageCache(8);
         pageCache->offset = resp->offset;
         __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
 
-        __impl->m_page_table_cache.insert(page_id, pageCache);
         __impl->m_page.insert(page_id);
 
         DLOG("get ref: %ld --- %#lx", page_id, pageCache->offset);
+
+        return std::make_pair(pageCache, true);
+    });
+
+    // 返回no ref，已经通过ring buffer memcpy写入
+    if (p.first == __impl->m_page_table_cache.end()) {
+        cache_lock->unlock_shared();
+        return Status::OK;
     }
 
+    pageCache = p.first->second;
     memcpy(reinterpret_cast<void *>(
                reinterpret_cast<uintptr_t>(__impl->m_cxl_format.page_data_start_addr) + pageCache->offset +
                in_page_offset),
@@ -286,7 +258,36 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
     return Status::OK;
 }
 
+GAddr PoolContext::Alloc(size_t size) { DLOG_FATAL("Not Support"); }
+
 Status PoolContext::Free(GAddr gaddr, size_t size) { DLOG_FATAL("Not Support"); }
+
+GAddr PoolContext::AllocPage(size_t count) {
+    using AllocRPC = RPC_TYPE_STRUCT(rpc_daemon::allocPage);
+    msgq::MsgBuffer req_raw = __impl->m_msgq_rpc->alloc_msg_buffer(sizeof(AllocRPC::RequestType));
+    auto req = reinterpret_cast<AllocRPC::RequestType *>(req_raw.get_buf());
+    req->mac_id = __impl->m_client_id;
+    req->count = count;
+
+    std::promise<msgq::MsgBuffer> pro;
+    std::future<msgq::MsgBuffer> fu = pro.get_future();
+    __impl->m_msgq_rpc->enqueue_request(AllocRPC::rpc_type, req_raw, msgq_general_promise_flag_cb,
+                                        static_cast<void *>(&pro));
+
+    while (fu.wait_for(0s) == std::future_status::timeout) {
+    }
+
+    msgq::MsgBuffer resp_raw = fu.get();
+    auto resp = reinterpret_cast<AllocRPC::ResponseType *>(resp_raw.get_buf());
+
+    GAddr gaddr = GetGAddr(resp->start_page_id, 0);
+
+    __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
+
+    return gaddr;
+}
+
+Status PoolContext::FreePage(GAddr gaddr, size_t count) { DLOG_FATAL("Not Support"); }
 
 /*********************** for test **************************/
 
@@ -308,7 +309,6 @@ Status PoolContext::__TestDataSend1(int *array, size_t size) {
                                         msgq_general_promise_flag_cb, static_cast<void *>(&pro));
 
     while (fu.wait_for(1ns) == std::future_status::timeout) {
-        __impl->m_msgq_rpc->run_event_loop_once();
     }
 
     msgq::MsgBuffer resp_raw = fu.get();
@@ -341,7 +341,6 @@ Status PoolContext::__TestDataSend2(int *array, size_t size) {
                                         msgq_general_promise_flag_cb, static_cast<void *>(&pro));
 
     while (fu.wait_for(1ns) == std::future_status::timeout) {
-        __impl->m_msgq_rpc->run_event_loop_once();
     }
 
     msgq::MsgBuffer resp_raw = fu.get();
@@ -367,7 +366,6 @@ Status PoolContext::__NotifyPerf() {
     __impl->m_msgq_rpc->enqueue_request(__notify_rpc::rpc_type, req_raw,
                                         msgq_general_promise_flag_cb, static_cast<void *>(&pro));
     while (fu.wait_for(1ns) == std::future_status::timeout) {
-        __impl->m_msgq_rpc->run_event_loop_once();
     }
     msgq::MsgBuffer resp_raw = fu.get();
     __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
@@ -386,7 +384,6 @@ Status PoolContext::__StopPerf() {
     __impl->m_msgq_rpc->enqueue_request(__stop_rpc::rpc_type, req_raw, msgq_general_promise_flag_cb,
                                         static_cast<void *>(&pro));
     while (fu.wait_for(1ns) == std::future_status::timeout) {
-        __impl->m_msgq_rpc->run_event_loop_once();
     }
     msgq::MsgBuffer resp_raw = fu.get();
     __impl->m_msgq_rpc->free_msg_buffer(resp_raw);

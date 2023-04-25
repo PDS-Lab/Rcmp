@@ -1,16 +1,25 @@
 #include "proto/rpc_master.hpp"
 
+#include <chrono>
+
 #include "common.hpp"
 #include "cort_sched.hpp"
+#include "impl.hpp"
 #include "log.hpp"
+#include "proto/rpc.hpp"
+#include "proto/rpc_adaptor.hpp"
+#include "proto/rpc_daemon.hpp"
+
+using namespace std::literals;
 
 namespace rpc_master {
 
 JoinDaemonReply joinDaemon(MasterContext& master_context,
                            MasterToDaemonConnection& daemon_connection, JoinDaemonRequest& req) {
     RackMacTable* rack_table;
-    bool ret = master_context.m_cluster_manager.cluster_rack_table.find(req.rack_id, &rack_table);
-    DLOG_ASSERT(!ret, "Reconnect rack %u daemon", req.rack_id);
+    auto it = master_context.m_cluster_manager.cluster_rack_table.find(req.rack_id);
+    DLOG_ASSERT(it == master_context.m_cluster_manager.cluster_rack_table.end(),
+                "Reconnect rack %u daemon", req.rack_id);
 
     rack_table = new RackMacTable();
     rack_table->with_cxl = req.with_cxl;
@@ -49,8 +58,11 @@ JoinDaemonReply joinDaemon(MasterContext& master_context,
 JoinClientReply joinClient(MasterContext& master_context,
                            MasterToClientConnection& client_connection, JoinClientRequest& req) {
     RackMacTable* rack_table;
-    bool ret = master_context.m_cluster_manager.cluster_rack_table.find(req.rack_id, &rack_table);
-    DLOG_ASSERT(ret, "Don't find rack %u", req.rack_id);
+    auto it = master_context.m_cluster_manager.cluster_rack_table.find(req.rack_id);
+    DLOG_ASSERT(it != master_context.m_cluster_manager.cluster_rack_table.end(),
+                "Don't find rack %u", req.rack_id);
+
+    rack_table = it->second;
 
     mac_id_t mac_id = master_context.m_cluster_manager.mac_id_allocator->gen();
 
@@ -70,53 +82,142 @@ JoinClientReply joinClient(MasterContext& master_context,
 AllocPageReply allocPage(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
                          AllocPageRequest& req) {
     RackMacTable* rack_table;
-    PageRackMetadata* page_rack_metadata = new PageRackMetadata();
 
-    bool ret = master_context.m_cluster_manager.cluster_rack_table.find(daemon_connection.rack_id,
-                                                                        &rack_table);
-    DLOG_ASSERT(ret, "Can't find this deamon");
+    auto it = master_context.m_cluster_manager.cluster_rack_table.find(daemon_connection.rack_id);
+    DLOG_ASSERT(it != master_context.m_cluster_manager.cluster_rack_table.end(),
+                "Can't find this deamon");
 
-    page_id_t new_page_id = master_context.m_page_id_allocator->gen();
+    rack_table = it->second;
+
+    page_id_t new_page_id = master_context.m_page_id_allocator->multiGen(req.count);
     DLOG_ASSERT(new_page_id != invalid_page_id, "no unusable page");
 
-    if (rack_table->current_allocated_page_num < rack_table->max_free_page_num) {
-        // 采取就近原则分配page到daemon所在rack
-        page_rack_metadata->rack_id = daemon_connection.rack_id;
-        page_rack_metadata->daemon_id = daemon_connection.daemon_id;
-        rack_table->current_allocated_page_num++;
-    } else {
-        // TODO: 如果daemon没有多余page，则向其他rack daemon注册，调用allocPageMemory(req.slab_size)
-        // TODO: 启动migrate机制
-        DLOG_FATAL("Not Support");
+    size_t current_rack_alloc_page_num =
+        std::min(req.count, rack_table->max_free_page_num - rack_table->current_allocated_page_num);
+    size_t other_rack_alloc_page_num = req.count - current_rack_alloc_page_num;
+
+    // 已分配page的序号
+    size_t c = 0;
+    // 采取就近原则分配page到daemon所在rack
+    while (c < current_rack_alloc_page_num) {
+        PageRackMetadata* page_meta = new PageRackMetadata();
+        page_meta->rack_id = daemon_connection.rack_id;
+        page_meta->daemon_id = daemon_connection.daemon_id;
+        DLOG("alloc page: %lu ---> rack %d", new_page_id + c, rack_table->daemon_connect->rack_id);
+        master_context.m_page_directory.insert(new_page_id + c, page_meta);
+        c++;
     }
 
-    DLOG("alloc page: %lu ---> rack %d", new_page_id, rack_table->daemon_connect->rack_id);
+    if (other_rack_alloc_page_num > 0) {
+        // 如果current daemon没有多余page，则向其他rack daemon注册allocPageMemory
+        using PageAllocRPC = RPC_TYPE_STRUCT(rpc_daemon::allocPageMemory);
 
-    master_context.m_page_directory.insert(new_page_id, page_rack_metadata);
+        struct CTX {
+            std::promise<void> pro;
+            std::future<void> fu;
+            erpc::MsgBufferWrap req_raw;
+            erpc::MsgBufferWrap resp_raw;
+            MasterToDaemonConnection* daemon_connect;
+            page_id_t alloc_page_id;
+
+            CTX(erpc::MsgBufferWrap req_raw, erpc::MsgBufferWrap resp_raw)
+                : req_raw(req_raw), resp_raw(resp_raw) {}
+        };
+        // 暂存消息上下文
+        std::vector<CTX*> ctxv;
+
+        // 遍历rack表，找出有空闲page的rack分配
+        master_context.m_cluster_manager.cluster_rack_table.foreach_all(
+            [&](std::pair<const rack_id_t, RackMacTable*>& p) {
+                size_t rack_alloc_page_num =
+                    std::min(other_rack_alloc_page_num,
+                             p.second->max_free_page_num - p.second->current_allocated_page_num);
+
+                auto& rpc = master_context.get_erpc();
+
+                auto req_raw = rpc.alloc_msg_buffer_or_die(sizeof(PageAllocRPC::RequestType));
+                auto resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(PageAllocRPC::ResponseType));
+
+                auto req = reinterpret_cast<PageAllocRPC::RequestType*>(req_raw.get_buf());
+
+                req->mac_id = master_context.m_master_id;
+                req->start_page_id = new_page_id + c;
+                req->count = rack_alloc_page_num;
+
+                CTX* ctx = new CTX(req_raw, resp_raw);
+                ctx->fu = ctx->pro.get_future();
+                ctx->alloc_page_id = new_page_id + c;
+                ctx->daemon_connect = p.second->daemon_connect;
+                rpc.enqueue_request(p.second->daemon_connect->peer_session, PageAllocRPC::rpc_type,
+                                    req_raw, resp_raw, erpc_general_promise_flag_cb,
+                                    static_cast<void*>(&ctx->pro));
+
+                ctxv.push_back(ctx);
+
+                c += rack_alloc_page_num;
+
+                // 减去在该rack分配的page数
+                other_rack_alloc_page_num -= rack_alloc_page_num;
+                // 如果到0，则可以停止遍历
+                return other_rack_alloc_page_num != 0;
+            });
+
+        // join all ctx
+        for (auto& ctx : ctxv) {
+            // 逐个切出协程
+            this_cort::reset_resume_cond(
+                [&ctx]() { return ctx->fu.wait_for(0s) != std::future_status::timeout; });
+            this_cort::yield();
+
+            PageRackMetadata* page_meta = new PageRackMetadata();
+            page_meta->rack_id = ctx->daemon_connect->rack_id;
+            page_meta->daemon_id = ctx->daemon_connect->daemon_id;
+            DLOG("alloc page: %lu ---> rack %d", ctx->alloc_page_id, ctx->daemon_connect->rack_id);
+            master_context.m_page_directory.insert(ctx->alloc_page_id, page_meta);
+
+            auto& rpc = master_context.get_erpc();
+
+            rpc.free_msg_buffer(ctx->req_raw);
+            rpc.free_msg_buffer(ctx->resp_raw);
+
+            delete ctx;
+        }
+    }
+
+    rack_table->current_allocated_page_num += req.count;
 
     AllocPageReply reply;
-    reply.page_id = new_page_id;
+    reply.start_page_id = new_page_id;
+    reply.start_count = current_rack_alloc_page_num;
     return reply;
 }
 
 FreePageReply freePage(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
                        FreePageRequest& req) {
     RackMacTable* rack_table;
-    PageRackMetadata* page_rack_metadata;
+    PageRackMetadata* page_meta;
 
-    bool ret = master_context.m_cluster_manager.cluster_rack_table.find(daemon_connection.rack_id,
-                                                                        &rack_table);
-    DLOG_ASSERT(ret, "Can't find this deamon");
+    auto it = master_context.m_page_directory.find(req.start_page_id);
+    DLOG_ASSERT(it != master_context.m_page_directory.end(), "Can't free this page id %lu",
+                req.start_page_id);
 
-    ret = master_context.m_page_directory.find(req.page_id, &page_rack_metadata);
-    DLOG_ASSERT(ret, "Can't free this page id %lu", req.page_id);
+    page_meta = it->second;
 
-    DLOG_ASSERT(page_rack_metadata->rack_id == daemon_connection.rack_id,
-                "You must free this page id %lu by daemon holds on", req.page_id);
+    // TODO: 支持free任意rack上的page
+    // 需要删除指定rack上的page meta、cache等元数据
+    DLOG_FATAL("Not Support");
 
-    master_context.m_page_directory.erase(req.page_id);
-    master_context.m_page_id_allocator->recycle(req.page_id);
-    delete page_rack_metadata;
+    auto rack_table_it =
+        master_context.m_cluster_manager.cluster_rack_table.find(page_meta->rack_id);
+    DLOG_ASSERT(rack_table_it != master_context.m_cluster_manager.cluster_rack_table.end(),
+                "Can't find this deamon");
+
+    rack_table = rack_table_it->second;
+
+    master_context.m_page_directory.erase(req.start_page_id);
+    master_context.m_page_id_allocator->recycle(req.start_page_id);
+    rack_table->current_allocated_page_num--;
+    delete page_meta;
 
     FreePageReply reply;
     reply.ret = true;
@@ -127,8 +228,11 @@ LatchRemotePageReply latchRemotePage(MasterContext& master_context,
                                      MasterToDaemonConnection& daemon_connection,
                                      LatchRemotePageRequest& req) {
     PageRackMetadata* page_meta;
-    bool ret = master_context.m_page_directory.find(req.page_id, &page_meta);
-    DLOG_ASSERT(ret, "Can't find this page %lu", req.page_id);
+    auto it = master_context.m_page_directory.find(req.page_id);
+    DLOG_ASSERT(it != master_context.m_page_directory.end(), "Can't find this page %lu",
+                req.page_id);
+
+    page_meta = it->second;
 
     if (!req.isWriteLock) {
         if (!page_meta->latch.try_lock_shared()) {
@@ -149,9 +253,6 @@ LatchRemotePageReply latchRemotePage(MasterContext& master_context,
 
     auto peer_addr = dest_daemon->rdma_conn->get_peer_addr();
 
-    // DLOG("page %lu dest daemon %u [%s:%d]", req.page_id, page_meta->daemon_id,
-    //      dest_daemon->ip.c_str(), dest_daemon->port);
-
     LatchRemotePageReply reply;
     reply.dest_rack_id = page_meta->rack_id;
     reply.dest_daemon_id = page_meta->daemon_id;
@@ -166,8 +267,12 @@ UnLatchRemotePageReply unLatchRemotePage(MasterContext& master_context,
                                          MasterToDaemonConnection& daemon_connection,
                                          UnLatchRemotePageRequest& req) {
     PageRackMetadata* page_meta;
-    bool ret = master_context.m_page_directory.find(req.page_id, &page_meta);
-    DLOG_ASSERT(ret, "Can't find this page %lu", req.page_id);
+
+    auto it = master_context.m_page_directory.find(req.page_id);
+    DLOG_ASSERT(it != master_context.m_page_directory.end(), "Can't find this page %lu",
+                req.page_id);
+
+    page_meta = it->second;
 
     page_meta->latch.unlock_shared();
 
@@ -180,8 +285,9 @@ UnLatchPageAndBalanceReply unLatchPageAndBalance(MasterContext& master_context,
                                                  UnLatchPageAndBalanceRequest& req) {
     PageRackMetadata* page_meta;
     PageRackMetadata* swap_page_meta;
-    bool ret = master_context.m_page_directory.find(req.page_id, &page_meta);
-    DLOG_ASSERT(ret, "Can't find this page %lu", req.page_id);
+    auto p = master_context.m_page_directory.find(req.page_id);
+    DLOG_ASSERT(p != master_context.m_page_directory.end(), "Can't find this page %lu", req.page_id);
+    page_meta = p->second;
 
     page_meta->rack_id = req.new_rack_id;
     page_meta->daemon_id = req.new_daemon_id;

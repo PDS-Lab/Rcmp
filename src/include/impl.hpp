@@ -76,7 +76,6 @@ struct MasterContext: public NOCOPYABLE {
     std::unique_ptr<IDGenerator> m_page_id_allocator;
 
     struct {
-        volatile bool running;
         std::unique_ptr<erpc::NexusWrap> nexus;
         std::vector<erpc::IBRpcWrap> rpc_set;
     } m_erpc_ctx;
@@ -87,6 +86,12 @@ struct MasterContext: public NOCOPYABLE {
     MasterContext();
 
     static MasterContext &getInstance();
+
+    void initCluster();
+    void initRDMARC();
+    void initRPCNexus();
+    void initCoroutinePool();
+
     MasterConnection *get_connection(mac_id_t mac_id);
     erpc::IBRpcWrap &get_erpc();
     CortScheduler &get_cort_sched();
@@ -124,13 +129,8 @@ struct DaemonToDaemonConnection : public DaemonConnection {
 
 struct PageMetadata {
     offset_t cxl_memory_offset;  // 相对于format.page_data_start_addr
-    // SingleAllocator slab_allocator;
-    std::unique_ptr<SingleAllocator> slab_allocator;
     std::unordered_set<DaemonToClientConnection *> ref_client;
     std::unordered_set<DaemonToDaemonConnection *> ref_daemon;
-
-    // PageMetadata(size_t slab_size);
-    PageMetadata() {};
 };
 
 struct RemotePageMetaCache {
@@ -142,7 +142,18 @@ struct RemotePageMetaCache {
     RemotePageMetaCache(size_t max_recent_record);
 };
 
+struct MsgQueueManager {
+    const static size_t RING_ELEM_SIZE = sizeof(msgq::MsgQueue);
 
+    void *start_addr;
+    uint32_t ring_cnt;
+    std::unique_ptr<SingleAllocator> msgq_allocator;
+    std::unique_ptr<msgq::MsgQueueNexus> nexus;
+    std::unique_ptr<msgq::MsgQueueRPC> rpc;
+
+    msgq::MsgQueue *allocQueue();
+    void freeQueue(msgq::MsgQueue *msgq);
+};
 
 struct DaemonContext: public NOCOPYABLE {
     rchms::DaemonOptions m_options;
@@ -160,7 +171,7 @@ struct DaemonContext: public NOCOPYABLE {
     size_t m_current_used_swap_page_num;  // 当前正在swap的页个数
 
     CXLMemFormat m_cxl_format;
-    msgq::MsgQueueManager m_msgq_manager;
+    MsgQueueManager m_msgq_manager;
     DaemonToMasterConnection m_master_connection;
     std::vector<DaemonToClientConnection *> m_client_connect_table;
     std::vector<DaemonToDaemonConnection *> m_other_daemon_connect_table;
@@ -175,9 +186,7 @@ struct DaemonContext: public NOCOPYABLE {
     std::vector<ibv_mr *> m_rdma_page_mr_table;  // 为cxl注册的mr，初始化长度后不可更改
     std::unordered_map<void *, ibv_mr *> m_rdma_mr_table;
 
-    CortScheduler m_cort_sched;
-
-    std::array<std::list<page_id_t>, page_size / min_slab_size> m_can_alloc_slab_class_lists;
+    std::unique_ptr<CortScheduler> m_cort_sched;
 
     struct {
         volatile bool running;
@@ -185,11 +194,10 @@ struct DaemonContext: public NOCOPYABLE {
         std::vector<erpc::IBRpcWrap> rpc_set;
     } m_erpc_ctx;
 
-    DaemonContext();
-
     static DaemonContext &getInstance();
 
     void initCXLPool();
+    void initCoroutinePool();
     void initRPCNexus();
     void initRDMARC();
     void connectWithMaster();
@@ -241,7 +249,6 @@ struct ClientContext : public NOCOPYABLE {
     std::unique_ptr<UDPServer<msgq::MsgUDPConnPacket>> m_udp_conn_recver;
     std::unique_ptr<msgq::MsgQueueRPC> m_msgq_rpc;
     std::unique_ptr<msgq::MsgQueueNexus> m_msgq_nexus;
-    // ClientToMasterConnection m_master_connection;
     ClientToDaemonConnection m_local_rack_daemon_connection;
     // ConcurrentHashMap<mac_id_t, ClientToDaemonConnection *> m_other_rack_daemon_connection;
     std::unordered_set<page_id_t> m_page;
