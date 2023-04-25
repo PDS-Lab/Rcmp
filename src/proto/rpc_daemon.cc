@@ -142,10 +142,9 @@ retry:
         SpinFuture<msgq::MsgBuffer> wd_fu = wd_pro.get_future();
         if (req.type == GetPageCXLRefOrProxyRequest::WRITE) {
             // 1. 如果是写操作，则并行获取cn的write buf
-            using LatchRemotePageRPC = RPC_TYPE_STRUCT(rpc_master::latchRemotePage);
             using GetCurrentWriteDataRPC = RPC_TYPE_STRUCT(rpc_client::getCurrentWriteData);
             auto wd_req_raw = client_connection.msgq_rpc->alloc_msg_buffer(
-                sizeof(LatchRemotePageRPC::RequestType));
+                sizeof(GetCurrentWriteDataRPC::RequestType));
             auto wd_req =
                 reinterpret_cast<GetCurrentWriteDataRPC::RequestType*>(wd_req_raw.get_buf());
             wd_req->mac_id = daemon_context.m_daemon_id;

@@ -22,7 +22,7 @@
 #endif  // NDEBUG
 
 template <typename D>
-D div_ceil(D x, uint64_t div) {
+constexpr D div_ceil(D x, uint64_t div) {
     return (x + div - 1) / div;
 }
 

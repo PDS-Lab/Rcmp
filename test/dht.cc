@@ -61,7 +61,7 @@ struct HashTableRep {
             }
         }
 
-        cout << "create hashtable success" << endl;
+        DLOG("create hashtable success. gaddr: %lu", st);
     }
 
     void put(int key, int val) {
@@ -229,6 +229,7 @@ int main(int argc, char *argv[]) {
     cmd.add<size_t>("cxl_memory_size");
     cmd.add<size_t>("iteration");
     cmd.add<int>("read_ratio");
+    cmd.add<int>("initor");
     bool ret = cmd.parse(argc, argv);
     DLOG_ASSERT(ret);
 
@@ -242,14 +243,18 @@ int main(int argc, char *argv[]) {
 
     rchms::PoolContext *pool = rchms::Open(options);
 
-    __DEBUG_START_PERF();
-
     HashTableRep h;
     h.pool = pool;
 
-    h.init();
+    if (cmd.get<int>("initor") == 1) {
+        h.init();
+        return 0;
+    } else {
+        cin >> h.st;
+    }
 
-    const size_t IT = cmd.get<size_t>("iteration");;
+    __DEBUG_START_PERF();
+    const size_t IT = cmd.get<size_t>("iteration");
     const int RA = cmd.get<int>("read_ratio");
 
     PerfStatistics ps;

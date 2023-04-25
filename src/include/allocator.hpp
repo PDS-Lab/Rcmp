@@ -123,7 +123,7 @@ class RingAllocator {
             inv_h = nullptr;
             nh.pos = oh.pos + s + sizeof(Header);
             nh.cnt = oh.cnt + 1;
-            if (UNLIKELY(div_floor(oh.pos, SZ) != div_floor(nh.pos, SZ))) {
+            if (UNLIKELY(nh.pos % SZ != 0 && div_floor(oh.pos, SZ) != div_floor(nh.pos, SZ))) {
                 // invalid tail
                 size_t inv_s = align_ceil(oh.pos, SZ) - oh.pos;
                 nh.pos += inv_s;
@@ -145,7 +145,8 @@ class RingAllocator {
         h->invalid = false;
         h->release = false;
         h->s = s;
-        if (inv_h != nullptr) {
+
+        if (UNLIKELY(inv_h != nullptr)) {
             inv_h->invalid = true;
             inv_h->release = false;
         }
@@ -176,7 +177,7 @@ class RingAllocator {
     struct Header {
         bool invalid : 1;
         bool release : 1;
-        size_t s : 62;
+        size_t s;
         char data[0];
     };
 
