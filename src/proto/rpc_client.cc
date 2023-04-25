@@ -72,6 +72,7 @@ RemovePageCacheReply removePageCache(ClientContext& client_context,
 
     DLOG("CN %u: Del page %lu cache.", client_context.m_client_id, req.page_id);
     cache_lock->unlock();
+    // DLOG("CN %u: removePageCache page %lu unlock", client_context.m_client_id, req.page_id);
 
     RemovePageCacheReply reply;
     return reply;
