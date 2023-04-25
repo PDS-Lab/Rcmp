@@ -217,16 +217,16 @@ struct TryMigratePageRequest : public RequestMsg {
     uintptr_t swapin_page_addr;
     uint32_t swapout_page_rkey;
     uint32_t swapin_page_rkey;
-    // SingleAllocator slab_allocator;
-    std::unique_ptr<SingleAllocator> slab_allocator;
-    TryMigratePageRequest(){}
+    // std::unique_ptr<SingleAllocator> slab_allocator;
+
+    // TryMigratePageRequest(){}
     // TryMigratePageRequest(SingleAllocator &s_allocator) : slab_allocator(s_allocator) {}
 };
 struct TryMigratePageReply : public ResponseMsg {
     bool swaped;
     // SingleAllocator slab_allocator;
-    std::unique_ptr<SingleAllocator> slab_allocator;
-    TryMigratePageReply() {}
+    // std::unique_ptr<SingleAllocator> slab_allocator;
+    // TryMigratePageReply() {}
     // TryMigratePageReply(SingleAllocator &s_allocator) : slab_allocator(s_allocator) {}
 };
 TryMigratePageReply tryMigratePage(DaemonContext& daemon_context,

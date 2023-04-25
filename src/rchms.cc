@@ -154,6 +154,7 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
         __impl->m_ptl_cache_lock.insert(page_id, cache_lock);
     }
     // 上读锁
+    // DLOG("CN %u: Read page %lu lock", __impl->m_client_id, page_id);
     while (!cache_lock->try_lock_shared()) ;
 
     ret = __impl->m_page_table_cache.find(page_id, &pageCache);
@@ -182,6 +183,8 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
         if (!resp->refs) {
             memcpy(buf, resp->read_data, size);
             __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
+            cache_lock->unlock_shared();
+            // DLOG("CN %u: write page %lu unlock", __impl->m_client_id, page_id);
             return Status::OK;
         }
 
@@ -205,14 +208,9 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
 
     // 更新page访问请况统计
     pageCache->stats.add(getTimestamp());
-    // size_t freq = pageCache->stats.freq();
-    // if (freq>__impl->m_max_freq)
-    // {
-    //     __impl->m_max_freq = freq;
-    //     __impl->m_max_freq_page = page_id;
-    // }
     // 解锁
     cache_lock->unlock_shared();
+    // DLOG("CN %u: Read page %lu unlock", __impl->m_client_id, page_id);
     return Status::OK;
 }
 
@@ -230,6 +228,7 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
         __impl->m_ptl_cache_lock.insert(page_id, cache_lock);
     }
     // 上读锁
+    // DLOG("CN %u: write page %lu lock", __impl->m_client_id, page_id);
     while (!cache_lock->try_lock_shared()) ;
 
     ret = __impl->m_page_table_cache.find(page_id, &pageCache);
@@ -259,6 +258,8 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
 
         if (!resp->refs) {
             __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
+            cache_lock->unlock_shared();
+            // DLOG("CN %u: write page %lu unlock", __impl->m_client_id, page_id);
             return Status::OK;
         }
 
@@ -279,14 +280,9 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
 
     // 更新page访问请况统计
     pageCache->stats.add(getTimestamp());
-    // size_t freq = pageCache->stats.freq();
-    // if (freq>__impl->m_max_freq)
-    // {
-    //     __impl->m_max_freq = freq;
-    //     __impl->m_max_freq_page = page_id;
-    // }
     // 解锁
     cache_lock->unlock_shared();
+    // DLOG("CN %u: write page %lu unlock", __impl->m_client_id, page_id);
     return Status::OK;
 }
 
