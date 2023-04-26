@@ -21,8 +21,7 @@ int main() {
     for (int i = 0; i < PT; ++i) {
         vs.emplace_back([&q]() {
             for (int j = 0; j < IT; ++j) {
-                while (!q.forceEnqueue(j))
-                    ;
+                q.forceEnqueue(j);
             }
         });
     }

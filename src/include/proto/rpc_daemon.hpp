@@ -52,6 +52,7 @@ struct GetPageCXLRefOrProxyRequest : public RequestMsg,
     enum {
         READ,
         WRITE,
+        WRITE_RAW,
     } type;
     rchms::GAddr gaddr;
     union {
@@ -59,8 +60,12 @@ struct GetPageCXLRefOrProxyRequest : public RequestMsg,
             size_t cn_read_size;
         };
         struct {  // type == WRITE
-            void* cn_write_buf;
             size_t cn_write_size;
+            void* cn_write_buf;
+        };
+        struct {  // type == WRITE_RAW
+            size_t cn_write_raw_size;
+            uint8_t cn_write_raw_buf[0];
         };
     };
 };

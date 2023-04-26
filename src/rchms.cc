@@ -170,14 +170,30 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
 
     auto p = __impl->m_page_table_cache.find_or_emplace_try(page_id, [&]() {
         using GetPageRefOrProxyRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageCXLRefOrProxy);
-        msgq::MsgBuffer req_raw =
-            __impl->m_msgq_rpc->alloc_msg_buffer(sizeof(GetPageRefOrProxyRPC::RequestType));
-        auto req = reinterpret_cast<GetPageRefOrProxyRPC::RequestType *>(req_raw.get_buf());
-        req->mac_id = __impl->m_client_id;
-        req->type = req->WRITE;
-        req->gaddr = gaddr;
-        req->cn_write_buf = buf;
-        req->cn_write_size = size;
+
+        msgq::MsgBuffer req_raw;
+        size_t payload_size;
+
+        // 如果不超过阈值，则直接将buf填入req中发送，减少一次get_current_write_data消息
+        if (size <= get_page_cxl_ref_or_proxy_write_raw_max_size) {
+            req_raw =
+                __impl->m_msgq_rpc->alloc_msg_buffer(sizeof(GetPageRefOrProxyRPC::RequestType) + size);
+            auto req = reinterpret_cast<GetPageRefOrProxyRPC::RequestType *>(req_raw.get_buf());
+            req->mac_id = __impl->m_client_id;
+            req->type = req->WRITE_RAW;
+            req->gaddr = gaddr;
+            req->cn_write_size = size;
+            memcpy(req->cn_write_raw_buf, buf, size);
+        } else {
+            req_raw =
+                __impl->m_msgq_rpc->alloc_msg_buffer(sizeof(GetPageRefOrProxyRPC::RequestType));
+            auto req = reinterpret_cast<GetPageRefOrProxyRPC::RequestType *>(req_raw.get_buf());
+            req->mac_id = __impl->m_client_id;
+            req->type = req->WRITE;
+            req->gaddr = gaddr;
+            req->cn_write_size = size;
+            req->cn_write_buf = buf;
+        }
 
         SpinPromise<msgq::MsgBuffer> pro;
         SpinFuture<msgq::MsgBuffer> fu = pro.get_future();

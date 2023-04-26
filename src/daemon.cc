@@ -53,6 +53,8 @@ void DaemonContext::initRPCNexus() {
                                         bind_erpc_func<true>(rpc_daemon::crossRackConnect));
     m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::getPageRDMARef)::rpc_type,
                                         bind_erpc_func<true>(rpc_daemon::getPageRDMARef));
+    m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::allocPageMemory)::rpc_type,
+                                        bind_erpc_func<true>(rpc_daemon::allocPageMemory));
 
     erpc::SMHandlerWrap smhw;
     smhw.set_empty();
@@ -258,7 +260,7 @@ int main(int argc, char *argv[]) {
     options.with_cxl = true;
     options.cxl_devdax_path = cmd.get<std::string>("cxl_devdax_path");
     options.cxl_memory_size = cmd.get<size_t>("cxl_memory_size");
-    options.swap_zone_size = 2 << 20;
+    options.swap_zone_size = 0;
     options.max_client_limit = 2;  // 暂时未使用
     options.cxl_msgq_size = 5 << 10;
     options.prealloc_cort_num = 8;

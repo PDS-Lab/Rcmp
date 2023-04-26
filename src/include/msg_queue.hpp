@@ -56,7 +56,7 @@ struct MsgQueue final {
     uint32_t dequeue_msg(MsgHeader *hv, size_t max_deq);
     void free_msg_buffer(MsgBuffer &msg_buf);
 
-    ConcurrentQueue<MsgHeader, 64, ConcurrentQueueProducerMode::MP, ConcurrentQueueConsumerMode::MC>
+    ConcurrentQueue<MsgHeader, 64, ConcurrentQueueProducerMode::MP, ConcurrentQueueConsumerMode::SC>
         msgq_q;
     RingAllocator<msgq_ring_buf_len> m_ra;
 };

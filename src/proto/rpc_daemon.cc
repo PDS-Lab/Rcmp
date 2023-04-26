@@ -347,11 +347,21 @@ retry:
                 my_size = req.cn_read_size;
                 break;
             }
+            case GetPageCXLRefOrProxyRequest::WRITE_RAW: {
+                ibv_mr* mr = daemon_context.get_mr(req.cn_write_raw_buf);
+
+                my_data_buf = reinterpret_cast<uintptr_t>(req.cn_write_raw_buf);
+                my_rkey = mr->rkey;
+                my_size = req.cn_write_size;
+
+                reply_ptr = req.alloc_flex_resp(0);
+                break;
+            }
         }
 
         // 7. 调用dio读写远端内存
         {
-            rdma_rc::RDMABatch ba;
+            rdma_rc::RDMABatchFixed<1> ba;
             switch (req.type) {
                 case GetPageCXLRefOrProxyRequest::READ:
                     dest_daemon_conn->rdma_conn->prep_read(
@@ -363,6 +373,7 @@ retry:
                     //      rem_page_md_cache->remote_page_rkey, my_data_buf, my_rkey);
                     break;
                 case GetPageCXLRefOrProxyRequest::WRITE:
+                case GetPageCXLRefOrProxyRequest::WRITE_RAW:
                     dest_daemon_conn->rdma_conn->prep_write(
                         ba, my_data_buf, my_rkey, my_size,
                         (rem_page_md_cache->remote_page_addr + page_offset),
@@ -411,7 +422,7 @@ AllocPageMemoryReply allocPageMemory(DaemonContext& daemon_context,
                                      DaemonToMasterConnection& master_connection,
                                      AllocPageMemoryRequest& req) {
     DLOG_ASSERT(
-        daemon_context.m_current_used_page_num + req.count < daemon_context.m_max_data_page_num,
+        daemon_context.m_current_used_page_num + req.count <= daemon_context.m_max_data_page_num,
         "Can't allocate more page memory");
 
     for (size_t c = 0; c < req.count; ++c) {

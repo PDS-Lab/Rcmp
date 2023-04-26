@@ -21,3 +21,5 @@ constexpr static size_t page_id_bits = sizeof(rchms::GAddr) * 8 - offset_bits;
 constexpr static size_t page_hot_dio_swap_watermark = UINT64_MAX;
 
 constexpr static size_t msgq_ring_buf_len = 512;
+
+constexpr static size_t get_page_cxl_ref_or_proxy_write_raw_max_size = 64;

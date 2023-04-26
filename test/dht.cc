@@ -4,6 +4,7 @@
 #include "cmdline.h"
 #include "log.hpp"
 #include "rchms.hpp"
+#include "stats.hpp"
 #include "utils.hpp"
 
 using namespace std;
@@ -80,6 +81,7 @@ struct HashTableRep {
                                                             ->seg_oids[sh % seg_num]
                                                             .seg_oids[sh % seg_num_second_level]
                                                             .buckets[i]);
+                    res.val = val;
                     return true;
                 } else if (!seg.buckets[i].valid) {
                     res = seg.buckets[i];
@@ -178,46 +180,8 @@ struct HashTableRep {
     }
 };
 
-struct PerfStatistics {
-    std::vector<uint32_t> hist;
-    uint64_t cnt;
-
-    PerfStatistics() : hist(100000, 0), cnt(0) {}
-
-    void add(int x) {
-        ++cnt;
-        if (x >= 100000) return;
-        ++hist[x];
-    }
-
-    void percentile(int &p50, int &p99, int &p999, int &p9999) {
-        uint64_t S = 0;
-        bool f50 = false, f99 = false, f999 = false, f9999 = false;
-        for (int i = 0; i < hist.size(); ++i) {
-            S += hist[i];
-            if (!f50 && S * 100 >= cnt * 50) {
-                f50 = true;
-                p50 = i;
-            }
-            if (!f99 && S * 100 >= cnt * 99) {
-                f99 = true;
-                p99 = i;
-            }
-            if (!f999 && S * 1000 >= cnt * 999) {
-                f999 = true;
-                p999 = i;
-            }
-            if (!f9999 && S * 10000 >= cnt * 9999) {
-                f9999 = true;
-                p9999 = i;
-            }
-        }
-    }
-
-    void clear() {
-        hist.assign(100000, 0);
-        cnt = 0;
-    }
+struct PerfStatistics : public Histogram {
+    PerfStatistics() : Histogram(100000, 0, 100000) {}
 };
 
 int main(int argc, char *argv[]) {
@@ -253,7 +217,9 @@ int main(int argc, char *argv[]) {
         cin >> h.st;
     }
 
-    __DEBUG_START_PERF();
+    // __DEBUG_START_PERF();
+    // pool->__NotifyPerf();
+
     const size_t IT = cmd.get<size_t>("iteration");
     const int RA = cmd.get<int>("read_ratio");
 
@@ -267,7 +233,7 @@ int main(int argc, char *argv[]) {
         for (size_t i = 0; i < IT; ++i) {
             h.put(rdd(0, i), rdd(0, i));
             uint64_t e = getTimestamp();
-            ps.add(e - tv);
+            ps.addValue(e - tv);
             tv = e;
         }
 
@@ -282,9 +248,8 @@ int main(int argc, char *argv[]) {
         cout << 0 << " clients total add throughput: " << throughput * 1000 << " Kops" << endl;
 
         {
-            int p50, p99, p999, p9999;
-            ps.percentile(p50, p99, p999, p9999);
-            printf("p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", p50, p99, p999, p9999);
+            printf("p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", ps.getPercentile(50),
+                   ps.getPercentile(99), ps.getPercentile(99.9), ps.getPercentile(99.99));
         }
     }
 
@@ -304,12 +269,12 @@ int main(int argc, char *argv[]) {
                 size_t ret = h.get(rv[i]);
                 DLOG_EXPR(ret, ==, rv[i]);
                 e = getTimestamp();
-                hyr.add(e - tv);
+                hyr.addValue(e - tv);
             } else {
                 int r = rdd(0, i) * rdd(0, i);
                 h.put(r, r);
                 e = getTimestamp();
-                hyw.add(e - tv);
+                hyw.addValue(e - tv);
             }
             tv = e;
         }
@@ -326,14 +291,15 @@ int main(int argc, char *argv[]) {
         cout << IT << " clients total op throughput: " << throughput * 1000 << " Kops" << endl;
 
         {
-            int p50, p99, p999, p9999;
-            hyr.percentile(p50, p99, p999, p9999);
-            printf("read p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", p50, p99, p999, p9999);
+            printf("p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", hyr.getPercentile(50),
+                   hyr.getPercentile(99), hyr.getPercentile(99.9), hyr.getPercentile(99.99));
 
-            hyw.percentile(p50, p99, p999, p9999);
-            printf("write p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", p50, p99, p999, p9999);
+            printf("p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", hyw.getPercentile(50),
+                   hyw.getPercentile(99), hyw.getPercentile(99.9), hyw.getPercentile(99.99));
         }
     }
+
+    pool->__StopPerf();
 
     return 0;
 }

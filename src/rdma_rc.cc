@@ -498,18 +498,19 @@ int RDMAConnection::prep_cas(RDMABatch &b, uint64_t local_addr, uint32_t lkey, u
     return 0;
 }
 
-RDMAFuture RDMAConnection::submit(RDMABatch &b) {
+RDMAFuture RDMAConnection::m_submit_impl(SgeWr *sge_wrs, size_t n) {
     RDMAFuture fu;
-    std::vector<SgeWr> &sge_wrs = b.m_sge_wrs_;
 
     SyncData *sd = alloc_sync_data();
     sd->conn = this;
     sd->timeout = false;
+    sd->inflight = n;
+    sd->wc_finish = false;
 
     uint64_t wr_id = reinterpret_cast<uint64_t>(sd);
     fu.m_sd_ = sd;
 
-    for (size_t i = 0; i < sge_wrs.size(); ++i) {
+    for (size_t i = 0; i < n; ++i) {
         sge_wrs[i].wr.sg_list = &sge_wrs[i].sge;
         sge_wrs[i].wr.next = &sge_wrs[i + 1].wr;
 
@@ -517,13 +518,10 @@ RDMAFuture RDMAConnection::submit(RDMABatch &b) {
         //        sge_wrs[i].wr.wr.rdma.remote_addr);
     }
 
-    ibv_send_wr *wr_head = &sge_wrs.front().wr;
-    sge_wrs.back().wr.wr_id = wr_id;
-    sge_wrs.back().wr.next = nullptr;
-    sge_wrs.back().wr.send_flags |= IBV_SEND_SIGNALED;
-
-    sd->inflight = sge_wrs.size();
-    sd->wc_finish = false;
+    ibv_send_wr *wr_head = &sge_wrs[0].wr;
+    sge_wrs[n - 1].wr.wr_id = wr_id;
+    sge_wrs[n - 1].wr.next = nullptr;
+    sge_wrs[n - 1].wr.send_flags |= IBV_SEND_SIGNALED;
 
     // 探察当前正在发送的wr个数
     uint32_t inflight = m_inflight_count_.load(std::memory_order_acquire);
@@ -546,8 +544,6 @@ RDMAFuture RDMAConnection::submit(RDMABatch &b) {
         DLOG_ERROR("ibv_post_send fail");
         goto need_retry;
     }
-
-    b.clear();
 
     return fu;
 

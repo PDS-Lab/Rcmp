@@ -77,8 +77,7 @@ offset_t MsgQueue::alloc_msg_buffer(size_t size) {
 }
 
 void MsgQueue::enqueue_msg(MsgBuffer& msg_buf) {
-    while (!msgq_q.tryEnqueue(msg_buf.m_msg)) {
-    }
+    msgq_q.forceEnqueue(msg_buf.m_msg);
 }
 
 uint32_t MsgQueue::dequeue_msg(MsgHeader* hv, size_t max_deq) {

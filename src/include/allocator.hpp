@@ -148,7 +148,6 @@ class RingAllocator {
 
         if (UNLIKELY(inv_h != nullptr)) {
             inv_h->invalid = true;
-            inv_h->release = false;
         }
 
         oh = m_prod_tail.load(std::memory_order_acquire);

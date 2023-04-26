@@ -118,7 +118,8 @@ AllocPageReply allocPage(MasterContext& master_context, MasterToDaemonConnection
             erpc::MsgBufferWrap req_raw;
             erpc::MsgBufferWrap resp_raw;
             MasterToDaemonConnection* daemon_connect;
-            page_id_t alloc_page_id;
+            page_id_t alloc_start_page_id;
+            size_t alloc_cnt;
 
             CTX(erpc::MsgBufferWrap req_raw, erpc::MsgBufferWrap resp_raw)
                 : req_raw(req_raw), resp_raw(resp_raw) {}
@@ -133,6 +134,10 @@ AllocPageReply allocPage(MasterContext& master_context, MasterToDaemonConnection
                     std::min(other_rack_alloc_page_num,
                              p.second->max_free_page_num - p.second->current_allocated_page_num);
 
+                if (rack_alloc_page_num == 0) {
+                    return true;
+                }
+
                 auto& rpc = master_context.get_erpc();
 
                 auto req_raw = rpc.alloc_msg_buffer_or_die(sizeof(PageAllocRPC::RequestType));
@@ -146,8 +151,9 @@ AllocPageReply allocPage(MasterContext& master_context, MasterToDaemonConnection
 
                 CTX* ctx = new CTX(req_raw, resp_raw);
                 ctx->fu = ctx->pro.get_future();
-                ctx->alloc_page_id = new_page_id + c;
+                ctx->alloc_start_page_id = new_page_id + c;
                 ctx->daemon_connect = p.second->daemon_connect;
+                ctx->alloc_cnt = rack_alloc_page_num;
                 rpc.enqueue_request(p.second->daemon_connect->peer_session, PageAllocRPC::rpc_type,
                                     req_raw, resp_raw, erpc_general_promise_flag_cb,
                                     static_cast<void*>(&ctx->pro));
@@ -169,11 +175,13 @@ AllocPageReply allocPage(MasterContext& master_context, MasterToDaemonConnection
                 [&ctx]() { return ctx->fu.wait_for(0s) != std::future_status::timeout; });
             this_cort::yield();
 
-            PageRackMetadata* page_meta = new PageRackMetadata();
-            page_meta->rack_id = ctx->daemon_connect->rack_id;
-            page_meta->daemon_id = ctx->daemon_connect->daemon_id;
-            DLOG("alloc page: %lu ---> rack %d", ctx->alloc_page_id, ctx->daemon_connect->rack_id);
-            master_context.m_page_directory.insert(ctx->alloc_page_id, page_meta);
+            for (size_t i = 0; i < ctx->alloc_cnt; ++i) {
+                PageRackMetadata* page_meta = new PageRackMetadata();
+                page_meta->rack_id = ctx->daemon_connect->rack_id;
+                page_meta->daemon_id = ctx->daemon_connect->daemon_id;
+                DLOG("alloc page: %lu ---> rack %d", ctx->alloc_start_page_id + i, ctx->daemon_connect->rack_id);
+                master_context.m_page_directory.insert(ctx->alloc_start_page_id + i, page_meta);
+            }
 
             auto& rpc = master_context.get_erpc();
 

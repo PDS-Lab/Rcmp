@@ -136,21 +136,22 @@ struct helper<const char *> {
  * @warning In C++11, `NULL` will throw warning: passing NULL to non-pointer
  * argument... You should use `nullptr` instead of `NULL`.
  */
-#define DLOG_EXPR(val_a, op, val_b)                                                  \
-    do {                                                                             \
-        decltype(val_a) a = val_a;                                                   \
-        decltype(val_b) b = val_b;                                                   \
-        if (__glibc_unlikely(!(a op b))) {                                           \
-            char fmt[] = "Because " #val_a " = %???, " #val_b " = %???";             \
-            char tmp[sizeof(fmt) + 42];                                              \
-            snprintf(fmt, sizeof(fmt), "Because " #val_a " = %s, " #val_b " = %s",   \
-                     type_fmt_str_detail::helper<                                    \
-                         std::remove_reference<decltype(val_a)>::type>::type_str,    \
-                     type_fmt_str_detail::helper<                                    \
-                         std::remove_reference<decltype(val_b)>::type>::type_str);   \
-            snprintf(tmp, sizeof(tmp), fmt, a, b);                                   \
-            DLOG_FATAL("Assertion `" #val_a " " #op " " #val_b "` failed. %s", tmp); \
-        }                                                                            \
+#define DLOG_EXPR(val_a, op, val_b)                                                                \
+    do {                                                                                           \
+        decltype(val_a) a = val_a;                                                                 \
+        decltype(val_b) b = val_b;                                                                 \
+        if (__glibc_unlikely(!(a op b))) {                                                         \
+            char fmt[] = "Because " #val_a " = %???, " #val_b " = %???";                           \
+            char tmp[sizeof(fmt) + 42];                                                            \
+            snprintf(                                                                              \
+                fmt, sizeof(fmt), "Because " #val_a " = %s, " #val_b " = %s",                      \
+                type_fmt_str_detail::helper<                                                       \
+                    std::remove_cv<std::remove_reference<decltype(val_a)>::type>::type>::type_str, \
+                type_fmt_str_detail::helper<std::remove_cv<                                        \
+                    std::remove_reference<decltype(val_b)>::type>::type>::type_str);               \
+            snprintf(tmp, sizeof(tmp), fmt, a, b);                                                 \
+            DLOG_FATAL("Assertion `" #val_a " " #op " " #val_b "` failed. %s", tmp);               \
+        }                                                                                          \
     } while (0)
 
 #define DLOG_ASSERT(expr, format...)                             \
