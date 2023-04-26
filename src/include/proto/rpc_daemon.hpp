@@ -112,41 +112,6 @@ AllocPageMemoryReply allocPageMemory(DaemonContext& daemon_context,
                                      DaemonToMasterConnection& master_connection,
                                      AllocPageMemoryRequest& req);
 
-struct AllocPageRequest : public RequestMsg {
-    size_t count;
-};
-struct AllocPageReply : public ResponseMsg {
-    page_id_t start_page_id;
-};
-/**
- * @brief
- * 申请page。
- *
- * @param daemon_context
- * @param client_connection
- * @param req
- * @return AllocPageReply 如果page被派到daemon上，则`need_self_alloc_page_memory`为true
- */
-AllocPageReply allocPage(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
-                         AllocPageRequest& req);
-
-struct FreePageRequest : public RequestMsg {
-    page_id_t start_page_id;
-    size_t count;
-};
-struct FreePageReply : public ResponseMsg {
-    bool ret;
-};
-/**
- * @brief 释放page。
- *
- * @param daemon_context
- * @param client_connection
- * @param req
- */
-FreePageReply freePage(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
-                       FreePageRequest& req);
-
 struct AllocRequest : public RequestMsg {
     size_t size;
 };
@@ -163,6 +128,42 @@ struct AllocReply : public ResponseMsg {
  */
 AllocReply alloc(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
                  AllocRequest& req);
+struct AllocPageRequest : public RequestMsg {
+    size_t count;
+};
+struct AllocPageReply : public ResponseMsg {
+    page_id_t start_page_id;  // 分配的起始页id
+    size_t start_count;       // 实际在请求方rack分配的个数
+};
+/**
+ * @brief
+ * 申请一个page
+ *
+ * @param daemon_context
+ * @param client_connection
+ * @param req
+ * @return AllocPageReply
+ */
+AllocPageReply allocPage(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
+                         AllocPageRequest& req);
+
+struct FreePageRequest : public RequestMsg {
+    page_id_t start_page_id;
+    size_t count;
+};
+struct FreePageReply : public ResponseMsg {
+    bool ret;
+};
+/**
+ * @brief 释放page。
+ *
+ * @param master_context
+ * @param daemon_connection
+ * @param req
+ */
+FreePageReply freePage(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
+                       FreePageRequest& req);
+
 
 struct FreeRequest : public RequestMsg {
     rchms::GAddr gaddr;
@@ -194,7 +195,7 @@ struct GetPageRDMARefReply : public ResponseMsg {
  * id，则会触发远程调用。
  *
  * @param daemon_context
- * @param client_connection
+ * @param daemon_connection
  * @param req
  * @return GetPageRDMARefReply
  */
@@ -202,8 +203,28 @@ GetPageRDMARefReply getPageRDMARef(DaemonContext& daemon_context,
                                    DaemonToDaemonConnection& daemon_connection,
                                    GetPageRDMARefRequest& req);
 
+struct DelPageRDMARefRequest : public RequestMsg {
+    page_id_t page_id;
+};
+struct DelPageRDMARefReply : public ResponseMsg {
+    bool isDel;
+};
+/**
+ * @brief 删除page的引用。如果本地Page Table没有该page
+ * id，则会触发远程调用。
+ *
+ * @param daemon_context
+ * @param daemon_connection
+ * @param req
+ * @return DelPageRDMARefReply
+ */
+DelPageRDMARefReply delPageRDMARef(DaemonContext& daemon_context,
+                                   DaemonToDaemonConnection& daemon_connection,
+                                   DelPageRDMARefRequest& req);
+
 struct TryMigratePageRequest : public RequestMsg {
     page_id_t page_id;
+    page_id_t swap_page_id;
     uint64_t score;
     uintptr_t swapout_page_addr;  // 当swapout_page_addr == 0且swapout_page_rkey == 0时代表不换出页
     uintptr_t swapin_page_addr;
@@ -213,6 +234,14 @@ struct TryMigratePageRequest : public RequestMsg {
 struct TryMigratePageReply : public ResponseMsg {
     bool swaped;
 };
+/**
+ * @brief 
+ * 
+ * @param daemon_context 
+ * @param daemon_connection 
+ * @param req 
+ * @return TryMigratePageReply 
+ */
 TryMigratePageReply tryMigratePage(DaemonContext& daemon_context,
                                    DaemonToDaemonConnection& daemon_connection,
                                    TryMigratePageRequest& req);

@@ -40,6 +40,12 @@ PoolContext::PoolContext(ClientOptions options) {
     __impl->m_msgq_nexus->register_req_func(
         RPC_TYPE_STRUCT(rpc_client::getCurrentWriteData)::rpc_type,
         bind_msgq_rpc_func<false>(rpc_client::getCurrentWriteData));
+    __impl->m_msgq_nexus->register_req_func(
+        RPC_TYPE_STRUCT(rpc_client::getPagePastAccessFreq)::rpc_type,
+        bind_msgq_rpc_func<false>(rpc_client::getPagePastAccessFreq));
+    __impl->m_msgq_nexus->register_req_func(
+        RPC_TYPE_STRUCT(rpc_client::removePageCache)::rpc_type,
+        bind_msgq_rpc_func<false>(rpc_client::removePageCache));
 
     // 3. 发送join rack rpc
     using JoinRackRPC = RPC_TYPE_STRUCT(rpc_daemon::joinRack);
@@ -108,9 +114,17 @@ void Close(PoolContext *pool_ctx) {
 Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
     page_id_t page_id = GetPageID(gaddr);
     offset_t in_page_offset = GetPageOffset(gaddr);
-    offset_t offset;
+    LocalPageCache *pageCache;
 
     // TODO: more page
+    SharedMutex *cache_lock;
+    auto p_lock = __impl->m_ptl_cache_lock.find_or_emplace(
+        page_id, []() { return new SharedMutex(); });
+    cache_lock = p_lock.first->second;
+    
+    // 上读锁
+    // DLOG("CN %u: Read page %lu lock", __impl->m_client_id, page_id);
+    while (!cache_lock->try_lock_shared()) ;
 
     auto p = __impl->m_page_table_cache.find_or_emplace_try(page_id, [&]() {
         using GetPageRefOrProxyRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageCXLRefOrProxy);
@@ -136,37 +150,55 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
         if (!resp->refs) {
             memcpy(buf, resp->read_data, size);
             __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
-            return std::make_pair((offset_t)-1, false);
+            return std::make_pair((LocalPageCache *)-1, false);
         }
 
-        offset_t offset = resp->offset;
+        LocalPageCache *pageCache = new LocalPageCache(8);
+        pageCache->offset = resp->offset;
+        
         __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
 
-        DLOG("get ref: %ld --- %#lx", page_id, offset);
+        __impl->m_page.insert(page_id);
 
-        return std::make_pair(offset, true);
+        DLOG("get ref: %ld --- %#lx", page_id, pageCache->offset);
+
+        return std::make_pair(pageCache, true);
     });
 
     // 返回no ref，已经通过ring buffer memcpy读出
     if (p.first == __impl->m_page_table_cache.end()) {
+        cache_lock->unlock_shared();
         return Status::OK;
     }
 
-    offset = p.first->second;
+    pageCache = p.first->second;
     memcpy(buf,
            reinterpret_cast<const void *>(
-               reinterpret_cast<uintptr_t>(__impl->m_cxl_format.page_data_start_addr) + offset +
+               reinterpret_cast<uintptr_t>(__impl->m_cxl_format.page_data_start_addr) + pageCache->offset +
                in_page_offset),
            size);
+
+    // 更新page访问请况统计
+    pageCache->stats.add(getTimestamp());
+    // 解锁
+    cache_lock->unlock_shared();
+    // DLOG("CN %u: Read page %lu unlock", __impl->m_client_id, page_id);
     return Status::OK;
 }
 
 Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
     page_id_t page_id = GetPageID(gaddr);
     offset_t in_page_offset = GetPageOffset(gaddr);
-    offset_t offset;
+    LocalPageCache *pageCache;
 
     // TODO: more page
+    SharedMutex *cache_lock;
+    auto p_lock = __impl->m_ptl_cache_lock.find_or_emplace(
+        page_id, []() { return new SharedMutex(); });
+    cache_lock = p_lock.first->second;
+    // 上读锁
+    // DLOG("CN %u: write page %lu lock", __impl->m_client_id, page_id);
+    while (!cache_lock->try_lock_shared()) ;
 
     auto p = __impl->m_page_table_cache.find_or_emplace_try(page_id, [&]() {
         using GetPageRefOrProxyRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageCXLRefOrProxy);
@@ -208,27 +240,37 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
 
         if (!resp->refs) {
             __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
-            return std::make_pair((offset_t)-1, false);
+            return std::make_pair((LocalPageCache *)-1, false);
         }
 
-        offset_t offset = resp->offset;
+        LocalPageCache *pageCache = new LocalPageCache(8);
+        pageCache->offset = resp->offset;
         __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
 
-        DLOG("get ref: %ld --- %#lx", page_id, offset);
+        __impl->m_page.insert(page_id);
 
-        return std::make_pair(offset, true);
+        DLOG("get ref: %ld --- %#lx", page_id, pageCache->offset);
+
+        return std::make_pair(pageCache, true);
     });
 
     // 返回no ref，已经通过ring buffer memcpy写入
     if (p.first == __impl->m_page_table_cache.end()) {
+        cache_lock->unlock_shared();
         return Status::OK;
     }
 
-    offset = p.first->second;
+    pageCache = p.first->second;
     memcpy(reinterpret_cast<void *>(
-               reinterpret_cast<uintptr_t>(__impl->m_cxl_format.page_data_start_addr) + offset +
+               reinterpret_cast<uintptr_t>(__impl->m_cxl_format.page_data_start_addr) + pageCache->offset +
                in_page_offset),
            buf, size);
+
+    // 更新page访问请况统计
+    pageCache->stats.add(getTimestamp());
+    // 解锁
+    cache_lock->unlock_shared();
+    // DLOG("CN %u: write page %lu unlock", __impl->m_client_id, page_id);
     return Status::OK;
 }
 

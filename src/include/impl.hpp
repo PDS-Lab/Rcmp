@@ -28,7 +28,7 @@
 struct PageRackMetadata {
     uint32_t rack_id;
     mac_id_t daemon_id;
-    SpinMutex latch;
+    SharedMutex latch;
 };
 
 struct MasterConnection {
@@ -178,7 +178,9 @@ struct DaemonContext: public NOCOPYABLE {
     std::unique_ptr<SingleAllocator> m_cxl_page_allocator;
     ConcurrentHashMap<mac_id_t, DaemonConnection *> m_connect_table;
     ConcurrentHashMap<page_id_t, PageMetadata *> m_page_table;
+    ConcurrentHashMap<page_id_t, PageMetadata *> m_swap_page_table;
     ConcurrentHashMap<page_id_t, RemotePageMetaCache *> m_hot_stats;
+    ConcurrentHashMap<page_id_t, SharedMutex *> m_page_ref_lock;
 
     rdma_rc::RDMAConnection m_listen_conn;
     std::vector<ibv_mr *> m_rdma_page_mr_table;  // 为cxl注册的mr，初始化长度后不可更改
@@ -224,6 +226,13 @@ struct ClientToDaemonConnection : public ClientConnection {
     mac_id_t daemon_id;
 };
 
+struct LocalPageCache {
+    FreqStats stats;
+    offset_t offset;
+
+    LocalPageCache(size_t max_recent_record) : stats(max_recent_record) {}
+};
+
 struct ClientContext : public NOCOPYABLE {
     rchms::ClientOptions m_options;
 
@@ -237,7 +246,9 @@ struct ClientContext : public NOCOPYABLE {
     std::unique_ptr<msgq::MsgQueueRPC> m_msgq_rpc;
     std::unique_ptr<msgq::MsgQueueNexus> m_msgq_nexus;
     ClientToDaemonConnection m_local_rack_daemon_connection;
-    ConcurrentHashMap<page_id_t, offset_t> m_page_table_cache;
+    std::unordered_set<page_id_t> m_page;
+    ConcurrentHashMap<page_id_t, LocalPageCache *> m_page_table_cache;
+    ConcurrentHashMap<page_id_t, SharedMutex *> m_ptl_cache_lock;
 
     volatile bool m_msgq_stop;
     std::thread m_msgq_worker;

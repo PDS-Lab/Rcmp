@@ -117,36 +117,36 @@ class ConcurrentHashMap {
         return {{index, p.first}, p.second};
     }
 
-    /**
-     * @brief 查找一个元素。如果不存在，则调用cotr_fn()尝试插入新元素
-     *
-     * @tparam ConFn
-     * @param key
-     * @param try_cotr_fn 返回std::pair<V, bool>，V是新元素，bool是否需要插入新元素
-     * @return std::pair<iterator, bool> 如果插入成功，返回true；查找成功、插入失败返回false
-     */
-    template <typename ConFn>
-    std::pair<iterator, bool> find_or_emplace_try(K key, ConFn&& try_cotr_fn) {
-        int index = hash(key);
-        auto& shard = m_shards[index];
-        auto& map = shard.m_map;
+    // /**
+    //  * @brief 查找一个元素。如果不存在，则调用cotr_fn()尝试插入新元素
+    //  *
+    //  * @tparam ConFn
+    //  * @param key
+    //  * @param try_cotr_fn 返回std::pair<V, bool>，V是新元素，bool是否需要插入新元素
+    //  * @return std::pair<iterator, bool> 如果插入成功，返回true；查找成功、插入失败返回false
+    //  */
+    // template <typename ConFn>
+    // std::pair<iterator, bool> find_or_emplace_try(K key, ConFn&& try_cotr_fn) {
+    //     int index = hash(key);
+    //     auto& shard = m_shards[index];
+    //     auto& map = shard.m_map;
 
-        do {
-            iterator it = find(key);
-            if (it != end()) {
-                return {it, false};
-            }
-        } while (!shard.m_lock.try_lock());
+    //     // do {
+    //         iterator it = find(key);
+    //         if (it != end()) {
+    //             return {it, false};
+    //         }
+    //     // } while (!shard.m_lock.try_lock());
 
-        std::pair<V, bool> v = try_cotr_fn();
-        if (v.second) {
-            auto p = map.emplace(key, std::move(v.first));
-            shard.m_lock.unlock();
-            return {{index, p.first}, p.second};
-        }
-        shard.m_lock.unlock();
-        return {end(), false};
-    }
+    //     std::pair<V, bool> v = try_cotr_fn();
+    //     if (v.second) {
+    //         auto p = map.emplace(key, std::move(v.first));
+    //         shard.m_lock.unlock();
+    //         return {{index, p.first}, p.second};
+    //     }
+    //     shard.m_lock.unlock();
+    //     return {end(), false};
+    // }
 
     void erase(K key) {
         iterator it = find(key);

@@ -242,9 +242,18 @@ LatchRemotePageReply latchRemotePage(MasterContext& master_context,
 
     page_meta = it->second;
 
-    if (!page_meta->latch.try_lock()) {
-        this_cort::reset_resume_cond([&page_meta]() { return page_meta->latch.try_lock(); });
-        this_cort::yield();
+    if (!req.isWriteLock) {
+        if (!page_meta->latch.try_lock_shared()) {
+            this_cort::reset_resume_cond([&page_meta]() { return page_meta->latch.try_lock_shared(); });
+            this_cort::yield();
+        }
+    }
+    else
+    {
+        if (!page_meta->latch.try_lock()) {
+            this_cort::reset_resume_cond([&page_meta]() { return page_meta->latch.try_lock(); });
+            this_cort::yield();
+        }
     }
 
     MasterToDaemonConnection* dest_daemon = dynamic_cast<MasterToDaemonConnection*>(
@@ -273,9 +282,29 @@ UnLatchRemotePageReply unLatchRemotePage(MasterContext& master_context,
 
     page_meta = it->second;
 
-    page_meta->latch.unlock();
+    page_meta->latch.unlock_shared();
 
     UnLatchRemotePageReply reply;
+    return reply;
+}
+
+UnLatchPageAndBalanceReply unLatchPageAndBalance(MasterContext& master_context,
+                                                 MasterToDaemonConnection& daemon_connection,
+                                                 UnLatchPageAndBalanceRequest& req) {
+    PageRackMetadata* page_meta;
+    PageRackMetadata* swap_page_meta;
+    auto p = master_context.m_page_directory.find(req.page_id);
+    DLOG_ASSERT(p != master_context.m_page_directory.end(), "Can't find this page %lu", req.page_id);
+    page_meta = p->second;
+
+    page_meta->rack_id = req.new_rack_id;
+    page_meta->daemon_id = req.new_daemon_id;
+
+    page_meta->latch.unlock();
+    DLOG("Swap page %lu to rack: %u, DN:%u. This operation is initiated by DN %u", req.page_id,
+         req.new_rack_id, req.new_daemon_id, daemon_connection.daemon_id);
+
+    UnLatchPageAndBalanceReply reply;
     return reply;
 }
 
