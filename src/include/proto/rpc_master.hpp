@@ -108,6 +108,7 @@ GetRackDaemonByPageIDReply getRackDaemonByPageID(MasterContext& master_context,
 struct LatchRemotePageRequest : public RequestMsg {
     bool isWriteLock;
     page_id_t page_id;
+    page_id_t page_id_swap;
 };
 struct LatchRemotePageReply : public ResponseMsg {
     rack_id_t dest_rack_id;
@@ -149,6 +150,9 @@ struct UnLatchPageAndBalanceRequest : public RequestMsg {
     page_id_t page_id;
     mac_id_t new_daemon_id;
     rack_id_t new_rack_id;
+    page_id_t page_id_swap;
+    mac_id_t new_daemon_id_swap;
+    rack_id_t new_rack_id_swap;
 };
 struct UnLatchPageAndBalanceReply : public ResponseMsg {};
 /**

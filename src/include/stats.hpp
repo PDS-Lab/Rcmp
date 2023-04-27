@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <deque>
 #include <vector>
+#include <atomic>
 
 class Histogram {
    public:
@@ -41,7 +42,7 @@ class FreqStats {
     void dump(size_t &cnt, std::vector<uint64_t> &time_v);
 
    private:
-    size_t m_cnt;
+    std::atomic<size_t> m_cnt;
     size_t m_max_recent_record;
     std::deque<uint64_t> m_time_q;
     uint64_t m_last_time;

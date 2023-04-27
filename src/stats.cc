@@ -70,7 +70,7 @@ int Histogram::getPercentile(double percentile) const {
 
 int Histogram::getBucket(double value) const { return (value - m_minValue) / m_bucketWidth; }
 
-FreqStats::FreqStats(size_t max_recent_record) : m_cnt(0), m_max_recent_record(max_recent_record) {}
+FreqStats::FreqStats(size_t max_recent_record) : m_max_recent_record(max_recent_record) {m_cnt.store(0);}
 
 void FreqStats::add(uint64_t t) {
     if (m_time_q.size() >= m_max_recent_record) {
@@ -79,20 +79,20 @@ void FreqStats::add(uint64_t t) {
         m_start_time = t;
     }
     m_time_q.push_back(t);
-    ++m_cnt;
+    m_cnt.fetch_add(1);
     m_last_time = t;
 }
 
 void FreqStats::clear() {
-    m_cnt = 0;
+    m_cnt.store(0);
     m_time_q.clear();
 }
 
-size_t FreqStats::freq() const { return m_cnt; }
+size_t FreqStats::freq() const { return m_cnt.load(); }
 uint64_t FreqStats::start() const { return m_start_time; }
 uint64_t FreqStats::last() const { return m_last_time; }
 
 void FreqStats::dump(size_t &cnt, std::vector<uint64_t> &time_v) {
-    cnt = m_cnt;
+    cnt = m_cnt.load();
     time_v.assign(m_time_q.begin(), m_time_q.end());
 }
