@@ -735,6 +735,8 @@ AllocPageReply allocPage(DaemonContext& daemon_context, DaemonToClientConnection
         PageMetadata *page_meta = allocPageMemoryReply.pageMetaVec[c];
         // page_meta->ref_client.insert(&client_connection);
         daemon_context.m_page_table.insert(local_req.start_page_id + c, page_meta);
+        SharedMutex* ref_lock = new SharedMutex();
+        daemon_context.m_page_ref_lock.insert(local_req.start_page_id + c, ref_lock);
         DLOG("allocPage: insert page %lu, offset = %ld ", local_req.start_page_id + c,
              allocPageMemoryReply.pageMetaVec[c]->cxl_memory_offset);
     }
@@ -856,15 +858,17 @@ void delPageRefAndCacheBroadcast(DaemonContext& daemon_context, page_id_t page_i
     // DLOG("DN %u: delPageRefBroadcast page %lu", daemon_context.m_daemon_id, page_id);
     // del page ref
     using DelPageRDMARefRPC = RPC_TYPE_STRUCT(rpc_daemon::delPageRDMARef);
-    std::vector<std::future<void>> fu_ref_vec;
+    std::vector<std::promise<void>> pro_ref_vec(page_meta->ref_daemon.size());
     std::vector<erpc::MsgBufferWrap> req_raw_ref_vec;
     std::vector<erpc::MsgBufferWrap> resp_raw_ref_vec;
     // del page cache
-    std::vector<SpinFuture<msgq::MsgBuffer>> fu_cache_vec;
+    std::vector<SpinPromise<msgq::MsgBuffer>> pro_cache_vec(page_meta->ref_client.size());
 
+    size_t i =0;
     for (auto daemon_conn : page_meta->ref_daemon) {
         // DLOG("DN %u: delPageRefBroadcast for i = %ld, peer_session = %d, daemon_id = %u",
-        // daemon_context.m_daemon_id, i, daemon_conn->peer_session, daemon_conn->daemon_id); i++;
+        // daemon_context.m_daemon_id, i, daemon_conn->peer_session, daemon_conn->daemon_id); 
+        
 
         auto req_raw = rpc.alloc_msg_buffer_or_die(sizeof(DelPageRDMARefRPC::RequestType));
         auto resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(DelPageRDMARefRPC::ResponseType));
@@ -873,16 +877,15 @@ void delPageRefAndCacheBroadcast(DaemonContext& daemon_context, page_id_t page_i
         ref_req->mac_id = daemon_context.m_daemon_id;
         ref_req->page_id = page_id;  // 准备删除ref的page id
 
-        std::promise<void> pro;
-        std::future<void> fu = pro.get_future();
         rpc.enqueue_request(daemon_conn->peer_session, DelPageRDMARefRPC::rpc_type, req_raw,
-                            resp_raw, erpc_general_promise_flag_cb, static_cast<void*>(&pro));
+                            resp_raw, erpc_general_promise_flag_cb, static_cast<void*>(&pro_ref_vec[i]));
 
-        fu_ref_vec.push_back(std::move(fu));
         req_raw_ref_vec.push_back(req_raw);
         resp_raw_ref_vec.push_back(resp_raw);
+        i++;
     }
 
+    i = 0;
     using RemovePageCacheRPC = RPC_TYPE_STRUCT(rpc_client::removePageCache);
     for (auto client_conn : page_meta->ref_client) {
         DLOG("DN %u: delPageCacheBroadcast client_id = %u",
@@ -894,16 +897,13 @@ void delPageRefAndCacheBroadcast(DaemonContext& daemon_context, page_id_t page_i
         wd_req->mac_id = daemon_context.m_daemon_id;
         wd_req->page_id = page_id;
 
-        SpinPromise<msgq::MsgBuffer> pro;
-        SpinFuture<msgq::MsgBuffer> fu = pro.get_future();
         client_conn->msgq_rpc->enqueue_request(RemovePageCacheRPC::rpc_type, wd_req_raw,
-                                               msgq_general_bool_flag_cb, static_cast<void*>(&pro));
-
-        fu_cache_vec.push_back(std::move(fu));
+                                               msgq_general_bool_flag_cb, static_cast<void*>(&pro_cache_vec[i]));
+        i++;
     }
 
-    for (size_t i = 0; i < fu_ref_vec.size(); i++) {
-        auto fu = std::move(fu_ref_vec[i]);
+    for (size_t i = 0; i < pro_ref_vec.size(); i++) {
+        auto fu = pro_ref_vec[i].get_future();
         this_cort::reset_resume_cond(
             [&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
         this_cort::yield();
@@ -915,9 +915,9 @@ void delPageRefAndCacheBroadcast(DaemonContext& daemon_context, page_id_t page_i
         rpc.free_msg_buffer(resp_raw_ref_vec[i]);
     }
 
-    size_t i = 0;
+    i = 0;
     for (auto client_conn : page_meta->ref_client) {
-        auto fu = std::move(fu_cache_vec[i]);
+        auto fu = pro_cache_vec[i].get_future();
         this_cort::reset_resume_cond(
             [&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
         this_cort::yield();
@@ -932,6 +932,17 @@ TryMigratePageReply tryMigratePage(DaemonContext& daemon_context,
                                    DaemonToDaemonConnection& daemon_connection,
                                    TryMigratePageRequest& req) {
     // 获取预交换的page的本地元数据
+    SharedMutex *ref_lock;
+    auto p_lock = daemon_context.m_page_ref_lock.find(req.page_id);
+    DLOG_ASSERT(p_lock != daemon_context.m_page_ref_lock.end(), "Can't find page %lu's ref lock",
+                req.page_id);
+    ref_lock = p_lock->second;
+
+    if (!ref_lock->try_lock()) {
+        this_cort::reset_resume_cond([&ref_lock]() { return ref_lock->try_lock_shared(); });
+        this_cort::yield();
+    }
+
     PageMetadata* page_meta;
     auto p_page_meta = daemon_context.m_page_table.find(req.page_id);
     DLOG_ASSERT(p_page_meta != daemon_context.m_page_table.end(), "Can't find page %lu",
@@ -1032,6 +1043,7 @@ TryMigratePageReply tryMigratePage(DaemonContext& daemon_context,
         // daemon_context.m_swap_page_table.erase(req.swap_page_id);
         // daemon_context.m_current_used_swap_page_num--;
     }
+    ref_lock->unlock();
     DLOG("DN %u: finished migrate!", daemon_context.m_daemon_id);
     return reply;
 }
