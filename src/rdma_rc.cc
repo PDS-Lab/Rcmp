@@ -16,7 +16,7 @@ int RDMAConnection::RNR_RETRY_COUNT = 7;
 uint8_t RDMAConnection::INITIATOR_DEPTH = 2;
 int RDMAConnection::RESPONDER_RESOURCES = 2;
 int RDMAConnection::POLL_ENTRY_COUNT = 16;
-bool RDMAConnection::RDMA_TIMEOUT_ENABLE = true;
+bool RDMAConnection::RDMA_TIMEOUT_ENABLE = false;
 uint32_t RDMAConnection::RDMA_TIMEOUT_MS = 2000;
 
 std::function<void(RDMAConnection *conn, void *param)> RDMAConnection::m_hook_connect_;

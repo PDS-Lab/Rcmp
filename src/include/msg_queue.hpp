@@ -28,6 +28,51 @@ struct MsgUDPConnPacket {
 using msgq_handler_t = void (*)(MsgBuffer &req, void *ctx);
 using msgq_callback_t = void (*)(MsgBuffer &resp, void *arg);
 
+#if MSGQ_SINGLE_FIFO_ON == 1
+
+struct MsgHeader final {
+    bool invalid_flag : 1;
+    enum : uint8_t { REQ, RESP } msg_type : 1;
+    uint8_t rpc_type;
+    size_t size : 32;  // 实际数据大小
+    msgq_callback_t cb;
+    void *arg;
+
+    uint8_t data[0];
+};
+
+struct MsgBuffer {
+    size_t size() const;
+    void *get_buf() const;
+
+    MsgQueue *m_q;
+    MsgHeader *m_msg;  // 指向MsgHeader的地址
+    size_t m_size;     // 实际数据大小
+};
+
+struct MsgQueue final {
+    MsgQueue();
+    ~MsgQueue() = default;
+
+    MsgHeader *alloc_msg_buffer(size_t size);
+    void enqueue_msg();
+    void dequeue_msg(std::vector<MsgHeader *> &hv);
+    void free_msg_buffer();
+
+    atomic_po_val_t m_prod_head;
+    atomic_po_val_t m_prod_tail;
+    atomic_po_val_t m_cons_head;
+    atomic_po_val_t m_cons_tail;
+
+    constexpr static size_t SZ = msgq_ring_buf_len;
+
+    uint8_t m_ring[msgq_ring_buf_len];
+
+    MsgHeader *at(size_t i);
+    static void update_ht(atomic_po_val_t *ht, atomic_po_val_t *ht_);
+};
+
+#else
 struct MsgHeader final {
     enum : uint8_t { REQ, RESP } msg_type : 1;
     uint8_t rpc_type;
@@ -58,8 +103,10 @@ struct MsgQueue final {
 
     ConcurrentQueue<MsgHeader, 64, ConcurrentQueueProducerMode::MP, ConcurrentQueueConsumerMode::SC>
         msgq_q;
-    RingAllocator<msgq_ring_buf_len> m_ra;
+    RingArena<msgq_ring_buf_len> m_ra;
 };
+
+#endif  // MSGQ_SINGLE_FIFO_ON
 
 struct MsgQueueNexus {
     constexpr static size_t max_msgq_handler = (1 << (sizeof(uint8_t) * 8));

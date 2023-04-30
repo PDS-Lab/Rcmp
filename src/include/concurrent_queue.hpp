@@ -74,7 +74,7 @@ class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::MP, ConcurrentQueueCon
     void forceEnqueue(T n) {
         atomic_po_val_t h, oh, nh;
 
-        oh = m_prod_head.fetch_add_one_both(std::memory_order_acquire);
+        oh = m_prod_head.fetch_add_both(1, 1, std::memory_order_acquire);
         while (UNLIKELY(oh.pos - m_cons_tail.load(std::memory_order_relaxed) >= SZ)) {
             h = m_prod_tail.load(std::memory_order_acquire);
             while (h.cnt == oh.cnt &&
@@ -171,7 +171,7 @@ class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::MP, ConcurrentQueueCon
     void forceEnqueue(T n) {
         atomic_po_val_t h, oh, nh;
 
-        oh = m_prod_head.fetch_add_one_both(std::memory_order_acquire);
+        oh = m_prod_head.fetch_add_both(1, 1, std::memory_order_acquire);
         while (UNLIKELY(oh.pos >= m_cons_tail.load(std::memory_order_relaxed).pos + SZ)) {
             h = m_prod_tail.load(std::memory_order_acquire);
             while (h.cnt == oh.cnt &&

@@ -204,15 +204,28 @@ struct atomic_po_val_t {
         return o;
     }
 
-    inline atomic_po_val_t fetch_add_one_both(std::memory_order __m = std::memory_order_seq_cst) {
+    inline uint32_t fetch_add_cnt(uint32_t cnt_,
+                                  std::memory_order __m = std::memory_order_seq_cst) {
+        return __atomic_fetch_add(&this->cnt, cnt_, (int)__m);
+    }
+
+    inline uint32_t fetch_add_pos(uint32_t pos_,
+                                  std::memory_order __m = std::memory_order_seq_cst) {
+        return __atomic_fetch_add(&this->pos, pos_, (int)__m);
+    }
+
+    inline atomic_po_val_t fetch_add_both(uint32_t pos, uint32_t cnt,
+                                          std::memory_order __m = std::memory_order_seq_cst) {
         atomic_po_val_t o;
-        o.raw = __atomic_fetch_add(&raw, (1ull << 32) | 1ull, (int)__m);
+        o.cnt = cnt;
+        o.pos = pos;
+        o.raw = __atomic_fetch_add(&raw, o.raw, (int)__m);
         return o;
     }
 
     inline bool compare_exchange_weak(atomic_po_val_t &expected, atomic_po_val_t desired,
-                               std::memory_order __s = std::memory_order_seq_cst,
-                               std::memory_order __f = std::memory_order_seq_cst) {
+                                      std::memory_order __s = std::memory_order_seq_cst,
+                                      std::memory_order __f = std::memory_order_seq_cst) {
         return __atomic_compare_exchange_n(&raw, &expected.raw, desired.raw, true, (int)__s,
                                            (int)__f);
     }
@@ -221,3 +234,5 @@ struct atomic_po_val_t {
 inline void __DEBUG_START_PERF() {
     system(("sudo perf record -F 99 -g -p " + std::to_string(getpid()) + " &").c_str());
 }
+
+inline void __RANDOM_SLEEP() { usleep(rand() % 10); }

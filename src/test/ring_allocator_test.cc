@@ -1,5 +1,7 @@
 #include <unistd.h>
+
 #include <iostream>
+#include <random>
 
 #include "allocator.hpp"
 #include "utils.hpp"
@@ -7,25 +9,26 @@
 using namespace std;
 
 int main() {
-    RingAllocator<512> bb;
+    RingArena<512, 4> bb;
+
+    const size_t IT = 2000000;
 
     vector<thread> vs;
     for (int i = 0; i < 8; i++) {
         vs.emplace_back([&, i]() {
-            int a = 0;
-            while (a < 2000000) {
-                int s = (rand() % 10) + 4;
+            size_t a = 0;
+            mt19937 rng(i);
+            while (a < IT) {
+                int s = (rng() % 10) + 4;
                 int* p = nullptr;
                 while (p == nullptr) {
-                    p = (int*)bb.alloc(s);
+                    p = (int*)bb.allocate(s);
                 }
                 *p = -1;
-                // s = (rand() % 5) + 1;
-                // usleep(s);
-                bb.free(p);
+                bb.deallocate(p);
 
                 if ((++a) % 1000000 == 0) {
-                    printf("%d %d\n", i, a);
+                    printf("%d %lu\n", i, a);
                 }
             }
         });
@@ -37,6 +40,6 @@ int main() {
         th.join();
     }
 
-    cout << getTimestamp() - _s << endl;
+    cout << 1.0 * vs.size() * IT / (getTimestamp() - _s) << " Mops" << endl;
     return 0;
 }

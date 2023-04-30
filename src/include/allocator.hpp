@@ -110,12 +110,17 @@ class SingleAllocator : public IDGenerator {
 template <size_t SZ>
 class RingAllocator {
    public:
-    RingAllocator() = default;
+    RingAllocator() {
+        m_prod_head.raw = 0;
+        m_prod_tail.raw = 0;
+        m_tail = 0;
+    }
     ~RingAllocator() = default;
 
     const void* base() const { return data; }
 
-    void* alloc(size_t s) {
+    void* allocate(size_t s) {
+        bool f = false;
     retry:
         Header *inv_h, *h;
         atomic_po_val_t oh = m_prod_head.load(std::memory_order_acquire), nh, ph;
@@ -127,17 +132,23 @@ class RingAllocator {
                 // invalid tail
                 size_t inv_s = align_ceil(oh.pos, SZ) - oh.pos;
                 nh.pos += inv_s;
-                inv_h = ath(oh.pos);
-                h = ath(SZ);
+                inv_h = at(oh.pos);
+                h = at(SZ);
             } else {
-                h = ath(oh.pos);
+                h = at(oh.pos);
             }
-            if (UNLIKELY(nh.pos - m_tail > SZ)) {
-                try_gc();
-                if (UNLIKELY(nh.pos - m_tail > SZ))
-                    return nullptr;
-                else
+            uint64_t d = nh.pos - m_tail;
+            if (UNLIKELY(!f && d > SZ / 2)) {
+                f = true;
+                if (try_gc()) {
                     goto retry;
+                }
+            }
+            if (UNLIKELY(d > SZ)) {
+                if (try_gc())
+                    goto retry;
+                else
+                    return nullptr;
             }
         } while (!m_prod_head.compare_exchange_weak(oh, nh, std::memory_order_acquire,
                                                     std::memory_order_acquire));
@@ -148,26 +159,19 @@ class RingAllocator {
 
         if (UNLIKELY(inv_h != nullptr)) {
             inv_h->invalid = true;
+            inv_h->release = false;
         }
 
-        oh = m_prod_tail.load(std::memory_order_acquire);
-        do {
-            ph = m_prod_head.load(std::memory_order_relaxed);
-            nh = oh;
-            if ((++nh.cnt) == ph.cnt) {
-                nh.pos = ph.pos;
-            }
-        } while (!m_prod_tail.compare_exchange_weak(oh, nh, std::memory_order_release,
-                                                    std::memory_order_acquire));
+        m_prod_tail.fetch_add_cnt(1, std::memory_order_release);
 
         if (UNLIKELY(inv_h != nullptr)) {
-            free(inv_h->data);
+            deallocate(inv_h->data);
         }
 
         return h->data;
     }
 
-    void free(void* p) {
+    void deallocate(void* p) {
         Header* h = (Header*)((char*)p - offsetof(Header, data));
         h->release = true;
     }
@@ -176,38 +180,113 @@ class RingAllocator {
     struct Header {
         bool invalid : 1;
         bool release : 1;
-        size_t s;
+        size_t s : 62;
         char data[0];
     };
 
     atomic_po_val_t m_prod_head;
     atomic_po_val_t m_prod_tail;
 
-    char data[SZ];
+    char data[SZ + sizeof(Header)];
 
     Mutex m_gc_lck;
     size_t m_tail;
 
-    void try_gc() {
+    bool try_gc() {
         if (!m_gc_lck.try_lock()) {
-            return;
+            return false;
+        }
+
+        atomic_po_val_t oh = m_prod_tail.load(std::memory_order_acquire),
+                        ph = m_prod_head.load(std::memory_order_relaxed);
+        while (oh.cnt == ph.cnt &&
+               !m_prod_tail.compare_exchange_weak(oh, ph, std::memory_order_release,
+                                                  std::memory_order_acquire)) {
         }
 
         auto tail = m_tail;
-        Header* h = ath(tail);
+        Header* h = at(tail);
         while (tail < m_prod_tail.load().pos && h->release) {
             if (UNLIKELY(h->invalid)) {
                 tail = align_ceil(tail, SZ);
             } else {
                 tail += h->s + sizeof(Header);
             }
-            if (tail - m_tail > SZ / 4) m_tail = tail;
-            h = ath(tail);
+            // if (tail - m_tail > SZ / 4) m_tail = tail;
+            h = at(tail);
         }
         m_tail = tail;
 
         m_gc_lck.unlock();
+        return true;
     }
 
-    Header* ath(size_t i) const { return (Header*)(data + (i % SZ)); }
+    Header* at(size_t i) const { return (Header*)(data + (i % SZ)); }
+};
+
+template <size_t SZ, size_t BucketNum = 4>
+class RingArena {
+   public:
+    RingArena() {
+        for (size_t i = 0; i < BucketNum; ++i) {
+            m_bs[i].pv.raw = 0;
+        }
+    }
+
+    const void* base() const { return m_bs; }
+
+    void* allocate(size_t s) {
+        // thread local
+        uint8_t b_cur = reinterpret_cast<uintptr_t>(&b_cur) % BucketNum, bc = b_cur;
+        do {
+            Block& b = m_bs[bc];
+            atomic_po_val_t opv = b.pv.load(std::memory_order_acquire), npv;
+
+            while (1) {
+                npv = opv;
+                npv.pos += s;
+                if (npv.pos < block_size) {
+                    npv.cnt++;
+
+                    if (b.pv.compare_exchange_weak(opv, npv, std::memory_order_acquire,
+                                                   std::memory_order_acquire)) {
+                        return b.b + opv.pos;
+                    }
+
+                } else {
+                    bc = (bc + 1) % BucketNum;
+                    break;
+                }
+            }
+
+        } while (bc != b_cur);
+
+        return nullptr;
+    }
+
+    void deallocate(void* p) {
+        uint8_t bc = div_floor(reinterpret_cast<uintptr_t>(p) - reinterpret_cast<uintptr_t>(m_bs),
+                               sizeof(Block));
+        DLOG_ASSERT(bc < BucketNum, "Out Of Memory");
+
+        Block& b = m_bs[bc];
+        atomic_po_val_t opv = b.pv.load(std::memory_order_acquire), npv;
+        do {
+            npv = opv;
+            if ((--npv.cnt) == 0) {
+                npv.pos = 0;
+            }
+        } while (!b.pv.compare_exchange_weak(opv, npv, std::memory_order_release,
+                                             std::memory_order_acquire));
+    }
+
+   private:
+    static const size_t block_size = SZ / BucketNum;
+
+    struct Block {
+        atomic_po_val_t pv;
+        uint8_t b[block_size];
+    };
+
+    Block m_bs[BucketNum];
 };
