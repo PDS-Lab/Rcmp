@@ -143,12 +143,11 @@ struct helper<const char *> {
         if (__glibc_unlikely(!(a op b))) {                                                         \
             char fmt[] = "Because " #val_a " = %???, " #val_b " = %???";                           \
             char tmp[sizeof(fmt) + 42];                                                            \
-            snprintf(                                                                              \
-                fmt, sizeof(fmt), "Because " #val_a " = %s, " #val_b " = %s",                      \
-                type_fmt_str_detail::helper<                                                       \
-                    std::remove_cv<std::remove_reference<decltype(val_a)>::type>::type>::type_str, \
-                type_fmt_str_detail::helper<std::remove_cv<                                        \
-                    std::remove_reference<decltype(val_b)>::type>::type>::type_str);               \
+            snprintf(fmt, sizeof(fmt), "Because " #val_a " = %s, " #val_b " = %s",                 \
+                     type_fmt_str_detail::helper<typename std::remove_cv<                          \
+                         typename std::remove_reference<decltype(val_a)>::type>::type>::type_str,  \
+                     type_fmt_str_detail::helper<typename std::remove_cv<                          \
+                         typename std::remove_reference<decltype(val_b)>::type>::type>::type_str); \
             snprintf(tmp, sizeof(tmp), fmt, a, b);                                                 \
             DLOG_FATAL("Assertion `" #val_a " " #op " " #val_b "` failed. %s", tmp);               \
         }                                                                                          \

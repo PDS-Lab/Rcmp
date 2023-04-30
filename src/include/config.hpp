@@ -4,6 +4,8 @@
 
 #include "rchms.hpp"
 
+#define MSGQ_SINGLE_FIFO_ON 0
+
 /**
  * @brief 页面大小2MB
  */
