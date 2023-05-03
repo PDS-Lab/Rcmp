@@ -63,8 +63,8 @@ void delPageCacheBroadcast(DaemonContext& daemon_context, page_id_t page_id,
  * @param pageMetaVec
  * @return void
  */
-void allocPageMemoryTmp(DaemonContext& daemon_context,
-                                     page_id_t start_page_id, size_t count, std::vector<PageMetadata *>& pageMetaVec);
+void allocPageMemoryTmp(DaemonContext& daemon_context, page_id_t start_page_id, size_t count,
+                        std::vector<PageMetadata*>& pageMetaVec);
 
 /*************************************************************/
 
@@ -234,7 +234,7 @@ retry:
             dd_conn->ip = resp->dest_daemon_ipv4.get_string();
             dd_conn->port = resp->dest_daemon_erpc_port;
             DLOG("First connect daemon: %u. peer_session = %d", dd_conn->daemon_id,
-            dd_conn->peer_session);
+                 dd_conn->peer_session);
 
             using CrossRackConnectRPC = RPC_TYPE_STRUCT(rpc_daemon::crossRackConnect);
 
@@ -347,7 +347,7 @@ retry:
 
     // 只有刚好等于水位线时，才进行迁移
     if (rem_page_md_cache->stats.freq() != 2) {
-    // if (rem_page_md_cache->stats.freq() == page_hot_dio_swap_watermark) {
+        // if (rem_page_md_cache->stats.freq() == page_hot_dio_swap_watermark) {
         // 启动DirectIO流程
         if (rem_page_md_cache->stats.freq() > 0) {
             dest_daemon_conn = rem_page_md_cache->remote_page_daemon_conn;
@@ -430,9 +430,9 @@ retry:
                         ba, my_data_buf, my_rkey, my_size,
                         (rem_page_md_cache->remote_page_addr + page_offset),
                         rem_page_md_cache->remote_page_rkey, false);
-                    DLOG("read size %u remote addr [%#lx, %u] to local addr [%#lx, %u]", my_size,
-                         rem_page_md_cache->remote_page_addr,
-                         rem_page_md_cache->remote_page_rkey, my_data_buf, my_rkey);
+                    // DLOG("read size %u remote addr [%#lx, %u] to local addr [%#lx, %u]", my_size,
+                    //      rem_page_md_cache->remote_page_addr, rem_page_md_cache->remote_page_rkey,
+                    //      my_data_buf, my_rkey);
                     break;
                 case GetPageCXLRefOrProxyRequest::WRITE:
                 case GetPageCXLRefOrProxyRequest::WRITE_RAW:
@@ -440,10 +440,9 @@ retry:
                         ba, my_data_buf, my_rkey, my_size,
                         (rem_page_md_cache->remote_page_addr + page_offset),
                         rem_page_md_cache->remote_page_rkey, false);
-                    DLOG("write size %u remote addr [%#lx, %u] to local addr [%#lx, %u]",
-                    my_size,
-                         rem_page_md_cache->remote_page_addr,
-                         rem_page_md_cache->remote_page_rkey, my_data_buf, my_rkey);
+                    // DLOG("write size %u remote addr [%#lx, %u] to local addr [%#lx, %u]", my_size,
+                    //      rem_page_md_cache->remote_page_addr, rem_page_md_cache->remote_page_rkey,
+                    //      my_data_buf, my_rkey);
                     break;
             }
             auto fu = dest_daemon_conn->rdma_conn->submit(ba);
@@ -482,7 +481,7 @@ retry:
         // 交换的情况，需要将自己的一个page交换到对方, 这个读写过程由对方完成
 
         // 首先为即将迁移到本地的page申请内存
-        std::vector<PageMetadata *> pageMetaVec;
+        std::vector<PageMetadata*> pageMetaVec;
         allocPageMemoryTmp(daemon_context, page_id, 1, pageMetaVec);
         page_metadata = pageMetaVec.front();
         DLOG("allocPageMemoryTmp: page_metadata->offset = %#lx", page_metadata->cxl_memory_offset);
@@ -535,7 +534,7 @@ retry:
 
             // 给即将换出页的page_meta上写锁
             auto p_lock_swapout = daemon_context.m_page_ref_lock.find_or_emplace(
-                page_id, []() { return new SharedMutex(); });
+                swap_page_id, []() { return new SharedMutex(); });
             ref_lock_swapout = p_lock_swapout.first->second;
 
             if (!ref_lock_swapout->try_lock()) {
@@ -702,9 +701,8 @@ AllocPageMemoryReply allocPageMemory(DaemonContext& daemon_context,
     return reply;
 }
 
-void allocPageMemoryTmp(DaemonContext& daemon_context,
-                                     page_id_t start_page_id, size_t count, std::vector<PageMetadata *>& pageMetaVec)
-{
+void allocPageMemoryTmp(DaemonContext& daemon_context, page_id_t start_page_id, size_t count,
+                        std::vector<PageMetadata*>& pageMetaVec) {
     DLOG_ASSERT(
         daemon_context.m_current_used_page_num + count <= daemon_context.m_max_data_page_num,
         "Can't allocate more page memory");
@@ -753,12 +751,12 @@ AllocPageReply allocPage(DaemonContext& daemon_context, DaemonToClientConnection
 
     page_id_t start_page_id = resp->start_page_id;
 
-    std::vector<PageMetadata *> pageMetaVec;
+    std::vector<PageMetadata*> pageMetaVec;
     allocPageMemoryTmp(daemon_context, start_page_id, resp->start_count, pageMetaVec);
 
     daemon_context.m_current_used_page_num += resp->start_count;
     for (size_t c = 0; c < resp->start_count; ++c) {
-        PageMetadata *page_meta = pageMetaVec[c];
+        PageMetadata* page_meta = pageMetaVec[c];
         // page_meta->ref_client.insert(&client_connection);
         daemon_context.m_page_table.insert(start_page_id + c, page_meta);
         SharedMutex* ref_lock = new SharedMutex();
@@ -820,8 +818,9 @@ GetPageRDMARefReply getPageRDMARef(DaemonContext& daemon_context,
     daemon_connection.rdma_conn = daemon_conn->rdma_conn;
     page_meta->ref_daemon.insert(&daemon_connection);
 
-    DLOG("get page %lu rdma ref [%#lx, %u], local [%#lx, %u],  peer_session = %d, daemon_id = %u", req.page_id,
-         local_addr, mr->rkey, local_addr, mr->lkey, daemon_connection.peer_session, daemon_connection.daemon_id);
+    DLOG("get page %lu rdma ref [%#lx, %u], local [%#lx, %u],  peer_session = %d, daemon_id = %u",
+         req.page_id, local_addr, mr->rkey, local_addr, mr->lkey, daemon_connection.peer_session,
+         daemon_connection.daemon_id);
 
     GetPageRDMARefReply reply;
     reply.addr = local_addr;
@@ -890,11 +889,10 @@ void delPageRefAndCacheBroadcast(DaemonContext& daemon_context, page_id_t page_i
     // del page cache
     std::vector<SpinPromise<msgq::MsgBuffer>> pro_cache_vec(page_meta->ref_client.size());
 
-    size_t i =0;
+    size_t i = 0;
     for (auto daemon_conn : page_meta->ref_daemon) {
         // DLOG("DN %u: delPageRefBroadcast for i = %ld, peer_session = %d, daemon_id = %u",
-        // daemon_context.m_daemon_id, i, daemon_conn->peer_session, daemon_conn->daemon_id); 
-        
+        //      daemon_context.m_daemon_id, i, daemon_conn->peer_session, daemon_conn->daemon_id);
 
         auto req_raw = rpc.alloc_msg_buffer_or_die(sizeof(DelPageRDMARefRPC::RequestType));
         auto resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(DelPageRDMARefRPC::ResponseType));
@@ -904,7 +902,8 @@ void delPageRefAndCacheBroadcast(DaemonContext& daemon_context, page_id_t page_i
         ref_req->page_id = page_id;  // 准备删除ref的page id
 
         rpc.enqueue_request(daemon_conn->peer_session, DelPageRDMARefRPC::rpc_type, req_raw,
-                            resp_raw, erpc_general_promise_flag_cb, static_cast<void*>(&pro_ref_vec[i]));
+                            resp_raw, erpc_general_promise_flag_cb,
+                            static_cast<void*>(&pro_ref_vec[i]));
 
         req_raw_ref_vec.push_back(req_raw);
         resp_raw_ref_vec.push_back(resp_raw);
@@ -914,8 +913,8 @@ void delPageRefAndCacheBroadcast(DaemonContext& daemon_context, page_id_t page_i
     i = 0;
     using RemovePageCacheRPC = RPC_TYPE_STRUCT(rpc_client::removePageCache);
     for (auto client_conn : page_meta->ref_client) {
-        DLOG("DN %u: delPageCacheBroadcast client_id = %u",
-        daemon_context.m_daemon_id, client_conn->client_id);
+        // DLOG("DN %u: delPageCacheBroadcast client_id = %u", daemon_context.m_daemon_id,
+        //      client_conn->client_id);
 
         auto wd_req_raw =
             client_conn->msgq_rpc->alloc_msg_buffer(sizeof(RemovePageCacheRPC::RequestType));
@@ -924,7 +923,8 @@ void delPageRefAndCacheBroadcast(DaemonContext& daemon_context, page_id_t page_i
         wd_req->page_id = page_id;
 
         client_conn->msgq_rpc->enqueue_request(RemovePageCacheRPC::rpc_type, wd_req_raw,
-                                               msgq_general_bool_flag_cb, static_cast<void*>(&pro_cache_vec[i]));
+                                               msgq_general_bool_flag_cb,
+                                               static_cast<void*>(&pro_cache_vec[i]));
         i++;
     }
 
@@ -960,7 +960,7 @@ TryMigratePageReply tryMigratePage(DaemonContext& daemon_context,
                                    DaemonToDaemonConnection& daemon_connection,
                                    TryMigratePageRequest& req) {
     // 获取预交换的page的本地元数据
-    SharedMutex *ref_lock;
+    SharedMutex* ref_lock;
     auto p_lock = daemon_context.m_page_ref_lock.find(req.page_id);
     DLOG_ASSERT(p_lock != daemon_context.m_page_ref_lock.end(), "Can't find page %lu's ref lock",
                 req.page_id);
@@ -1005,7 +1005,7 @@ TryMigratePageReply tryMigratePage(DaemonContext& daemon_context,
     DLOG("rdma write mid. swapout_page_addr = %lu", req.swapout_page_addr);
     bool isSwap, isFull;
     PageMetadata* local_page_meta;
-    std::vector<PageMetadata *> pageMetaVec;
+    std::vector<PageMetadata*> pageMetaVec;
     if (req.swapout_page_addr == 0 && req.swapout_page_rkey == 0) {
         isSwap = false;
     } else {
@@ -1013,10 +1013,7 @@ TryMigratePageReply tryMigratePage(DaemonContext& daemon_context,
         // 交换的情况，需要读对方的page到本地
         allocPageMemoryTmp(daemon_context, req.swap_page_id, 1, pageMetaVec);
 
-        auto p = daemon_context.m_page_table.find(req.swap_page_id);
-        DLOG_ASSERT(p != daemon_context.m_page_table.end(), "Can't find page %lu",
-                        req.swap_page_id);
-            local_page_meta = p->second;
+        local_page_meta = pageMetaVec.front();
 
         if (daemon_context.m_max_data_page_num > daemon_context.m_current_used_page_num) {
             isFull = false;
@@ -1027,14 +1024,17 @@ TryMigratePageReply tryMigratePage(DaemonContext& daemon_context,
         uintptr_t swapin_addr =
             reinterpret_cast<uintptr_t>(daemon_context.m_cxl_format.page_data_start_addr) +
             local_page_meta->cxl_memory_offset;
-        mr = daemon_context.get_mr(reinterpret_cast<void*>(local_page_meta));
+        mr = daemon_context.get_mr(reinterpret_cast<void*>(swapin_addr));
         lkey = mr->lkey;
         daemon_conn->rdma_conn->prep_read(ba, swapin_addr, lkey, page_size, req.swapout_page_addr,
                                           req.swapout_page_rkey, false);
         // 如果有读，也在后面和前面的写一块submit
     }
     auto fu = daemon_conn->rdma_conn->submit(ba);
-    DLOG("DN %u: rdma write submit. local_addr = %ld, lkey = %u, req.swapin_page_addr = %ld,  req.swapin_page_rkey = %u", daemon_context.m_daemon_id, local_addr, lkey, req.swapin_page_addr,  req.swapin_page_rkey);
+    DLOG(
+        "DN %u: rdma write submit. local_addr = %ld, lkey = %u, req.swapin_page_addr = %ld,  "
+        "req.swapin_page_rkey = %u",
+        daemon_context.m_daemon_id, local_addr, lkey, req.swapin_page_addr, req.swapin_page_rkey);
     this_cort::reset_resume_cond([&fu]() { return fu.try_get() == 0; });
     this_cort::yield();
 
