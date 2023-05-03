@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <deque>
+#include <random>
 #include <vector>
 
 class Histogram {
@@ -46,4 +47,31 @@ class FreqStats {
     std::deque<uint64_t> m_time_q;
     uint64_t m_last_time;
     uint64_t m_start_time;
+};
+
+/**
+ * @brief Generates random number according zipfian distribution.
+ * It is defined as: P(X=k)= C / k^q, 1 <= k <= n
+ */
+class zipf_distribution {
+public:
+  zipf_distribution(uint32_t n, double q = 1.0) : n_(n), q_(q) {
+    std::vector<double> pdf(n);
+    for (uint32_t i = 0; i < n; ++i) {
+      pdf[i] = std::pow((double)i + 1, -q);
+    }
+    dist_ = std::discrete_distribution<uint32_t>(pdf.begin(), pdf.end());
+  }
+
+  template <typename Generator> uint32_t operator()(Generator &g) {
+    return dist_(g) + 1;
+  }
+
+  uint32_t min() { return 1; }
+  uint32_t max() { return n_; }
+
+private:
+  uint32_t n_;
+  double q_;
+  std::discrete_distribution<uint32_t> dist_;
 };

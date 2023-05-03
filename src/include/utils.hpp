@@ -4,11 +4,9 @@
 
 #include <atomic>
 #include <config.hpp>
-#include <cstdint>
 #include <future>
 #include <string>
 #include <thread>
-#include <utility>
 
 #define CACHE_ALIGN __attribute__((aligned(cache_line_size)))
 
