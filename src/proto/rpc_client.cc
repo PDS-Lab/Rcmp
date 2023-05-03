@@ -24,29 +24,35 @@ GetPagePastAccessFreqReply getPagePastAccessFreq(ClientContext& client_context,
     // m_page中存的是该CN访问过的所有Page的id
     // client_context.m_ptl_cache_lock.foreach_all([&](std::pair<const page_id_t, SharedMutex*>& p)
     // {
-    size_t i = 0;
+    // size_t i = 0;
     client_context.m_page_table_cache.foreach_all(
         [&](std::pair<const page_id_t, LocalPageCache*>& p) {
-            auto pageCache = p.second;
+            // auto pageCache = p.second;
             auto page_id = p.first;
 
             auto p_lock = client_context.m_ptl_cache_lock.find(page_id);
             cache_lock = p_lock->second;
             cache_lock->lock_shared();
 
-            last_time_tmp = pageCache->stats.last();
-            cache_lock->unlock_shared();
-            if (last_time > last_time_tmp) {
-                last_time = last_time_tmp;  // 越小，越旧
-                oldest_page = page_id;
-            }
-            DLOG("CN: %u getPagePastAccessFreq: find page %lu's cache.",
+            auto p_cache = client_context.m_page_table_cache.find(page_id);
+            if (p_cache != client_context.m_page_table_cache.end()) {
+                auto pageCache = p_cache->second;
+
+                last_time_tmp = pageCache->stats.last();
+                if (last_time > last_time_tmp) {
+                    last_time = last_time_tmp;  // 越小，越旧
+                    oldest_page = page_id;
+                }
+                DLOG("CN: %u getPagePastAccessFreq: find page %lu's cache.",
                      client_context.m_client_id, page_id);
-            i++;
+            }
+
+            cache_lock->unlock_shared();
+
+            // i++;
             return true;
         });
-    DLOG("CN: %u getPagePastAccessFreq: finished.",
-                     client_context.m_client_id);
+    DLOG("CN: %u getPagePastAccessFreq: finished.", client_context.m_client_id);
     GetPagePastAccessFreqReply reply;
     reply.last_access_ts = last_time;
     reply.oldest_page_id = oldest_page;
