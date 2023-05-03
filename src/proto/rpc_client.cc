@@ -22,28 +22,31 @@ GetPagePastAccessFreqReply getPagePastAccessFreq(ClientContext& client_context,
     uint64_t last_time_tmp = 0;
 
     // m_page中存的是该CN访问过的所有Page的id
-    client_context.m_ptl_cache_lock.foreach_all([&](std::pair<const page_id_t, SharedMutex*>& p) {
-        auto p_lock = p.second;
-        auto page_id = p.first;
-        cache_lock->lock_shared();
+    // client_context.m_ptl_cache_lock.foreach_all([&](std::pair<const page_id_t, SharedMutex*>& p)
+    // {
+    size_t i = 0;
+    client_context.m_page_table_cache.foreach_all(
+        [&](std::pair<const page_id_t, LocalPageCache*>& p) {
+            auto pageCache = p.second;
+            auto page_id = p.first;
 
-        auto p_cache = client_context.m_page_table_cache.find(page_id);
-        if (p_cache != client_context.m_page_table_cache.end()) {
-            pageCache = p_cache->second;
+            auto p_lock = client_context.m_ptl_cache_lock.find(page_id);
+            cache_lock = p_lock->second;
+            cache_lock->lock_shared();
+
             last_time_tmp = pageCache->stats.last();
             cache_lock->unlock_shared();
             if (last_time > last_time_tmp) {
                 last_time = last_time_tmp;  // 越小，越旧
                 oldest_page = page_id;
             }
-        } else {
-            cache_lock->unlock_shared();
-            DLOG("CN: %u getPagePastAccessFreq: Can't find page %lu's cache.",
-                 client_context.m_client_id, page_id);
-        }
-        return true;
-    });
-
+            DLOG("CN: %u getPagePastAccessFreq: find page %lu's cache.",
+                     client_context.m_client_id, page_id);
+            i++;
+            return true;
+        });
+    DLOG("CN: %u getPagePastAccessFreq: finished.",
+                     client_context.m_client_id);
     GetPagePastAccessFreqReply reply;
     reply.last_access_ts = last_time;
     reply.oldest_page_id = oldest_page;
@@ -55,8 +58,7 @@ RemovePageCacheReply removePageCache(ClientContext& client_context,
                                      RemovePageCacheRequest& req) {
     SharedMutex* cache_lock;
     auto p_lock = client_context.m_ptl_cache_lock.find(req.page_id);
-    // DLOG_ASSERT(p_lock != client_context.m_ptl_cache_lock.end(),
-    //             "Can't find page %lu's cache lock.", req.page_id);
+    DLOG("removePageCache page %lu's cache lock.", req.page_id);
     if (p_lock == client_context.m_ptl_cache_lock.end()) {
         RemovePageCacheReply reply;
         return reply;
@@ -78,7 +80,7 @@ RemovePageCacheReply removePageCache(ClientContext& client_context,
 
     DLOG("CN %u: Del page %lu cache.", client_context.m_client_id, req.page_id);
     cache_lock->unlock();
-    // DLOG("CN %u: removePageCache page %lu unlock", client_context.m_client_id, req.page_id);
+    DLOG("CN %u: removePageCache page %lu unlock", client_context.m_client_id, req.page_id);
 
     RemovePageCacheReply reply;
     return reply;
