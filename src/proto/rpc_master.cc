@@ -179,7 +179,8 @@ AllocPageReply allocPage(MasterContext& master_context, MasterToDaemonConnection
                 PageRackMetadata* page_meta = new PageRackMetadata();
                 page_meta->rack_id = ctx->daemon_connect->rack_id;
                 page_meta->daemon_id = ctx->daemon_connect->daemon_id;
-                DLOG("alloc page: %lu ---> rack %d", ctx->alloc_start_page_id + i, ctx->daemon_connect->rack_id);
+                DLOG("alloc page: %lu ---> rack %d", ctx->alloc_start_page_id + i,
+                     ctx->daemon_connect->rack_id);
                 master_context.m_page_directory.insert(ctx->alloc_start_page_id + i, page_meta);
             }
 
@@ -244,15 +245,42 @@ LatchRemotePageReply latchRemotePage(MasterContext& master_context,
 
     if (!req.isWriteLock) {
         if (!page_meta->latch.try_lock_shared()) {
-            this_cort::reset_resume_cond([&page_meta]() { return page_meta->latch.try_lock_shared(); });
+            this_cort::reset_resume_cond(
+                [&page_meta]() { return page_meta->latch.try_lock_shared(); });
             this_cort::yield();
         }
-    }
-    else
-    {
+    } else {  // 写锁时，才需要判断是否有swap(有swap时，按page id的大小顺序进行上锁，避免死锁)
+        if (req.page_id_swap && req.page_id_swap < req.page_id)
+        {
+            PageRackMetadata* page_meta_swap;
+            auto it_swap = master_context.m_page_directory.find(req.page_id_swap);
+            DLOG_ASSERT(it_swap != master_context.m_page_directory.end(),
+                        "Can't find this page %lu", req.page_id_swap);
+            // TODO：死锁问题
+            page_meta_swap = it_swap->second;
+            if (!page_meta_swap->latch.try_lock()) {
+                this_cort::reset_resume_cond(
+                    [&page_meta_swap]() { return page_meta_swap->latch.try_lock(); });
+                this_cort::yield();
+            }
+        }
+        
         if (!page_meta->latch.try_lock()) {
             this_cort::reset_resume_cond([&page_meta]() { return page_meta->latch.try_lock(); });
             this_cort::yield();
+        }
+
+        if (req.page_id_swap && req.page_id_swap > req.page_id) {
+            PageRackMetadata* page_meta_swap;
+            auto it_swap = master_context.m_page_directory.find(req.page_id_swap);
+            DLOG_ASSERT(it_swap != master_context.m_page_directory.end(),
+                        "Can't find this page %lu", req.page_id_swap);
+            page_meta_swap = it_swap->second;
+            if (!page_meta_swap->latch.try_lock()) {
+                this_cort::reset_resume_cond(
+                    [&page_meta_swap]() { return page_meta_swap->latch.try_lock(); });
+                this_cort::yield();
+            }
         }
     }
 
@@ -291,10 +319,11 @@ UnLatchRemotePageReply unLatchRemotePage(MasterContext& master_context,
 UnLatchPageAndBalanceReply unLatchPageAndBalance(MasterContext& master_context,
                                                  MasterToDaemonConnection& daemon_connection,
                                                  UnLatchPageAndBalanceRequest& req) {
+    // DLOG("Into unLatchPageAndBalance");
     PageRackMetadata* page_meta;
-    PageRackMetadata* swap_page_meta;
     auto p = master_context.m_page_directory.find(req.page_id);
-    DLOG_ASSERT(p != master_context.m_page_directory.end(), "Can't find this page %lu", req.page_id);
+    DLOG_ASSERT(p != master_context.m_page_directory.end(), "Can't find this page %lu",
+                req.page_id);
     page_meta = p->second;
 
     page_meta->rack_id = req.new_rack_id;
@@ -303,6 +332,21 @@ UnLatchPageAndBalanceReply unLatchPageAndBalance(MasterContext& master_context,
     page_meta->latch.unlock();
     DLOG("Swap page %lu to rack: %u, DN:%u. This operation is initiated by DN %u", req.page_id,
          req.new_rack_id, req.new_daemon_id, daemon_connection.daemon_id);
+
+    if (req.page_id_swap) {
+        auto p = master_context.m_page_directory.find(req.page_id_swap);
+        DLOG_ASSERT(p != master_context.m_page_directory.end(), "Can't find this page %lu",
+                    req.page_id_swap);
+        page_meta = p->second;
+
+        page_meta->rack_id = req.new_rack_id_swap;
+        page_meta->daemon_id = req.new_daemon_id_swap;
+
+        page_meta->latch.unlock();
+        DLOG("Swap page %lu to rack: %u, DN:%u. This operation is initiated by DN %u",
+             req.page_id_swap, req.new_rack_id_swap, req.new_daemon_id_swap,
+             daemon_connection.daemon_id);
+    }
 
     UnLatchPageAndBalanceReply reply;
     return reply;
