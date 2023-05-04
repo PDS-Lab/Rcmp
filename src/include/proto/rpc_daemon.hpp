@@ -99,7 +99,6 @@ struct AllocPageMemoryRequest : public RequestMsg {
 };
 struct AllocPageMemoryReply : public ResponseMsg {
     bool ret;
-    std::vector<PageMetadata *> pageMetaVec;
 };
 /**
  * @brief 申请一个page物理地址空间

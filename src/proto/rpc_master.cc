@@ -250,7 +250,7 @@ LatchRemotePageReply latchRemotePage(MasterContext& master_context,
             this_cort::yield();
         }
     } else {  // 写锁时，才需要判断是否有swap(有swap时，按page id的大小顺序进行上锁，避免死锁)
-        if (req.page_id_swap && req.page_id_swap < req.page_id)
+        if (req.page_id_swap != invalid_page_id && req.page_id_swap < req.page_id)
         {
             PageRackMetadata* page_meta_swap;
             auto it_swap = master_context.m_page_directory.find(req.page_id_swap);
@@ -270,7 +270,7 @@ LatchRemotePageReply latchRemotePage(MasterContext& master_context,
             this_cort::yield();
         }
 
-        if (req.page_id_swap && req.page_id_swap > req.page_id) {
+        if (req.page_id_swap != invalid_page_id && req.page_id_swap > req.page_id) {
             PageRackMetadata* page_meta_swap;
             auto it_swap = master_context.m_page_directory.find(req.page_id_swap);
             DLOG_ASSERT(it_swap != master_context.m_page_directory.end(),
@@ -333,7 +333,7 @@ UnLatchPageAndBalanceReply unLatchPageAndBalance(MasterContext& master_context,
     DLOG("Swap page %lu to rack: %u, DN:%u. This operation is initiated by DN %u", req.page_id,
          req.new_rack_id, req.new_daemon_id, daemon_connection.daemon_id);
 
-    if (req.page_id_swap) {
+    if (req.page_id_swap != invalid_page_id) {
         auto p = master_context.m_page_directory.find(req.page_id_swap);
         DLOG_ASSERT(p != master_context.m_page_directory.end(), "Can't find this page %lu",
                     req.page_id_swap);

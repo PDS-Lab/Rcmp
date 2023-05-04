@@ -129,6 +129,7 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
     auto p = __impl->m_page_table_cache.find(page_id);
     if (p == __impl->m_page_table_cache.end())
     {
+        DLOG("Read can't find page %ld m_page_table_cache.", page_id);
         using GetPageRefOrProxyRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageCXLRefOrProxy);
         msgq::MsgBuffer req_raw =
             __impl->m_msgq_rpc->alloc_msg_buffer(sizeof(GetPageRefOrProxyRPC::RequestType));
@@ -162,6 +163,10 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
         __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
 
         __impl->m_page_table_cache.insert(page_id, pageCache);
+
+        SharedMutex *cache_lock_new = new SharedMutex();
+        __impl->m_ptl_cache_lock.insert(page_id, cache_lock_new);
+
 
         DLOG("get ref: %ld --- %#lx", page_id, pageCache->offset);
 
@@ -202,6 +207,7 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
     auto p = __impl->m_page_table_cache.find(page_id);
     if (p == __impl->m_page_table_cache.end())
     {
+        DLOG("Write can't find page %ld m_page_table_cache.", page_id);
         using GetPageRefOrProxyRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageCXLRefOrProxy);
 
         msgq::MsgBuffer req_raw;
@@ -252,6 +258,8 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
         __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
 
         __impl->m_page_table_cache.insert(page_id, pageCache);
+        SharedMutex *cache_lock_new = new SharedMutex();
+        __impl->m_ptl_cache_lock.insert(page_id, cache_lock_new);
 
         DLOG("get ref: %ld --- %#lx", page_id, pageCache->offset);
 
