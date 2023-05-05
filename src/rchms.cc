@@ -43,9 +43,8 @@ PoolContext::PoolContext(ClientOptions options) {
     __impl->m_msgq_nexus->register_req_func(
         RPC_TYPE_STRUCT(rpc_client::getPagePastAccessFreq)::rpc_type,
         bind_msgq_rpc_func<false>(rpc_client::getPagePastAccessFreq));
-    __impl->m_msgq_nexus->register_req_func(
-        RPC_TYPE_STRUCT(rpc_client::removePageCache)::rpc_type,
-        bind_msgq_rpc_func<false>(rpc_client::removePageCache));
+    __impl->m_msgq_nexus->register_req_func(RPC_TYPE_STRUCT(rpc_client::removePageCache)::rpc_type,
+                                            bind_msgq_rpc_func<false>(rpc_client::removePageCache));
 
     // 3. 发送join rack rpc
     using JoinRackRPC = RPC_TYPE_STRUCT(rpc_daemon::joinRack);
@@ -118,18 +117,19 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
 
     // TODO: more page
     SharedMutex *cache_lock;
-    auto p_lock = __impl->m_ptl_cache_lock.find_or_emplace(
-        page_id, []() { return new SharedMutex(); });
+    auto p_lock =
+        __impl->m_ptl_cache_lock.find_or_emplace(page_id, []() { return new SharedMutex(); });
     cache_lock = p_lock.first->second;
-    
+
     // 上读锁
     // DLOG("CN %u: Read page %lu lock", __impl->m_client_id, page_id);
     cache_lock->lock_shared();
 
     auto p = __impl->m_page_table_cache.find(page_id);
-    if (p == __impl->m_page_table_cache.end())
-    {
-        DLOG("Read can't find page %ld m_page_table_cache.", page_id);
+    if (p == __impl->m_page_table_cache.end()) {
+        __impl->m_stats.local_miss++;
+
+        // DLOG("Read can't find page %ld m_page_table_cache.", page_id);
         using GetPageRefOrProxyRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageCXLRefOrProxy);
         msgq::MsgBuffer req_raw =
             __impl->m_msgq_rpc->alloc_msg_buffer(sizeof(GetPageRefOrProxyRPC::RequestType));
@@ -159,7 +159,7 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
 
         pageCache = new LocalPageCache(8);
         pageCache->offset = resp->offset;
-        
+
         __impl->m_msgq_rpc->free_msg_buffer(resp_raw);
 
         __impl->m_page_table_cache.insert(page_id, pageCache);
@@ -167,19 +167,17 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
         SharedMutex *cache_lock_new = new SharedMutex();
         __impl->m_ptl_cache_lock.insert(page_id, cache_lock_new);
 
+        // DLOG("get ref: %ld --- %#lx", page_id, pageCache->offset);
 
-        DLOG("get ref: %ld --- %#lx", page_id, pageCache->offset);
-
-    }
-    else
-    {
+    } else {
         pageCache = p->second;
+        __impl->m_stats.local_hit++;
     }
 
     memcpy(buf,
            reinterpret_cast<const void *>(
-               reinterpret_cast<uintptr_t>(__impl->m_cxl_format.page_data_start_addr) + pageCache->offset +
-               in_page_offset),
+               reinterpret_cast<uintptr_t>(__impl->m_cxl_format.page_data_start_addr) +
+               pageCache->offset + in_page_offset),
            size);
 
     // 更新page访问请况统计
@@ -197,17 +195,17 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
 
     // TODO: more page
     SharedMutex *cache_lock;
-    auto p_lock = __impl->m_ptl_cache_lock.find_or_emplace(
-        page_id, []() { return new SharedMutex(); });
+    auto p_lock =
+        __impl->m_ptl_cache_lock.find_or_emplace(page_id, []() { return new SharedMutex(); });
     cache_lock = p_lock.first->second;
     // 上读锁
     // DLOG("CN %u: write page %lu lock", __impl->m_client_id, page_id);
     cache_lock->lock_shared();
 
     auto p = __impl->m_page_table_cache.find(page_id);
-    if (p == __impl->m_page_table_cache.end())
-    {
-        DLOG("Write can't find page %ld m_page_table_cache.", page_id);
+    if (p == __impl->m_page_table_cache.end()) {
+        __impl->m_stats.local_miss++;
+        // DLOG("Write can't find page %ld m_page_table_cache.", page_id);
         using GetPageRefOrProxyRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageCXLRefOrProxy);
 
         msgq::MsgBuffer req_raw;
@@ -215,15 +213,15 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
 
         // 如果不超过阈值，则直接将buf填入req中发送，减少一次get_current_write_data消息
         if (size <= get_page_cxl_ref_or_proxy_write_raw_max_size) {
-            req_raw =
-                __impl->m_msgq_rpc->alloc_msg_buffer(sizeof(GetPageRefOrProxyRPC::RequestType) + size);
+            req_raw = __impl->m_msgq_rpc->alloc_msg_buffer(
+                sizeof(GetPageRefOrProxyRPC::RequestType) + size);
             auto req = reinterpret_cast<GetPageRefOrProxyRPC::RequestType *>(req_raw.get_buf());
             req->mac_id = __impl->m_client_id;
             req->type = req->WRITE_RAW;
             req->gaddr = gaddr;
             req->cn_write_size = size;
             memcpy(req->cn_write_raw_buf, buf, size);
-            DLOG("Small size Write");
+            // DLOG("Small size Write");
         } else {
             req_raw =
                 __impl->m_msgq_rpc->alloc_msg_buffer(sizeof(GetPageRefOrProxyRPC::RequestType));
@@ -233,7 +231,7 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
             req->gaddr = gaddr;
             req->cn_write_size = size;
             req->cn_write_buf = buf;
-            DLOG("large size Write");
+            // DLOG("large size Write");
         }
 
         SpinPromise<msgq::MsgBuffer> pro;
@@ -261,17 +259,16 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
         SharedMutex *cache_lock_new = new SharedMutex();
         __impl->m_ptl_cache_lock.insert(page_id, cache_lock_new);
 
-        DLOG("get ref: %ld --- %#lx", page_id, pageCache->offset);
+        // DLOG("get ref: %ld --- %#lx", page_id, pageCache->offset);
 
-    }
-    else
-    {
+    } else {
         pageCache = p->second;
+        __impl->m_stats.local_hit++;
     }
 
     memcpy(reinterpret_cast<void *>(
-               reinterpret_cast<uintptr_t>(__impl->m_cxl_format.page_data_start_addr) + pageCache->offset +
-               in_page_offset),
+               reinterpret_cast<uintptr_t>(__impl->m_cxl_format.page_data_start_addr) +
+               pageCache->offset + in_page_offset),
            buf, size);
 
     // 更新page访问请况统计
@@ -313,7 +310,27 @@ GAddr PoolContext::AllocPage(size_t count) {
 
 Status PoolContext::FreePage(GAddr gaddr, size_t count) { DLOG_FATAL("Not Support"); }
 
+}  // namespace rchms
+
+ClientContext::ClientContext() : m_cort_sched(8) {}
+
+ClientConnection *ClientContext::get_connection(mac_id_t mac_id) {
+    DLOG_ASSERT(mac_id != m_client_id, "Can't find self connection");
+    if (mac_id == m_local_rack_daemon_connection.daemon_id) {
+        return &m_local_rack_daemon_connection;
+    }
+    DLOG_FATAL("Can't find mac %d", mac_id);
+}
+
+CortScheduler &ClientContext::get_cort_sched() { return m_cort_sched; }
+
 /*********************** for test **************************/
+
+namespace rchms {
+
+void PoolContext::__DumpStats() {
+    DLOG("local hit: %lu, local miss: %lu", __impl->m_stats.local_hit, __impl->m_stats.local_miss);
+}
 
 Status PoolContext::__TestDataSend1(int *array, size_t size) {
     using DataSend1RPC = RPC_TYPE_STRUCT(rpc_daemon::__testdataSend1);
@@ -416,15 +433,3 @@ Status PoolContext::__StopPerf() {
 }
 
 }  // namespace rchms
-
-ClientContext::ClientContext() : m_cort_sched(8) {}
-
-ClientConnection *ClientContext::get_connection(mac_id_t mac_id) {
-    DLOG_ASSERT(mac_id != m_client_id, "Can't find self connection");
-    if (mac_id == m_local_rack_daemon_connection.daemon_id) {
-        return &m_local_rack_daemon_connection;
-    }
-    DLOG_FATAL("Can't find mac %d", mac_id);
-}
-
-CortScheduler &ClientContext::get_cort_sched() { return m_cort_sched; }

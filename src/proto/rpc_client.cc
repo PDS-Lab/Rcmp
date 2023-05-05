@@ -43,8 +43,8 @@ GetPagePastAccessFreqReply getPagePastAccessFreq(ClientContext& client_context,
                     last_time = last_time_tmp;  // 越小，越旧
                     oldest_page = page_id;
                 }
-                DLOG("CN: %u getPagePastAccessFreq: find page %lu's cache.",
-                     client_context.m_client_id, page_id);
+                // DLOG("CN: %u getPagePastAccessFreq: find page %lu's cache.",
+                //      client_context.m_client_id, page_id);
             }
 
             cache_lock->unlock_shared();
@@ -52,7 +52,7 @@ GetPagePastAccessFreqReply getPagePastAccessFreq(ClientContext& client_context,
             // i++;
             return true;
         });
-    DLOG("CN: %u getPagePastAccessFreq: finished.", client_context.m_client_id);
+    // DLOG("CN: %u getPagePastAccessFreq: finished.", client_context.m_client_id);
     GetPagePastAccessFreqReply reply;
     reply.last_access_ts = last_time;
     reply.oldest_page_id = oldest_page;
@@ -64,7 +64,7 @@ RemovePageCacheReply removePageCache(ClientContext& client_context,
                                      RemovePageCacheRequest& req) {
     SharedMutex* cache_lock;
     auto p_lock = client_context.m_ptl_cache_lock.find(req.page_id);
-    DLOG("removePageCache page %lu's cache lock.", req.page_id);
+    // DLOG("removePageCache page %lu's cache lock.", req.page_id);
     if (p_lock == client_context.m_ptl_cache_lock.end()) {
         RemovePageCacheReply reply;
         return reply;
@@ -84,9 +84,9 @@ RemovePageCacheReply removePageCache(ClientContext& client_context,
     client_context.m_page_table_cache.erase(req.page_id);
     // client_context.m_page.erase(req.page_id);
 
-    DLOG("CN %u: Del page %lu cache.", client_context.m_client_id, req.page_id);
+    // DLOG("CN %u: Del page %lu cache.", client_context.m_client_id, req.page_id);
     cache_lock->unlock();
-    DLOG("CN %u: removePageCache page %lu unlock", client_context.m_client_id, req.page_id);
+    // DLOG("CN %u: removePageCache page %lu unlock", client_context.m_client_id, req.page_id);
 
     RemovePageCacheReply reply;
     return reply;

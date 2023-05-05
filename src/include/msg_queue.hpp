@@ -76,12 +76,12 @@ struct MsgQueue final {
 struct MsgHeader final {
     enum : uint8_t { REQ, RESP } msg_type : 1;
     uint8_t rpc_type;
-    size_t size : 32;          // 实际数据大小
-    offset_t buf_offset : 16;  // 根据MsgQueue::m_ring的地址
+    size_t size : 32;     // 实际数据大小
+    offset_t buf_offset;  // 根据MsgQueue::m_ring的地址
     msgq_callback_t cb;
     void *arg;
 
-    static_assert(msgq_ring_buf_len < (1ul << 16), "");
+    // static_assert(msgq_ring_buf_len < (1ul << 16), "");
 };
 
 struct MsgBuffer {

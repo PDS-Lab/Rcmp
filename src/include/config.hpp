@@ -20,8 +20,14 @@ constexpr static size_t page_id_bits = sizeof(rchms::GAddr) * 8 - offset_bits;
 /**
  * @brief 当水位大于等于该值，则进行page swap，否则dio
  */
-constexpr static size_t page_hot_dio_swap_watermark = UINT64_MAX;
+constexpr static size_t page_hot_dio_swap_watermark = 4;
 
-constexpr static size_t msgq_ring_buf_len = 512;
+constexpr static size_t msgq_ring_buf_len = 20ul << 20;
 
-constexpr static size_t get_page_cxl_ref_or_proxy_write_raw_max_size = 64;
+constexpr static size_t get_page_cxl_ref_or_proxy_write_raw_max_size = UINT64_MAX;
+
+/**
+ * @brief 热度统计前后间隔us
+ * 
+ */
+constexpr static size_t hot_stat_freq_timeout_interval = 50;

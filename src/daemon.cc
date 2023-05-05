@@ -1,6 +1,7 @@
 #include <chrono>
 #include <cstdint>
 #include <future>
+#include <thread>
 
 #include "cmdline.h"
 #include "common.hpp"
@@ -27,7 +28,7 @@ void DaemonContext::initCXLPool() {
         cxl_open_simulate(m_options.cxl_devdax_path, m_options.cxl_memory_size, &m_cxl_devdax_fd);
 
     cxl_memory_init(m_cxl_format, m_cxl_memory_addr, m_options.cxl_memory_size,
-                    m_options.cxl_msgq_size);
+                    (m_options.max_client_limit + 1) * MsgQueueManager::RING_ELEM_SIZE);
 
     // 2. 确认page个数
     m_total_page_num = m_cxl_format.super_block->page_data_zone_size / page_size;
@@ -38,6 +39,10 @@ void DaemonContext::initCXLPool() {
 
     m_current_used_page_num = 0;
     m_current_used_swap_page_num = 0;
+
+    DLOG("m_total_page_num: %lu", m_total_page_num);
+    DLOG("m_max_swap_page_num: %lu", m_max_swap_page_num);
+    DLOG("m_max_data_page_num: %lu", m_max_data_page_num);
 }
 
 void DaemonContext::initCoroutinePool() {
@@ -71,7 +76,7 @@ void DaemonContext::initRPCNexus() {
     m_msgq_manager.nexus.reset(new msgq::MsgQueueNexus(m_cxl_format.msgq_zone_start_addr));
     m_msgq_manager.start_addr = m_cxl_format.msgq_zone_start_addr;
     m_msgq_manager.msgq_allocator.reset(
-        new SingleAllocator(m_options.cxl_msgq_size, MsgQueueManager::RING_ELEM_SIZE));
+        new SingleAllocator(m_cxl_format.super_block->msgq_zone_size, MsgQueueManager::RING_ELEM_SIZE));
 
     msgq::MsgQueue *public_q = m_msgq_manager.allocQueue();
     DLOG_ASSERT(public_q == m_msgq_manager.nexus->m_public_msgq);
@@ -184,7 +189,7 @@ void DaemonContext::connectWithMaster() {
 
 void DaemonContext::registerCXLMR() {
     uintptr_t cxl_start_ptr = reinterpret_cast<uintptr_t>(m_cxl_format.start_addr);
-    while (cxl_start_ptr < reinterpret_cast<uintptr_t>(m_cxl_format.end_addr)) {
+    while (cxl_start_ptr + mem_region_aligned_size < reinterpret_cast<uintptr_t>(m_cxl_format.end_addr)) {
         ibv_mr *mr = m_listen_conn.register_memory(reinterpret_cast<void *>(cxl_start_ptr),
                                                    mem_region_aligned_size);
         m_rdma_page_mr_table.push_back(mr);
@@ -193,7 +198,6 @@ void DaemonContext::registerCXLMR() {
 
     // 继续注册尾部不足mem region的内存
     if (cxl_start_ptr != reinterpret_cast<uintptr_t>(m_cxl_format.end_addr)) {
-        cxl_start_ptr -= mem_region_aligned_size;
         ibv_mr *mr = m_listen_conn.register_memory(
             reinterpret_cast<void *>(cxl_start_ptr),
             reinterpret_cast<uintptr_t>(m_cxl_format.end_addr) - cxl_start_ptr);
@@ -227,7 +231,8 @@ ibv_mr *DaemonContext::get_mr(void *p) {
     }
 }
 
-RemotePageMetaCache::RemotePageMetaCache(size_t max_recent_record) : stats(max_recent_record) {}
+RemotePageMetaCache::RemotePageMetaCache(size_t max_recent_record)
+    : stats(max_recent_record, hot_stat_freq_timeout_interval) {}
 
 msgq::MsgQueue *MsgQueueManager::allocQueue() {
     uintptr_t ring_off = msgq_allocator->allocate(1);
@@ -264,9 +269,8 @@ int main(int argc, char *argv[]) {
     options.with_cxl = true;
     options.cxl_devdax_path = cmd.get<std::string>("cxl_devdax_path");
     options.cxl_memory_size = cmd.get<size_t>("cxl_memory_size");
-    options.swap_zone_size = 0;
+    options.swap_zone_size = 10ul << 20;
     options.max_client_limit = 2;  // 暂时未使用
-    options.cxl_msgq_size = 5 << 10;
     options.prealloc_cort_num = 8;
 
     DaemonContext &daemon_context = DaemonContext::getInstance();
@@ -279,11 +283,22 @@ int main(int argc, char *argv[]) {
     daemon_context.connectWithMaster();
     daemon_context.registerCXLMR();
 
+    std::thread log_worker = std::thread([&daemon_context]() {
+        while (true) {
+            std::this_thread::sleep_for(5s);
+            DLOG("page hit: %lu, page miss: %lu, direct io: %lu, swap: %lu",
+                 daemon_context.m_stats.page_hit, daemon_context.m_stats.page_miss,
+                 daemon_context.m_stats.page_dio, daemon_context.m_stats.page_swap);
+        }
+    });
+
     while (true) {
         daemon_context.m_msgq_manager.rpc->run_event_loop_once();
         daemon_context.get_erpc().run_event_loop_once();
         daemon_context.get_cort_sched().runOnce();
     }
+
+    log_worker.join();
 
     return 0;
 }

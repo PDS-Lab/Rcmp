@@ -70,17 +70,26 @@ int Histogram::getPercentile(double percentile) const {
 
 int Histogram::getBucket(double value) const { return (value - m_minValue) / m_bucketWidth; }
 
-FreqStats::FreqStats(size_t max_recent_record) : m_max_recent_record(max_recent_record) {m_cnt.store(0);}
+FreqStats::FreqStats(size_t max_recent_record, uint64_t restart_interval)
+    : m_max_recent_record(max_recent_record), m_restart_interval(restart_interval), m_cnt(0) {}
 
-void FreqStats::add(uint64_t t) {
-    if (m_time_q.size() >= m_max_recent_record) {
-        m_time_q.pop_front();
-    } else if (m_time_q.empty()) {
+size_t FreqStats::add(uint64_t t) {
+    // if (m_time_q.size() >= m_max_recent_record) {
+    //     m_time_q.pop_front();
+    // } else if (m_time_q.empty()) {
+    //     m_start_time = t;
+    // }
+    // m_time_q.push_back(t);
+
+    size_t pre;
+    if (t - m_last_time > m_restart_interval) {
+        pre = m_cnt = 1;
         m_start_time = t;
+    } else {
+        pre = m_cnt.fetch_add(1);
     }
-    m_time_q.push_back(t);
-    m_cnt.fetch_add(1);
     m_last_time = t;
+    return pre;
 }
 
 void FreqStats::clear() {

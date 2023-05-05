@@ -65,7 +65,7 @@ struct ClusterManager {
     std::unique_ptr<IDGenerator> mac_id_allocator;
 };
 
-struct MasterContext: public NOCOPYABLE {
+struct MasterContext : public NOCOPYABLE {
     rchms::MasterOptions m_options;
 
     mac_id_t m_master_id;  // 节点id，由master分配
@@ -82,6 +82,10 @@ struct MasterContext: public NOCOPYABLE {
 
     rdma_rc::RDMAConnection m_listen_conn;
     CortScheduler m_cort_sched;
+
+    struct {
+        uint64_t page_swap = 0;
+    } m_stats;
 
     MasterContext();
 
@@ -137,7 +141,7 @@ struct RemotePageMetaCache {
     FreqStats stats;
     uintptr_t remote_page_addr;
     uint32_t remote_page_rkey;
-    DaemonToDaemonConnection* remote_page_daemon_conn;
+    DaemonToDaemonConnection *remote_page_daemon_conn;
 
     RemotePageMetaCache(size_t max_recent_record);
 };
@@ -155,7 +159,7 @@ struct MsgQueueManager {
     void freeQueue(msgq::MsgQueue *msgq);
 };
 
-struct DaemonContext: public NOCOPYABLE {
+struct DaemonContext : public NOCOPYABLE {
     rchms::DaemonOptions m_options;
 
     mac_id_t m_daemon_id;  // 节点id，由master分配
@@ -194,6 +198,13 @@ struct DaemonContext: public NOCOPYABLE {
         std::vector<erpc::IBRpcWrap> rpc_set;
     } m_erpc_ctx;
 
+    struct {
+        uint64_t page_hit = 0;
+        uint64_t page_miss = 0;
+        uint64_t page_dio = 0;
+        uint64_t page_swap = 0;
+    } m_stats;
+
     static DaemonContext &getInstance();
 
     void initCXLPool();
@@ -230,7 +241,8 @@ struct LocalPageCache {
     FreqStats stats;
     offset_t offset;
 
-    LocalPageCache(size_t max_recent_record) : stats(max_recent_record) {}
+    LocalPageCache(size_t max_recent_record)
+        : stats(max_recent_record, hot_stat_freq_timeout_interval) {}
 };
 
 struct ClientContext : public NOCOPYABLE {
@@ -254,6 +266,11 @@ struct ClientContext : public NOCOPYABLE {
     std::thread m_msgq_worker;
 
     CortScheduler m_cort_sched;
+
+    struct {
+        uint64_t local_hit = 0;
+        uint64_t local_miss = 0;
+    } m_stats;
 
     ClientContext();
 

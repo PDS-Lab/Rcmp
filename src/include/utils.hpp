@@ -3,7 +3,6 @@
 #include <unistd.h>
 
 #include <atomic>
-#include <config.hpp>
 #include <future>
 #include <string>
 #include <thread>

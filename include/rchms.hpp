@@ -105,6 +105,8 @@ class PoolContext {
 
     /*********************** for test ***********************/
 
+    void __DumpStats();
+
     /**
      * @brief 测试数据发送
      *

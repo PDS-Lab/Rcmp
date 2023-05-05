@@ -39,20 +39,20 @@ target_link_libraries(
 # ##################################################
 
 add_executable(
-    master
+    rchms_master
     src/master.cc
 )
 target_link_libraries(
-    master
+    rchms_master
     base
 )
 
 add_executable(
-    daemon
+    rchms_daemon
     src/daemon.cc
 )
 target_link_libraries(
-    daemon
+    rchms_daemon
     base
 )
 
