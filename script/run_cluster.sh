@@ -20,8 +20,6 @@ kill_all() {
     sleep 3
 }
 
-CXL_MEM_SZ=2382364672
-
 test_run() {
     kill_all
 
@@ -48,8 +46,8 @@ test_run() {
     sleep 3
 
     echo "[exec] $SUDO $*"
-    sshpass -p $passwd ssh $user@192.168.1.$CN0 "$SUDO $*"
-    # $*
+    # sshpass -p $passwd ssh $user@192.168.1.$CN0 "$SUDO $*"
+    sudo $*
 
     return $?
 }
@@ -67,13 +65,14 @@ test_retry() {
 echo "Start ..."
 
 port=$((14800+0))
+CXL_MEM_SZ=$((2*1024*1024*1024+212*2*1024*1024))
 
-#64 256 1024 2048 4096
-
-for payload in 64
+#64 256 512 1024 2048 4096
+for payload in 256 512 1024 2048 4096
 do
-    iter=1000000
+    iter=10000000
     test_retry numactl -N 0 $CMD_DIR/test/rw --client_ip=192.168.1.51 --client_port=$port --rack_id=0 --cxl_devdax_path=/dev/shm/cxlsim0 --cxl_memory_size=$CXL_MEM_SZ --iteration=$iter --payload_size=$payload --start_addr=2097152 --alloc_page_cnt=200 --addr_range=419430400 --read_ratio=50
 
-    kill_all
 done
+
+kill_all

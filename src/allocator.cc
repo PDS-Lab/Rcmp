@@ -115,15 +115,19 @@ size_t IDGenerator::capacity() const { return m_capacity; }
 void IDGenerator::addCapacity(size_t n) {
     std::lock_guard<Mutex> guard(m_lck);
 
-    size_t old_capacity = capacity();
-    if (old_capacity > 0) {
-        m_bset[old_capacity / 64] &= (1ul << (old_capacity % 64)) - 1;
-    }
+    // TODO: vector<bool> alloc bit
+
+    DLOG_ASSERT(n % 64 == 0);
+
+    // size_t old_capacity = capacity();
+    // if (old_capacity > 0) {
+    //     m_bset[old_capacity / 64] &= (1ul << (old_capacity % 64)) - 1;
+    // }
     m_capacity += n;
     if (m_bset.size() * 64 < m_capacity) {
         m_bset.resize(div_ceil(m_capacity, 64), 0);
     }
-    m_bset[m_capacity / 64] |= ~((1ul << (m_capacity % 64)) - 1);
+    // m_bset[m_capacity / 64] |= ~((1ul << (m_capacity % 64)) - 1);
 }
 
 void IDGenerator::reduceCapacity(size_t n) { m_capacity -= n; }

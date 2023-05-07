@@ -189,7 +189,9 @@ void DaemonContext::connectWithMaster() {
 
 void DaemonContext::registerCXLMR() {
     uintptr_t cxl_start_ptr = reinterpret_cast<uintptr_t>(m_cxl_format.start_addr);
-    while (cxl_start_ptr + mem_region_aligned_size < reinterpret_cast<uintptr_t>(m_cxl_format.end_addr)) {
+    // while (cxl_start_ptr + mem_region_aligned_size < reinterpret_cast<uintptr_t>(m_cxl_format.end_addr)) {
+    // ! cxl mmapped is aligned by 2GB
+    while (cxl_start_ptr < reinterpret_cast<uintptr_t>(m_cxl_format.end_addr)) {
         ibv_mr *mr = m_listen_conn.register_memory(reinterpret_cast<void *>(cxl_start_ptr),
                                                    mem_region_aligned_size);
         m_rdma_page_mr_table.push_back(mr);
@@ -197,12 +199,12 @@ void DaemonContext::registerCXLMR() {
     }
 
     // 继续注册尾部不足mem region的内存
-    if (cxl_start_ptr != reinterpret_cast<uintptr_t>(m_cxl_format.end_addr)) {
-        ibv_mr *mr = m_listen_conn.register_memory(
-            reinterpret_cast<void *>(cxl_start_ptr),
-            reinterpret_cast<uintptr_t>(m_cxl_format.end_addr) - cxl_start_ptr);
-        m_rdma_page_mr_table.push_back(mr);
-    }
+    // if (cxl_start_ptr != reinterpret_cast<uintptr_t>(m_cxl_format.end_addr)) {
+    //     ibv_mr *mr = m_listen_conn.register_memory(
+    //         reinterpret_cast<void *>(cxl_start_ptr),
+    //         reinterpret_cast<uintptr_t>(m_cxl_format.end_addr) - cxl_start_ptr);
+    //     m_rdma_page_mr_table.push_back(mr);
+    // }
 }
 
 DaemonConnection *DaemonContext::get_connection(mac_id_t mac_id) {

@@ -88,7 +88,7 @@ inline void run_bench(MemPoolBase *pool, BenchParam param) {
              ps.getPercentile(99), ps.getPercentile(99.9), ps.getPercentile(99.99));
     }
 
-    if (0) {
+    if (1) {
         uint64_t start_time = getTimestamp(), end_time;
 
         uint64_t tv = start_time;
@@ -172,7 +172,7 @@ inline void run_bench(MemPoolBase *pool, BenchParam param) {
              ps.getPercentile(99), ps.getPercentile(99.9), ps.getPercentile(99.99));
     }
 
-    if (1) {
+    if (0) {
         zipf_distribution zipf_distr(param.RANGE / param.PAYLOAD, param.ZIPF);
         mt19937_64 eng;
 
