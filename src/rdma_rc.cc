@@ -259,6 +259,8 @@ int RDMAConnection::connect(const std::string &ip, uint16_t port, const void *pa
     conn_param.private_data = param;
     conn_param.private_data_len = param_size;
 
+    // TODO: 两个daemon互联容易出现异常无法连接
+
     if (rdma_connect(m_cm_id_, &conn_param)) {
         DLOG_ERROR("rdma_connect fail");
         return -1;

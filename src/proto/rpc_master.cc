@@ -103,7 +103,7 @@ AllocPageReply allocPage(MasterContext& master_context, MasterToDaemonConnection
         PageRackMetadata* page_meta = new PageRackMetadata();
         page_meta->rack_id = daemon_connection.rack_id;
         page_meta->daemon_id = daemon_connection.daemon_id;
-        DLOG("alloc page: %lu ---> rack %d", new_page_id + c, rack_table->daemon_connect->rack_id);
+        // DLOG("alloc page: %lu ---> rack %d", new_page_id + c, rack_table->daemon_connect->rack_id);
         master_context.m_page_directory.insert(new_page_id + c, page_meta);
         c++;
     }
@@ -181,8 +181,8 @@ AllocPageReply allocPage(MasterContext& master_context, MasterToDaemonConnection
                 PageRackMetadata* page_meta = new PageRackMetadata();
                 page_meta->rack_id = ctx->daemon_connect->rack_id;
                 page_meta->daemon_id = ctx->daemon_connect->daemon_id;
-                DLOG("alloc page: %lu ---> rack %d", ctx->alloc_start_page_id + i,
-                     ctx->daemon_connect->rack_id);
+                // DLOG("alloc page: %lu ---> rack %d", ctx->alloc_start_page_id + i,
+                //      ctx->daemon_connect->rack_id);
                 master_context.m_page_directory.insert(ctx->alloc_start_page_id + i, page_meta);
             }
 

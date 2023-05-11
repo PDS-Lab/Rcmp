@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <random>
 
 #include "utils.hpp"
 
@@ -60,14 +61,14 @@ class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::SP, ConcurrentQueueCon
  * @tparam SZ
  */
 template <typename T, size_t SZ>
-class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::MP, ConcurrentQueueConsumerMode::SC> {
+class ConcurrentMPSCQueue {
    public:
-    ConcurrentQueue() {
+    ConcurrentMPSCQueue() {
         m_prod_head.raw = 0;
         m_prod_tail.raw = 0;
         m_cons_tail = 0;
     }
-    ~ConcurrentQueue() = default;
+    ~ConcurrentMPSCQueue() = default;
 
     size_t capacity() const { return SZ; }
 
@@ -147,6 +148,64 @@ class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::MP, ConcurrentQueueCon
     T m_data[SZ];
 
     std::atomic<uint32_t> m_cons_tail;
+};
+
+/**
+ * @brief 多生产者单消费者队列
+ *
+ * @tparam T
+ * @tparam SZ
+ */
+template <typename T, size_t SZ>
+class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::MP, ConcurrentQueueConsumerMode::SC> {
+   public:
+    size_t capacity() const { return SZ; }
+
+    void forceEnqueue(T n) {
+        // 线程随机到一个子queue中
+        static thread_local int r = ((uintptr_t)&r ^ ((uintptr_t)&r >> 7) ^ 0x783f8ac35) % shard_num;
+        auto &shard = m_queue_shards[r];
+        shard.forceEnqueue(n);
+    }
+
+    bool tryEnqueue(T n) {
+        std::uniform_int_distribution<> dist(0, shard_num - 1);
+        int i_ = dist(m_eng);
+        int i = i_;
+        do {
+            auto &shard = m_queue_shards[i];
+            if (shard.tryEnqueue(n)) {
+                return true;
+            }
+            i = (i + 1) % shard_num;
+        } while (i != i_);
+
+        return false;
+    }
+
+    bool tryDequeue(T *n) { return tryDequeue(n, n + 1) == 1; }
+
+    template <typename Iter>
+    uint32_t tryDequeue(Iter first, Iter last) {
+        uint32_t l = 0;
+
+        for (int i = 0; i < shard_num; ++i) {
+            auto &shard = m_queue_shards[i];
+            uint32_t l_ = shard.tryDequeue(first, last);
+            l += l_;
+            for (int j = 0; j < l_; ++j) {
+                ++first;
+            }
+        }
+
+        return l;
+    }
+
+   private:
+    constexpr static size_t shard_num = 16;
+
+    std::mt19937 m_eng;
+    ConcurrentMPSCQueue<T, SZ / shard_num> m_queue_shards[shard_num];
 };
 
 /**

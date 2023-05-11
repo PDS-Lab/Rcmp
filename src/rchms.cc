@@ -8,6 +8,7 @@
 #include "impl.hpp"
 #include "log.hpp"
 #include "msg_queue.hpp"
+#include "options.hpp"
 #include "proto/rpc.hpp"
 #include "proto/rpc_adaptor.hpp"
 #include "proto/rpc_daemon.hpp"
@@ -127,7 +128,7 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
 
     auto p = __impl->m_page_table_cache.find(page_id);
     if (p == __impl->m_page_table_cache.end()) {
-        __impl->m_stats.local_miss++;
+        // __impl->m_stats.local_miss++;
 
         // DLOG("Read can't find page %ld m_page_table_cache.", page_id);
         using GetPageRefOrProxyRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageCXLRefOrProxy);
@@ -171,7 +172,7 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
 
     } else {
         pageCache = p->second;
-        __impl->m_stats.local_hit++;
+        // __impl->m_stats.local_hit++;
     }
 
     memcpy(buf,
@@ -204,7 +205,7 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
 
     auto p = __impl->m_page_table_cache.find(page_id);
     if (p == __impl->m_page_table_cache.end()) {
-        __impl->m_stats.local_miss++;
+        // __impl->m_stats.local_miss++;
         // DLOG("Write can't find page %ld m_page_table_cache.", page_id);
         using GetPageRefOrProxyRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageCXLRefOrProxy);
 
@@ -263,7 +264,7 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
 
     } else {
         pageCache = p->second;
-        __impl->m_stats.local_hit++;
+        // __impl->m_stats.local_hit++;
     }
 
     memcpy(reinterpret_cast<void *>(
@@ -309,6 +310,73 @@ GAddr PoolContext::AllocPage(size_t count) {
 }
 
 Status PoolContext::FreePage(GAddr gaddr, size_t count) { DLOG_FATAL("Not Support"); }
+
+// TODO: write lock
+Status PoolContext::WriteBatch(GAddr gaddr, size_t size, void *buf) {
+
+    page_id_t page_id = GetPageID(gaddr);
+    offset_t in_page_offset = GetPageOffset(gaddr);
+    LocalPageCache *pageCache;
+
+    // TODO: more page
+    SharedMutex *cache_lock;
+    auto p_lock =
+        __impl->m_ptl_cache_lock.find_or_emplace(page_id, []() { return new SharedMutex(); });
+    cache_lock = p_lock.first->second;
+    // 上读锁
+    // DLOG("CN %u: write page %lu lock", __impl->m_client_id, page_id);
+    cache_lock->lock_shared();
+
+    auto p = __impl->m_page_table_cache.find(page_id);
+    if (p == __impl->m_page_table_cache.end()) {
+        size_t bb_pos = __impl->m_batch_cur;
+
+        memcpy(reinterpret_cast<void *>(__impl->m_batch_buffer + bb_pos), buf, size);
+        __impl->m_batch_list.push_back({gaddr, size, bb_pos});
+        __impl->m_batch_cur += size;
+
+        if (__impl->m_batch_cur > (64ul << 20)) {
+            if (__impl->batch_flush_worker.joinable()) {
+                __impl->batch_flush_worker.join();
+            }
+
+            std::vector<std::tuple<rchms::GAddr, size_t, offset_t>> batch_list;
+            batch_list.swap(__impl->m_batch_list);
+
+            __impl->batch_flush_worker = std::thread(
+                [&, batch_list = std::move(batch_list), m_batch_buffer = __impl->m_batch_buffer]() {
+                    std::unordered_map<rchms::GAddr, std::pair<size_t, offset_t>> umap;
+                    for (auto &tu : batch_list) {
+                        umap[std::get<0>(tu)] = std::make_pair(std::get<1>(tu), std::get<2>(tu));
+                    }
+
+                    for (auto &p : umap) {
+                        Write(p.first, p.second.first, m_batch_buffer + p.second.second);
+                    }
+
+                    delete[] m_batch_buffer;
+                });
+            __impl->m_batch_buffer = new char[66ul << 20];
+            __impl->m_batch_cur = 0;
+        }
+
+    } else {
+        pageCache = p->second;
+        memcpy(reinterpret_cast<void *>(
+                   reinterpret_cast<uintptr_t>(__impl->m_cxl_format.page_data_start_addr) +
+                   pageCache->offset + in_page_offset),
+               buf, size);
+        // 更新page访问请况统计
+        pageCache->stats.add(getTimestamp());
+    }
+
+    // 解锁
+    cache_lock->unlock_shared();
+    // DLOG("CN %u: write page %lu unlock", __impl->m_client_id, page_id);
+    return Status::OK;
+}
+
+const ClientOptions &PoolContext::GetOptions() const { return __impl->m_options; }
 
 }  // namespace rchms
 

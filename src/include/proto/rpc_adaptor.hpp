@@ -222,7 +222,6 @@ auto bind_erpc_func(RpcFunc func) {
     DLOG_ASSERT(!detail::ErpcFuncWrapper<RpcFunc>::registed, "function %s has been registed",
                 __func__);
     detail::ErpcFuncWrapper<RpcFunc>::func = func;
-    detail::ErpcFuncWrapper<RpcFunc>::registed = true;
     return detail::erpc_call_target<detail::ErpcFuncWrapper<RpcFunc>, ESTABLISH>;
 }
 
@@ -231,7 +230,6 @@ auto bind_msgq_rpc_func(RpcFunc func) {
     DLOG_ASSERT(!detail::MsgqRpcFuncWrapper<RpcFunc>::registed, "function %s has been registed",
                 __func__);
     detail::MsgqRpcFuncWrapper<RpcFunc>::func = func;
-    detail::MsgqRpcFuncWrapper<RpcFunc>::registed = true;
     return detail::msgq_call_target<detail::MsgqRpcFuncWrapper<RpcFunc>, ESTABLISH>;
 }
 

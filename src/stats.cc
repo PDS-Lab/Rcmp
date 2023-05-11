@@ -68,25 +68,46 @@ int Histogram::getPercentile(double percentile) const {
     return -1;
 }
 
+double Histogram::getAverage() const {
+    double S = 0;
+    for (int i = 0; i < m_numBuckets; ++i) {
+        S += getBucketValue(i) * getBucketCount(i);
+    }
+    return S / getTotalCount();
+}
+
 int Histogram::getBucket(double value) const { return (value - m_minValue) / m_bucketWidth; }
 
-FreqStats::FreqStats(size_t max_recent_record, uint64_t restart_interval)
-    : m_max_recent_record(max_recent_record), m_restart_interval(restart_interval), m_cnt(0) {}
+Histogram Histogram::merge(Histogram &other) {
+    Histogram nh(std::max(m_numBuckets, other.m_numBuckets), std::min(m_minValue, other.m_maxValue),
+                 std::max(m_maxValue, other.m_maxValue));
+    for (int i = 0; i < m_numBuckets; ++i) {
+        nh.m_buckets[nh.getBucket(getBucketValue(i))] += getBucketCount(i);
+    }
+    for (int i = 0; i < other.m_numBuckets; ++i) {
+        nh.m_buckets[nh.getBucket(other.getBucketValue(i))] += other.getBucketCount(i);
+    }
+    return nh;
+}
+
+FreqStats::FreqStats(size_t max_recent_record, float lambda, uint64_t restart_interval)
+    : m_max_recent_record(max_recent_record),
+      m_restart_interval(restart_interval),
+      m_cnt(0),
+      m_lambda(lambda) {
+    for (int i = 0; i < m_restart_interval; ++i) {
+        m_exp_decays.push_back(exp(-m_lambda * i));
+    }
+}
 
 size_t FreqStats::add(uint64_t t) {
-    // if (m_time_q.size() >= m_max_recent_record) {
-    //     m_time_q.pop_front();
-    // } else if (m_time_q.empty()) {
-    //     m_start_time = t;
-    // }
-    // m_time_q.push_back(t);
-
     size_t pre;
-    if (t - m_last_time > m_restart_interval) {
+    uint64_t delta_t = t - m_last_time;
+    if (delta_t >= m_restart_interval) {
         pre = m_cnt = 1;
         m_start_time = t;
     } else {
-        pre = m_cnt.fetch_add(1);
+        pre = m_cnt.fetch_add(1) * m_exp_decays[delta_t] + 1;
     }
     m_last_time = t;
     return pre;
@@ -97,7 +118,14 @@ void FreqStats::clear() {
     m_time_q.clear();
 }
 
-size_t FreqStats::freq() const { return m_cnt.load(); }
+size_t FreqStats::freq(uint64_t t) const {
+    uint64_t delta_t = t - m_last_time;
+    if (delta_t >= m_restart_interval) {
+        return 0;
+    } else {
+        return m_cnt.load() * m_exp_decays[delta_t];
+    }
+}
 uint64_t FreqStats::start() const { return m_start_time; }
 uint64_t FreqStats::last() const { return m_last_time; }
 

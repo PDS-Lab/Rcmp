@@ -82,3 +82,35 @@ void CortScheduler::runOnce() {
         resumeCort(it);
     }
 }
+
+#include "lock.hpp"
+
+SharedCortMutex::SharedCortMutex() : m_rw_cnt(0) {}
+SharedCortMutex::~SharedCortMutex() {}
+void SharedCortMutex::lock() {
+    // TODO: memory order
+    if (m_rw_cnt.fetch_or(1) & 1) {
+        this_cort::reset_resume_cond([&]() { return !(m_rw_cnt.fetch_or(1) & 1); });
+        this_cort::yield();
+    }
+    if (m_rw_cnt.load() != 1) {
+        this_cort::reset_resume_cond([&]() { return m_rw_cnt.load() == 1; });
+        this_cort::yield();
+    }
+}
+void SharedCortMutex::unlock() { m_rw_cnt.store(0); }
+void SharedCortMutex::lock_shared() {
+    uint32_t cnt = m_rw_cnt.load();
+    do {
+        if (cnt & 1) {
+            this_cort::reset_resume_cond([&]() {
+                cnt = m_rw_cnt.load();
+                return !(cnt & 1);
+            });
+            this_cort::yield();
+        }
+    } while (!m_rw_cnt.compare_exchange_weak(cnt, cnt + 2));
+}
+void SharedCortMutex::unlock_shared() {
+    m_rw_cnt.fetch_sub(2);
+}

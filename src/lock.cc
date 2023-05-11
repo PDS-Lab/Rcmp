@@ -25,12 +25,3 @@ void SharedMutex::unlock() { pthread_rwlock_unlock(&m_rwlock); }
 void SharedMutex::lock_shared() { pthread_rwlock_rdlock(&m_rwlock); }
 bool SharedMutex::try_lock_shared() { return pthread_rwlock_tryrdlock(&m_rwlock) == 0; }
 void SharedMutex::unlock_shared() { pthread_rwlock_unlock(&m_rwlock); }
-
-SharedLockGuard::SharedLockGuard(SharedMutex& mutex, bool isWriteLock) : m_mutex(mutex) {
-    if (isWriteLock) {
-        m_mutex.lock();
-    } else {
-        m_mutex.lock_shared();
-    }
-}
-SharedLockGuard::~SharedLockGuard() { m_mutex.unlock(); }

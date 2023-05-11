@@ -48,11 +48,40 @@ class SharedMutex {
     pthread_rwlock_t m_rwlock;
 };
 
+template <typename __SharedMutex>
 class SharedLockGuard {
    public:
-    SharedLockGuard(SharedMutex& mutex, bool isWriteLock);
-    ~SharedLockGuard();
+    SharedLockGuard(__SharedMutex& mutex, bool isWriteLock) : m_mutex(mutex), m_is_write(isWriteLock) {
+        if (m_is_write) {
+            m_mutex.lock();
+        } else {
+            m_mutex.lock_shared();
+        }
+    }
+
+    ~SharedLockGuard() {
+        if (m_is_write) {
+            m_mutex.unlock();
+        } else {
+            m_mutex.unlock_shared();
+        }
+    }
 
    private:
-    SharedMutex& m_mutex;
+    bool m_is_write;
+    __SharedMutex& m_mutex;
+};
+
+class SharedCortMutex {
+   public:
+    SharedCortMutex();
+    ~SharedCortMutex();
+
+    void lock();
+    void unlock();
+    void lock_shared();
+    void unlock_shared();
+
+   private:
+    std::atomic<uint32_t> m_rw_cnt;
 };

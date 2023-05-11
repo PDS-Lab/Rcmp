@@ -11,6 +11,7 @@
 #include "allocator.hpp"
 #include "common.hpp"
 #include "concurrent_hashmap.hpp"
+#include "config.hpp"
 #include "cort_sched.hpp"
 #include "cxl.hpp"
 #include "eRPC/erpc.h"
@@ -18,6 +19,7 @@
 #include "log.hpp"
 #include "msg_queue.hpp"
 #include "options.hpp"
+#include "rchms.hpp"
 #include "rdma_rc.hpp"
 #include "stats.hpp"
 #include "udp_server.hpp"
@@ -60,8 +62,8 @@ struct RackMacTable {
 };
 
 struct ClusterManager {
-    ConcurrentHashMap<rack_id_t, RackMacTable *> cluster_rack_table;
-    ConcurrentHashMap<mac_id_t, MasterConnection *> connect_table;
+    ConcurrentHashMap<rack_id_t, RackMacTable *, SharedCortMutex> cluster_rack_table;
+    ConcurrentHashMap<mac_id_t, MasterConnection *, SharedCortMutex> connect_table;
     std::unique_ptr<IDGenerator> mac_id_allocator;
 };
 
@@ -72,7 +74,7 @@ struct MasterContext : public NOCOPYABLE {
 
     ClusterManager m_cluster_manager;
 
-    ConcurrentHashMap<page_id_t, PageRackMetadata *> m_page_directory;
+    ConcurrentHashMap<page_id_t, PageRackMetadata *, SharedCortMutex> m_page_directory;
     std::unique_ptr<IDGenerator> m_page_id_allocator;
 
     struct {
@@ -132,6 +134,7 @@ struct DaemonToDaemonConnection : public DaemonConnection {
 };
 
 struct PageMetadata {
+    std::atomic<uint8_t> status{0};
     offset_t cxl_memory_offset;  // 相对于format.page_data_start_addr
     std::unordered_set<DaemonToClientConnection *> ref_client;
     std::unordered_set<DaemonToDaemonConnection *> ref_daemon;
@@ -143,7 +146,7 @@ struct RemotePageMetaCache {
     uint32_t remote_page_rkey;
     DaemonToDaemonConnection *remote_page_daemon_conn;
 
-    RemotePageMetaCache(size_t max_recent_record);
+    RemotePageMetaCache(size_t max_recent_record, float hot_decay_lambda);
 };
 
 struct MsgQueueManager {
@@ -171,8 +174,7 @@ struct DaemonContext : public NOCOPYABLE {
     size_t m_max_swap_page_num;  // swap区的page个数
     size_t m_max_data_page_num;  // 所有可用数据页个数
 
-    size_t m_current_used_page_num;       // 当前使用的数据页个数
-    size_t m_current_used_swap_page_num;  // 当前正在swap的页个数
+    std::atomic<size_t> m_current_used_page_num;  // 当前使用的数据页个数
 
     CXLMemFormat m_cxl_format;
     MsgQueueManager m_msgq_manager;
@@ -180,11 +182,11 @@ struct DaemonContext : public NOCOPYABLE {
     std::vector<DaemonToClientConnection *> m_client_connect_table;
     std::vector<DaemonToDaemonConnection *> m_other_daemon_connect_table;
     std::unique_ptr<SingleAllocator> m_cxl_page_allocator;
-    ConcurrentHashMap<mac_id_t, DaemonConnection *> m_connect_table;
-    ConcurrentHashMap<page_id_t, PageMetadata *> m_page_table;
-    ConcurrentHashMap<page_id_t, PageMetadata *> m_swap_page_table;
-    ConcurrentHashMap<page_id_t, RemotePageMetaCache *> m_hot_stats;
-    ConcurrentHashMap<page_id_t, SharedMutex *> m_page_ref_lock;
+    ConcurrentHashMap<mac_id_t, DaemonConnection *, SharedCortMutex> m_connect_table;
+    ConcurrentHashMap<page_id_t, PageMetadata *, SharedCortMutex> m_page_table;
+    ConcurrentHashMap<page_id_t, PageMetadata *, SharedCortMutex> m_swap_page_table;
+    ConcurrentHashMap<page_id_t, RemotePageMetaCache *, SharedCortMutex> m_hot_stats;
+    ConcurrentHashMap<page_id_t, SharedCortMutex *, SharedCortMutex> m_page_ref_lock;
 
     rdma_rc::RDMAConnection m_listen_conn;
     std::vector<ibv_mr *> m_rdma_page_mr_table;  // 为cxl注册的mr，初始化长度后不可更改
@@ -242,7 +244,7 @@ struct LocalPageCache {
     offset_t offset;
 
     LocalPageCache(size_t max_recent_record)
-        : stats(max_recent_record, hot_stat_freq_timeout_interval) {}
+        : stats(max_recent_record, 0, hot_stat_freq_timeout_interval) {}
 };
 
 struct ClientContext : public NOCOPYABLE {
@@ -266,6 +268,11 @@ struct ClientContext : public NOCOPYABLE {
     std::thread m_msgq_worker;
 
     CortScheduler m_cort_sched;
+
+    char *m_batch_buffer = new char[write_batch_buffer_size + write_batch_buffer_overflow_size];
+    size_t m_batch_cur = 0;
+    std::vector<std::tuple<rchms::GAddr, size_t, offset_t>> m_batch_list;
+    std::thread batch_flush_worker;
 
     struct {
         uint64_t local_hit = 0;

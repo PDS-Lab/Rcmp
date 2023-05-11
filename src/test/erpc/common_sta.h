@@ -1,19 +1,23 @@
 #include <stdio.h>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <vector>
 #include <random>
 
 #include "eRPC/erpc.h"
 
-static const std::string kServerHostname = "192.168.1.51";
+static const std::string kServerHostname = "192.168.1.52";
 static const std::string kClientHostname = "192.168.1.51";
 
 static constexpr uint16_t kServerUDPPort = 31850;
 static constexpr uint16_t kClientUDPPort = 31851;
 static constexpr uint8_t kReqType = 2;
 static constexpr uint8_t kStopType = 3;
+static constexpr uint8_t kSimpleReqType=4;
 static constexpr size_t kMsgSize = 64;
+
+#define ONESIDE_EXT 1
 
 struct AppContext {
   std::vector<erpc::MsgBufferWrap> reqs;
@@ -30,11 +34,18 @@ struct APlusBResp {
   int result;
 };
 
+struct SimpleDataReq {
+  size_t s;
+};
+
+struct SimpleDataResp {};
+
 struct Params {
   int thread_num;
   size_t op_per_thread;
   size_t batch_size;
   size_t sess_num;
+  size_t payload;
 };
 
 struct Stat {

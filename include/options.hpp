@@ -34,7 +34,9 @@ class DaemonOptions {
     size_t max_client_limit;  // 最大client数量限制
     size_t swap_zone_size;    // 交换区大小
 
-    int prealloc_cort_num;  // 预分配协程个数
+    int prealloc_cort_num;      // 预分配协程个数
+    float hot_decay_lambda;     // 热度衰减系数
+    size_t hot_swap_watermark;  // 热度阈值
 };
 
 class MasterOptions {

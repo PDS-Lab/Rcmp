@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <random>
 
+#include "config.hpp"
 #include "log.hpp"
 #include "stats.hpp"
 #include "utils.hpp"
@@ -26,226 +27,362 @@ inline long rdd(long cli_id, long x) {
 
 struct PerfStatistics : public Histogram {
     PerfStatistics() : Histogram(1000000, 0, 1000000) {}
+    PerfStatistics(Histogram &&h) : Histogram(h) {}
 };
 
 struct MemPoolBase {
     using GAddr = uintptr_t;
-    constexpr static size_t alloc_unit = 2ul << 20;
+    constexpr static size_t alloc_unit = page_size;
 
     virtual GAddr Alloc(size_t s) = 0;
     virtual void Write(GAddr gaddr, size_t s, void *buf) = 0;
+    virtual void WriteBatch(GAddr gaddr, size_t s, void *buf) = 0;
     virtual void Read(GAddr gaddr, size_t s, void *buf) = 0;
 };
 
 struct BenchParam {
-    size_t IT;              // iteration
+    size_t IT;              // iteration(per thread)
+    int TH;                 // thread count
     int RA;                 // read ratio
     size_t PAYLOAD;         // payload size
     MemPoolBase::GAddr SA;  // start gaddr
     size_t RANGE;           // gaddr range [SA, SA+RANGE)
     size_t APC;             // alloc page count
     float ZIPF;             // zipf α
+    vector<MemPoolBase *> instances;
 };
 
-inline void run_bench(MemPoolBase *pool, BenchParam param) {
+inline void run_bench(BenchParam param) {
     DLOG("start running ...");
 
-    MemPoolBase::GAddr ga = pool->Alloc(param.APC * (MemPoolBase::alloc_unit));
-    DLOG_EXPR(ga, ==, param.SA);
+    {
+        MemPoolBase *pool = param.instances[0];
+        MemPoolBase::GAddr ga = pool->Alloc(param.APC * (MemPoolBase::alloc_unit));
+        DLOG_EXPR(ga, ==, param.SA);
+    }
 
     DLOG("start testing ...");
-
-    PerfStatistics ps;
-    PerfStatistics hyr, hyw;
 
     vector<uint8_t> raw(param.PAYLOAD);
 
     if (1) {
-        uint64_t start_time = getTimestamp(), end_time;
+        vector<thread> ths;
+        vector<uint64_t> diff_times(param.TH, 0);
+        vector<PerfStatistics> ps(param.TH);
+        for (int tid = 0; tid < param.TH; ++tid) {
+            ths.emplace_back([&, tid]() {
+                MemPoolBase *pool = param.instances[tid];
 
-        uint64_t tv = start_time;
-        for (size_t i = 0; i < param.IT; ++i) {
-            size_t r = rdd(0, i);
-            r %= param.RANGE - param.PAYLOAD;
-            r += param.SA;
-            pool->Write(r, param.PAYLOAD, raw.data());
-            uint64_t e = getTimestamp();
-            ps.addValue(e - tv);
-            tv = e;
+                uint64_t start_time = getTimestamp(), end_time;
+
+                uint64_t tv = start_time;
+                for (size_t i = 0; i < param.IT; ++i) {
+                    size_t r = rdd(tid, i) % param.RANGE;
+                    r = align_floor(r, param.PAYLOAD);
+                    r += param.SA;
+                    pool->Write(r, param.PAYLOAD, raw.data());
+                    uint64_t e = getTimestamp();
+                    ps[tid].addValue(e - tv);
+                    tv = e;
+                }
+
+                end_time = getTimestamp();
+
+                long diff = end_time - start_time;
+
+                diff_times[tid] = diff;
+
+                DLOG("client %d tid %d: random write test done. Use time: %ld us. Avg time: %f us",
+                     0, tid, diff, 1.0 * diff / param.IT);
+            });
+        }
+        for (auto &th : ths) {
+            th.join();
+        }
+        double total_throughput = 0;
+        for (uint64_t diff : diff_times) {
+            total_throughput += 1.0 * param.IT / diff;
+        }
+        DLOG("%d clients total random write throughput: %f Kops", 0, total_throughput * 1000);
+
+        PerfStatistics all_ps = ps[0];
+        for (int i = 1; i < ps.size(); ++i) {
+            PerfStatistics ps_tmp = all_ps.merge(ps[i]);
+            all_ps.~PerfStatistics();
+            new (&all_ps) PerfStatistics(ps_tmp);
         }
 
-        end_time = getTimestamp();
-
-        long diff = end_time - start_time;
-
-        DLOG("cli %d: random write test done. Use time: %ld us. Avg time: %f us", 0, diff,
-             1.0 * diff / param.IT);
-
-        double throughput = 1.0 * (param.IT) / (end_time - start_time);
-        DLOG("%d clients total random write throughput: %f Kops", 0, throughput * 1000);
-
-        DLOG("p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", ps.getPercentile(50),
-             ps.getPercentile(99), ps.getPercentile(99.9), ps.getPercentile(99.99));
-    }
-
-    if (1) {
-        uint64_t start_time = getTimestamp(), end_time;
-
-        uint64_t tv = start_time;
-        for (size_t i = 0; i < param.IT; ++i) {
-            size_t r = rdd(0, i);
-            r %= param.RANGE - param.PAYLOAD;
-            r += param.SA;
-            pool->Read(r, param.PAYLOAD, raw.data());
-            uint64_t e = getTimestamp();
-            ps.addValue(e - tv);
-            tv = e;
-        }
-
-        end_time = getTimestamp();
-
-        long diff = end_time - start_time;
-
-        DLOG("cli %d: random read test done. Use time: %ld us. Avg time: %f us", 0, diff,
-             1.0 * diff / param.IT);
-
-        double throughput = 1.0 * (param.IT) / (end_time - start_time);
-        DLOG("%d clients total random read throughput: %f Kops", 0, throughput * 1000);
-
-        DLOG("p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", ps.getPercentile(50),
-             ps.getPercentile(99), ps.getPercentile(99.9), ps.getPercentile(99.99));
+        DLOG("AVG: %fus, P50: %dus, P99: %dus, P999: %dus, P9999: %dus\n", all_ps.getAverage(),
+             all_ps.getPercentile(50), all_ps.getPercentile(99), all_ps.getPercentile(99.9),
+             all_ps.getPercentile(99.99));
     }
 
     if (0) {
-        uint64_t start_time = getTimestamp(), end_time;
+        vector<thread> ths;
+        vector<uint64_t> diff_times(param.TH, 0);
+        vector<PerfStatistics> ps(param.TH);
+        for (int tid = 0; tid < param.TH; ++tid) {
+            ths.emplace_back([&, tid]() {
+                MemPoolBase *pool = param.instances[tid];
 
-        uint64_t tv = start_time;
-        for (size_t i = 0; i < param.IT; ++i) {
-            size_t r = i * param.PAYLOAD;
-            r %= param.RANGE - param.PAYLOAD;
-            r += param.SA;
-            pool->Write(r, param.PAYLOAD, raw.data());
-            uint64_t e = getTimestamp();
-            ps.addValue(e - tv);
-            tv = e;
+                uint64_t start_time = getTimestamp(), end_time;
+
+                uint64_t tv = start_time;
+                for (size_t i = 0; i < param.IT; ++i) {
+                    size_t r = rdd(tid, i) % param.RANGE;
+                    r = align_floor(r, param.PAYLOAD);
+                    r += param.SA;
+                    pool->Read(r, param.PAYLOAD, raw.data());
+                    uint64_t e = getTimestamp();
+                    ps[tid].addValue(e - tv);
+                    tv = e;
+                }
+
+                end_time = getTimestamp();
+
+                long diff = end_time - start_time;
+
+                diff_times[tid] = diff;
+
+                DLOG("client %d tid %d: random read test done. Use time: %ld us. Avg time: %f us",
+                     0, tid, diff, 1.0 * diff / param.IT);
+            });
+        }
+        for (auto &th : ths) {
+            th.join();
+        }
+        double total_throughput = 0;
+        for (uint64_t diff : diff_times) {
+            total_throughput += 1.0 * param.IT / diff;
+        }
+        DLOG("%d clients total random read throughput: %f Kops", 0, total_throughput * 1000);
+
+        PerfStatistics all_ps = ps[0];
+        for (int i = 1; i < ps.size(); ++i) {
+            PerfStatistics ps_tmp = all_ps.merge(ps[i]);
+            all_ps.~PerfStatistics();
+            new (&all_ps) PerfStatistics(ps_tmp);
         }
 
-        end_time = getTimestamp();
+        DLOG("AVG: %fus, P50: %dus, P99: %dus, P999: %dus, P9999: %dus\n", all_ps.getAverage(),
+             all_ps.getPercentile(50), all_ps.getPercentile(99), all_ps.getPercentile(99.9),
+             all_ps.getPercentile(99.99));
+    }
 
-        long diff = end_time - start_time;
+    // if (0) {
+    //     uint64_t start_time = getTimestamp(), end_time;
 
-        DLOG("cli %d: sequential write test done. Use time: %ld us. Avg time: %f us", 0, diff,
-             1.0 * diff / param.IT);
+    //     uint64_t tv = start_time;
+    //     for (size_t i = 0; i < param.IT; ++i) {
+    //         size_t r = i * param.PAYLOAD;
+    //         r %= param.RANGE - param.PAYLOAD;
+    //         r += param.SA;
+    //         pool->Write(r, param.PAYLOAD, raw.data());
+    //         uint64_t e = getTimestamp();
+    //         ps.addValue(e - tv);
+    //         tv = e;
+    //     }
 
-        double throughput = 1.0 * (param.IT) / (end_time - start_time);
-        DLOG("%d clients total sequential write throughput: %f Kops", 0, throughput * 1000);
+    //     end_time = getTimestamp();
 
-        DLOG("p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", ps.getPercentile(50),
-             ps.getPercentile(99), ps.getPercentile(99.9), ps.getPercentile(99.99));
+    //     long diff = end_time - start_time;
+
+    //     DLOG("cli %d: sequential write test done. Use time: %ld us. Avg time: %f us", 0, diff,
+    //          1.0 * diff / param.IT);
+
+    //     double throughput = 1.0 * (param.IT) / (end_time - start_time);
+    //     DLOG("%d clients total sequential write throughput: %f Kops", 0, throughput * 1000);
+
+    //     DLOG("p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", ps.getPercentile(50),
+    //          ps.getPercentile(99), ps.getPercentile(99.9), ps.getPercentile(99.99));
+    // }
+
+    // if (0) {
+    //     uint64_t start_time = getTimestamp(), end_time;
+
+    //     uint64_t tv = start_time;
+    //     for (size_t i = 0; i < param.IT; ++i) {
+    //         size_t r = i * param.PAYLOAD;
+    //         r %= param.RANGE - param.PAYLOAD;
+    //         r += param.SA;
+    //         pool->Read(r, param.PAYLOAD, raw.data());
+    //         uint64_t e = getTimestamp();
+    //         ps.addValue(e - tv);
+    //         tv = e;
+    //     }
+
+    //     end_time = getTimestamp();
+
+    //     long diff = end_time - start_time;
+
+    //     DLOG("cli %d: sequential read test done. Use time: %ld us. Avg time: %f us", 0, diff,
+    //          1.0 * diff / param.IT);
+
+    //     double throughput = 1.0 * (param.IT) / (end_time - start_time);
+    //     DLOG("%d clients total sequential read throughput: %f Kops", 0, throughput * 1000);
+
+    //     DLOG("p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", ps.getPercentile(50),
+    //          ps.getPercentile(99), ps.getPercentile(99.9), ps.getPercentile(99.99));
+    // }
+
+    if (0) {
+        vector<thread> ths;
+        vector<uint64_t> diff_times(param.TH, 0);
+        vector<PerfStatistics> ps(param.TH);
+        for (int tid = 0; tid < param.TH; ++tid) {
+            ths.emplace_back([&, tid]() {
+                MemPoolBase *pool = param.instances[tid];
+
+                zipf_distribution<> zipf_distr(param.RANGE / param.PAYLOAD, param.ZIPF);
+                mt19937_64 eng(tid);
+
+                vector<size_t> rv(param.IT);
+                for (int i = 0; i < param.IT; ++i) {
+                    rv[i] = rdd(tid, zipf_distr(eng)) * param.PAYLOAD;
+                }
+
+                uint64_t start_time = getTimestamp(), end_time;
+
+                uint64_t tv = start_time;
+                for (size_t i = 0; i < param.IT; ++i) {
+                    size_t r = rv[i] % param.RANGE;
+                    r = align_floor(r, param.PAYLOAD);
+                    r += param.SA;
+                    pool->Write(r, param.PAYLOAD, raw.data());
+                    uint64_t e = getTimestamp();
+                    ps[tid].addValue(e - tv);
+                    tv = e;
+                }
+
+                end_time = getTimestamp();
+
+                long diff = end_time - start_time;
+
+                diff_times[tid] = diff;
+
+                DLOG("client %d tid %d: zipf write test done. Use time: %ld us. Avg time: %f us", 0,
+                     tid, diff, 1.0 * diff / param.IT);
+            });
+        }
+        for (auto &th : ths) {
+            th.join();
+        }
+        double total_throughput = 0;
+        for (uint64_t diff : diff_times) {
+            total_throughput += 1.0 * param.IT / diff;
+        }
+        DLOG("%d clients total zipf write throughput: %f Kops", 0, total_throughput * 1000);
+
+        PerfStatistics all_ps = ps[0];
+        for (int i = 1; i < ps.size(); ++i) {
+            PerfStatistics ps_tmp = all_ps.merge(ps[i]);
+            all_ps.~PerfStatistics();
+            new (&all_ps) PerfStatistics(ps_tmp);
+        }
+
+        DLOG("AVG: %fus, P50: %dus, P99: %dus, P999: %dus, P9999: %dus\n", all_ps.getAverage(),
+             all_ps.getPercentile(50), all_ps.getPercentile(99), all_ps.getPercentile(99.9),
+             all_ps.getPercentile(99.99));
     }
 
     if (0) {
-        uint64_t start_time = getTimestamp(), end_time;
+        vector<thread> ths;
+        vector<uint64_t> diff_times(param.TH, 0);
+        vector<PerfStatistics> ps(param.TH);
+        for (int tid = 0; tid < param.TH; ++tid) {
+            ths.emplace_back([&, tid]() {
+                MemPoolBase *pool = param.instances[tid];
 
-        uint64_t tv = start_time;
-        for (size_t i = 0; i < param.IT; ++i) {
-            size_t r = i * param.PAYLOAD;
-            r %= param.RANGE - param.PAYLOAD;
-            r += param.SA;
-            pool->Read(r, param.PAYLOAD, raw.data());
-            uint64_t e = getTimestamp();
-            ps.addValue(e - tv);
-            tv = e;
+                zipf_distribution<> zipf_distr(param.RANGE / param.PAYLOAD, param.ZIPF);
+                mt19937_64 eng(tid);
+
+                vector<size_t> rv(param.IT);
+                for (int i = 0; i < param.IT; ++i) {
+                    rv[i] = rdd(tid, zipf_distr(eng)) * param.PAYLOAD;
+                }
+
+                uint64_t start_time = getTimestamp(), end_time;
+
+                uint64_t tv = start_time;
+                for (size_t i = 0; i < param.IT; ++i) {
+                    size_t r = rv[i] % param.RANGE;
+                    r = align_floor(r, param.PAYLOAD);
+                    r += param.SA;
+                    pool->Read(r, param.PAYLOAD, raw.data());
+                    uint64_t e = getTimestamp();
+                    ps[tid].addValue(e - tv);
+                    tv = e;
+                }
+
+                end_time = getTimestamp();
+
+                long diff = end_time - start_time;
+
+                diff_times[tid] = diff;
+
+                DLOG("client %d tid %d: zipf read test done. Use time: %ld us. Avg time: %f us", 0,
+                     tid, diff, 1.0 * diff / param.IT);
+            });
+        }
+        for (auto &th : ths) {
+            th.join();
+        }
+        double total_throughput = 0;
+        for (uint64_t diff : diff_times) {
+            total_throughput += 1.0 * param.IT / diff;
+        }
+        DLOG("%d clients total zipf read throughput: %f Kops", 0, total_throughput * 1000);
+
+        PerfStatistics all_ps = ps[0];
+        for (int i = 1; i < ps.size(); ++i) {
+            PerfStatistics ps_tmp = all_ps.merge(ps[i]);
+            all_ps.~PerfStatistics();
+            new (&all_ps) PerfStatistics(ps_tmp);
         }
 
-        end_time = getTimestamp();
-
-        long diff = end_time - start_time;
-
-        DLOG("cli %d: sequential read test done. Use time: %ld us. Avg time: %f us", 0, diff,
-             1.0 * diff / param.IT);
-
-        double throughput = 1.0 * (param.IT) / (end_time - start_time);
-        DLOG("%d clients total sequential read throughput: %f Kops", 0, throughput * 1000);
-
-        DLOG("p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", ps.getPercentile(50),
-             ps.getPercentile(99), ps.getPercentile(99.9), ps.getPercentile(99.99));
+        DLOG("AVG: %fus, P50: %dus, P99: %dus, P999: %dus, P9999: %dus\n", all_ps.getAverage(),
+             all_ps.getPercentile(50), all_ps.getPercentile(99), all_ps.getPercentile(99.9),
+             all_ps.getPercentile(99.99));
     }
 
-    if (0) {
-        zipf_distribution zipf_distr(param.RANGE / param.PAYLOAD, param.ZIPF);
-        mt19937_64 eng;
+    // if (0) {
+    //     uint64_t start_time = getTimestamp(), end_time;
+    //     uint64_t tv = start_time;
 
-        vector<size_t> rv(param.IT);
-        for (int i = 0; i < param.IT; ++i) {
-            rv[i] = (zipf_distr(eng) - 1) * param.PAYLOAD;
-        }
+    //     for (size_t i = 0; i < param.IT; ++i) {
+    //         uint64_t e;
+    //         size_t r = rdd(0, i);
+    //         if ((r % 100) < param.RA) {
+    //             r %= param.RANGE - param.PAYLOAD;
+    //             r += param.SA;
+    //             pool->Read(r, param.PAYLOAD, raw.data());
+    //             e = getTimestamp();
+    //             hyr.addValue(e - tv);
+    //         } else {
+    //             r %= param.RANGE - param.PAYLOAD;
+    //             r += param.SA;
+    //             pool->Write(r, param.PAYLOAD, raw.data());
+    //             e = getTimestamp();
+    //             hyw.addValue(e - tv);
+    //         }
+    //         tv = e;
+    //     }
 
-        uint64_t start_time = getTimestamp(), end_time;
+    //     end_time = getTimestamp();
 
-        uint64_t tv = start_time;
-        for (size_t i = 0; i < param.IT; ++i) {
-            size_t r = rv[i];
-            r %= param.RANGE - param.PAYLOAD;
-            r += param.SA;
-            pool->Read(r, param.PAYLOAD, raw.data());
-            uint64_t e = getTimestamp();
-            ps.addValue(e - tv);
-            tv = e;
-        }
+    //     long diff = end_time - start_time;
 
-        end_time = getTimestamp();
+    //     DLOG("cli %d: random op test done. Use time: %ld us. Avg time: %f us", 0, diff,
+    //          1.0 * diff / param.IT);
 
-        long diff = end_time - start_time;
+    //     double throughput = 1.0 * param.IT / (end_time - start_time);
+    //     DLOG("read ratio: %d", param.RA);
+    //     DLOG("%d clients total op throughput: %f Kops", 0, throughput * 1000);
 
-        DLOG("cli %d: zipf read test done. Use time: %ld us. Avg time: %f us", 0, diff,
-             1.0 * diff / param.IT);
+    //     DLOG("p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", hyr.getPercentile(50),
+    //          hyr.getPercentile(99), hyr.getPercentile(99.9), hyr.getPercentile(99.99));
 
-        double throughput = 1.0 * (param.IT) / (end_time - start_time);
-        DLOG("%d clients total zipf read throughput: %f Kops", 0, throughput * 1000);
-
-        DLOG("p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", ps.getPercentile(50),
-             ps.getPercentile(99), ps.getPercentile(99.9), ps.getPercentile(99.99));
-    }
-
-    if (0) {
-        uint64_t start_time = getTimestamp(), end_time;
-        uint64_t tv = start_time;
-
-        for (size_t i = 0; i < param.IT; ++i) {
-            uint64_t e;
-            size_t r = rdd(0, i);
-            if ((r % 100) < param.RA) {
-                r %= param.RANGE - param.PAYLOAD;
-                r += param.SA;
-                pool->Read(r, param.PAYLOAD, raw.data());
-                e = getTimestamp();
-                hyr.addValue(e - tv);
-            } else {
-                r %= param.RANGE - param.PAYLOAD;
-                r += param.SA;
-                pool->Write(r, param.PAYLOAD, raw.data());
-                e = getTimestamp();
-                hyw.addValue(e - tv);
-            }
-            tv = e;
-        }
-
-        end_time = getTimestamp();
-
-        long diff = end_time - start_time;
-
-        DLOG("cli %d: random op test done. Use time: %ld us. Avg time: %f us", 0, diff,
-             1.0 * diff / param.IT);
-
-        double throughput = 1.0 * param.IT / (end_time - start_time);
-        DLOG("read ratio: %d", param.RA);
-        DLOG("%d clients total op throughput: %f Kops", 0, throughput * 1000);
-
-        DLOG("p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", hyr.getPercentile(50),
-             hyr.getPercentile(99), hyr.getPercentile(99.9), hyr.getPercentile(99.99));
-
-        DLOG("p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", hyw.getPercentile(50),
-             hyw.getPercentile(99), hyw.getPercentile(99.9), hyw.getPercentile(99.99));
-    }
+    //     DLOG("p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", hyw.getPercentile(50),
+    //          hyw.getPercentile(99), hyw.getPercentile(99.9), hyw.getPercentile(99.99));
+    // }
 }

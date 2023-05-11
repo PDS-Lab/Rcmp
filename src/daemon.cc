@@ -38,7 +38,6 @@ void DaemonContext::initCXLPool() {
         new SingleAllocator(m_cxl_format.super_block->page_data_zone_size, page_size));
 
     m_current_used_page_num = 0;
-    m_current_used_swap_page_num = 0;
 
     DLOG("m_total_page_num: %lu", m_total_page_num);
     DLOG("m_max_swap_page_num: %lu", m_max_swap_page_num);
@@ -57,13 +56,13 @@ void DaemonContext::initRPCNexus() {
     m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::crossRackConnect)::rpc_type,
                                         bind_erpc_func<true>(rpc_daemon::crossRackConnect));
     m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::getPageRDMARef)::rpc_type,
-                                        bind_erpc_func<true>(rpc_daemon::getPageRDMARef));
+                                        bind_erpc_func<false>(rpc_daemon::getPageRDMARef));
     m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::allocPageMemory)::rpc_type,
-                                        bind_erpc_func<true>(rpc_daemon::allocPageMemory));
+                                        bind_erpc_func<false>(rpc_daemon::allocPageMemory));
     m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::delPageRDMARef)::rpc_type,
-                                        bind_erpc_func<true>(rpc_daemon::delPageRDMARef));
+                                        bind_erpc_func<false>(rpc_daemon::delPageRDMARef));
     m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::tryMigratePage)::rpc_type,
-                                        bind_erpc_func<true>(rpc_daemon::tryMigratePage));
+                                        bind_erpc_func<false>(rpc_daemon::tryMigratePage));
 
     erpc::SMHandlerWrap smhw;
     smhw.set_empty();
@@ -75,8 +74,8 @@ void DaemonContext::initRPCNexus() {
     // 2. init msgq
     m_msgq_manager.nexus.reset(new msgq::MsgQueueNexus(m_cxl_format.msgq_zone_start_addr));
     m_msgq_manager.start_addr = m_cxl_format.msgq_zone_start_addr;
-    m_msgq_manager.msgq_allocator.reset(
-        new SingleAllocator(m_cxl_format.super_block->msgq_zone_size, MsgQueueManager::RING_ELEM_SIZE));
+    m_msgq_manager.msgq_allocator.reset(new SingleAllocator(
+        m_cxl_format.super_block->msgq_zone_size, MsgQueueManager::RING_ELEM_SIZE));
 
     msgq::MsgQueue *public_q = m_msgq_manager.allocQueue();
     DLOG_ASSERT(public_q == m_msgq_manager.nexus->m_public_msgq);
@@ -189,7 +188,6 @@ void DaemonContext::connectWithMaster() {
 
 void DaemonContext::registerCXLMR() {
     uintptr_t cxl_start_ptr = reinterpret_cast<uintptr_t>(m_cxl_format.start_addr);
-    // while (cxl_start_ptr + mem_region_aligned_size < reinterpret_cast<uintptr_t>(m_cxl_format.end_addr)) {
     // ! cxl mmapped is aligned by 2GB
     while (cxl_start_ptr < reinterpret_cast<uintptr_t>(m_cxl_format.end_addr)) {
         ibv_mr *mr = m_listen_conn.register_memory(reinterpret_cast<void *>(cxl_start_ptr),
@@ -197,14 +195,6 @@ void DaemonContext::registerCXLMR() {
         m_rdma_page_mr_table.push_back(mr);
         cxl_start_ptr += mem_region_aligned_size;
     }
-
-    // 继续注册尾部不足mem region的内存
-    // if (cxl_start_ptr != reinterpret_cast<uintptr_t>(m_cxl_format.end_addr)) {
-    //     ibv_mr *mr = m_listen_conn.register_memory(
-    //         reinterpret_cast<void *>(cxl_start_ptr),
-    //         reinterpret_cast<uintptr_t>(m_cxl_format.end_addr) - cxl_start_ptr);
-    //     m_rdma_page_mr_table.push_back(mr);
-    // }
 }
 
 DaemonConnection *DaemonContext::get_connection(mac_id_t mac_id) {
@@ -233,8 +223,8 @@ ibv_mr *DaemonContext::get_mr(void *p) {
     }
 }
 
-RemotePageMetaCache::RemotePageMetaCache(size_t max_recent_record)
-    : stats(max_recent_record, hot_stat_freq_timeout_interval) {}
+RemotePageMetaCache::RemotePageMetaCache(size_t max_recent_record, float hot_decay_lambda)
+    : stats(max_recent_record, hot_decay_lambda, hot_stat_freq_timeout_interval) {}
 
 msgq::MsgQueue *MsgQueueManager::allocQueue() {
     uintptr_t ring_off = msgq_allocator->allocate(1);
@@ -258,6 +248,8 @@ int main(int argc, char *argv[]) {
     cmd.add<rack_id_t>("rack_id");
     cmd.add<std::string>("cxl_devdax_path");
     cmd.add<size_t>("cxl_memory_size");
+    cmd.add<float>("hot_decay");
+    cmd.add<size_t>("hot_swap_watermark");
     bool ret = cmd.parse(argc, argv);
     DLOG_ASSERT(ret);
 
@@ -271,9 +263,11 @@ int main(int argc, char *argv[]) {
     options.with_cxl = true;
     options.cxl_devdax_path = cmd.get<std::string>("cxl_devdax_path");
     options.cxl_memory_size = cmd.get<size_t>("cxl_memory_size");
-    options.swap_zone_size = 10ul << 20;
-    options.max_client_limit = 2;  // 暂时未使用
+    options.swap_zone_size = 100ul << 20;
+    options.max_client_limit = 32;
     options.prealloc_cort_num = 8;
+    options.hot_decay_lambda = cmd.get<float>("hot_decay");
+    options.hot_swap_watermark = cmd.get<size_t>("hot_swap_watermark");
 
     DaemonContext &daemon_context = DaemonContext::getInstance();
     daemon_context.m_options = options;

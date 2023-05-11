@@ -103,6 +103,18 @@ class PoolContext {
 
     Status CAS(GAddr gaddr, void *expected, void *desired, size_t s, bool &ret);
 
+    /**
+     * @brief 从`buf`写入`gaddr`地址、大小为`size`的数据
+     *
+     * @param gaddr
+     * @param size
+     * @param buf
+     * @return Status
+     */
+    Status WriteBatch(GAddr gaddr, size_t size, void *buf);
+
+    const ClientOptions &GetOptions() const;
+
     /*********************** for test ***********************/
 
     void __DumpStats();

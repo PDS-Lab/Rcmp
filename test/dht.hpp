@@ -17,7 +17,7 @@ struct HashTableRep {
 
     static constexpr size_t bkt_per_seg_num = 7;
     static constexpr size_t seg_num_second_level = 43;
-    static constexpr size_t seg_num = 110001;
+    static constexpr size_t seg_num = 2700001;
     static constexpr size_t max_bkt_num = bkt_per_seg_num * seg_num_second_level * seg_num;
     static constexpr int RETRY_CNT = 3;
 
@@ -44,6 +44,9 @@ struct HashTableRep {
     void init() {
         bool f = false;
         st = pool->AllocPage(div_ceil(sizeof(segment_table), 2ul << 20));
+
+        pool->Write(st + sizeof(segment_table) - 10, sizeof(f), &f);
+
         for (size_t i = 0; i < seg_num; ++i) {
             for (size_t j = 0; j < seg_num_second_level; ++j) {
                 for (size_t k = 0; k < bkt_per_seg_num; ++k) {

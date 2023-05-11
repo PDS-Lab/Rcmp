@@ -1,12 +1,13 @@
 #pragma once
 
+#include <random>
 #include <unordered_map>
 
 #include "config.hpp"
 #include "lock.hpp"
 #include "utils.hpp"
 
-template <typename K, typename V>
+template <typename K, typename V, typename __Mutex = SharedMutex>
 class ConcurrentHashMap {
     constexpr static const size_t BucketNum = 32;
 
@@ -50,7 +51,7 @@ class ConcurrentHashMap {
         auto& shard = m_shards[index];
         auto& map = shard.m_map;
 
-        SharedLockGuard guard(shard.m_lock, true);
+        SharedLockGuard<__Mutex> guard(shard.m_lock, true);
         auto p = map.emplace(key, val);
         return {{index, p.first}, p.second};
     }
@@ -67,7 +68,7 @@ class ConcurrentHashMap {
         auto& shard = m_shards[index];
         auto& map = shard.m_map;
 
-        SharedLockGuard guard(shard.m_lock, false);
+        SharedLockGuard<__Mutex> guard(shard.m_lock, false);
         auto it = map.find(key);
         if (it != map.end()) {
             return {index, it};
@@ -87,7 +88,7 @@ class ConcurrentHashMap {
         auto& shard = m_shards[index];
         auto& map = shard.m_map;
 
-        SharedLockGuard guard(shard.m_lock, false);
+        SharedLockGuard<__Mutex> guard(shard.m_lock, false);
         return map.at(key);
     }
 
@@ -105,48 +106,20 @@ class ConcurrentHashMap {
         auto& shard = m_shards[index];
         auto& map = shard.m_map;
 
-        do {
-            iterator it = find(key);
-            if (it != end()) {
-                return {it, false};
-            }
-        } while (!shard.m_lock.try_lock());
+        iterator iter = find(key);
+        if (iter != end()) {
+            return {iter, false};
+        }
+
+        SharedLockGuard<__Mutex> guard(shard.m_lock, true);
+        auto it = map.find(key);
+        if (it != map.end()) {
+            return {{index, it}, false};
+        }
 
         auto p = map.emplace(key, cotr_fn());
-        shard.m_lock.unlock();
         return {{index, p.first}, p.second};
     }
-
-    // /**
-    //  * @brief 查找一个元素。如果不存在，则调用cotr_fn()尝试插入新元素
-    //  *
-    //  * @tparam ConFn
-    //  * @param key
-    //  * @param try_cotr_fn 返回std::pair<V, bool>，V是新元素，bool是否需要插入新元素
-    //  * @return std::pair<iterator, bool> 如果插入成功，返回true；查找成功、插入失败返回false
-    //  */
-    // template <typename ConFn>
-    // std::pair<iterator, bool> find_or_emplace_try(K key, ConFn&& try_cotr_fn) {
-    //     int index = hash(key);
-    //     auto& shard = m_shards[index];
-    //     auto& map = shard.m_map;
-
-    //     // do {
-    //         iterator it = find(key);
-    //         if (it != end()) {
-    //             return {it, false};
-    //         }
-    //     // } while (!shard.m_lock.try_lock());
-
-    //     std::pair<V, bool> v = try_cotr_fn();
-    //     if (v.second) {
-    //         auto p = map.emplace(key, std::move(v.first));
-    //         shard.m_lock.unlock();
-    //         return {{index, p.first}, p.second};
-    //     }
-    //     shard.m_lock.unlock();
-    //     return {end(), false};
-    // }
 
     void erase(K key) {
         iterator it = find(key);
@@ -159,7 +132,7 @@ class ConcurrentHashMap {
         auto& shard = m_shards[it.hidx];
         auto& map = shard.m_map;
 
-        SharedLockGuard guard(shard.m_lock, true);
+        SharedLockGuard<__Mutex> guard(shard.m_lock, true);
         map.erase(it.it);
     }
 
@@ -175,13 +148,39 @@ class ConcurrentHashMap {
             auto& shard = m_shards[i];
             auto& map = shard.m_map;
 
-            SharedLockGuard guard(shard.m_lock, false);
+            SharedLockGuard<__Mutex> guard(shard.m_lock, false);
             for (auto& p : map) {
                 if (!f(p)) {
                     return;
                 }
             }
         }
+    }
+
+    /**
+     * @brief 伪随机遍历表
+     *
+     * @tparam F
+     * @param f bool(std::pair<const K, V> &)，返回false代表终止遍历
+     */
+    template <typename Genrator, typename F>
+    void random_foreach_all(Genrator g, F&& f) {
+        std::uniform_int_distribution<> dist_(0, BucketNum - 1);
+
+        const size_t i_ = dist_(g);
+        size_t i = i_;
+        do {
+            auto& shard = m_shards[i];
+            auto& map = shard.m_map;
+
+            SharedLockGuard<__Mutex> guard(shard.m_lock, false);
+            for (auto& p : map) {
+                if (!f(p)) {
+                    return;
+                }
+            }
+            i = (i + 1) % BucketNum;
+        } while (i != i_);
     }
 
     bool empty() const {
@@ -203,7 +202,7 @@ class ConcurrentHashMap {
 
    private:
     struct CACHE_ALIGN Shard {
-        SharedMutex m_lock;
+        __Mutex m_lock;
         HashTable m_map;
     };
 

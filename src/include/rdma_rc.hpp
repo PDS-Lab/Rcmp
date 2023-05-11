@@ -137,19 +137,6 @@ struct RDMAConnection {
     int prep_cas(RDMABatch &b, uint64_t local_addr, uint32_t lkey, uint64_t remote_addr,
                  uint32_t rkey, uint64_t expected, uint64_t desired);
 
-    template <size_t StrictBound>
-    int prep_write(RDMABatchFixed<StrictBound> &b, uint64_t local_addr, uint32_t lkey,
-                   uint32_t length, uint64_t remote_addr, uint32_t rkey, bool inline_data);
-    template <size_t StrictBound>
-    int prep_read(RDMABatchFixed<StrictBound> &b, uint64_t local_addr, uint32_t lkey,
-                  uint32_t length, uint64_t remote_addr, uint32_t rkey, bool inline_data);
-    template <size_t StrictBound>
-    int prep_fetch_add(RDMABatchFixed<StrictBound> &b, uint64_t local_addr, uint32_t lkey,
-                       uint64_t remote_addr, uint32_t rkey, uint64_t n);
-    template <size_t StrictBound>
-    int prep_cas(RDMABatchFixed<StrictBound> &b, uint64_t local_addr, uint32_t lkey,
-                 uint64_t remote_addr, uint32_t rkey, uint64_t expected, uint64_t desired);
-
     /**
      * 提交prep队列
      *
@@ -203,96 +190,5 @@ struct RDMAConnection {
     static int m_acknowledge_sd_cqe_(int rc, ibv_wc wcs[]);
     RDMAFuture m_submit_impl(SgeWr *sge_wrs, size_t n);
 };
-
-template <size_t StrictBound>
-int RDMAConnection::prep_write(RDMABatchFixed<StrictBound> &b, uint64_t local_addr, uint32_t lkey,
-                               uint32_t length, uint64_t remote_addr, uint32_t rkey,
-                               bool inline_data) {
-    DEBUGY(inline_data && !m_inline_support_) {
-        errno = EPERM;
-        DLOG_ERROR("rdma write: this device don't support inline write");
-        return -1;
-    }
-
-    b.push_back({ibv_sge{.addr = local_addr, .length = length, .lkey = lkey},
-                 ibv_send_wr{.num_sge = 1,
-                             .opcode = IBV_WR_RDMA_WRITE,
-                             .wr = {.rdma = {.remote_addr = remote_addr, .rkey = rkey}}}});
-    if (inline_data) b.back().wr.send_flags = IBV_SEND_INLINE;
-    return 0;
-}
-template <size_t StrictBound>
-int RDMAConnection::prep_read(RDMABatchFixed<StrictBound> &b, uint64_t local_addr, uint32_t lkey,
-                              uint32_t length, uint64_t remote_addr, uint32_t rkey,
-                              bool inline_data) {
-    DEBUGY(inline_data && !m_inline_support_) {
-        errno = EPERM;
-        DLOG_ERROR("rdma read: this device don't support inline read");
-        return -1;
-    }
-
-    b.push_back({ibv_sge{.addr = local_addr, .length = length, .lkey = lkey},
-                 ibv_send_wr{.num_sge = 1,
-                             .opcode = IBV_WR_RDMA_READ,
-                             .wr = {.rdma = {.remote_addr = remote_addr, .rkey = rkey}}}});
-    if (inline_data) b.back().wr.send_flags = IBV_SEND_INLINE;
-    return 0;
-}
-template <size_t StrictBound>
-int RDMAConnection::prep_fetch_add(RDMABatchFixed<StrictBound> &b, uint64_t local_addr,
-                                   uint32_t lkey, uint64_t remote_addr, uint32_t rkey, uint64_t n) {
-    DEBUGY(!m_atomic_support_) {
-        errno = EPERM;
-        DLOG_ERROR("rdma fetch add: this device don't support atomic operations");
-        return -1;
-    }
-    DEBUGY(remote_addr % 8) {
-        errno = EINVAL;
-        DLOG_ERROR("rdma fetch add: remote addr must be 8-byte aligned");
-        return -1;
-    }
-
-    b.push_back({ibv_sge{.addr = local_addr, .length = 8, .lkey = lkey},
-                 ibv_send_wr{
-                     .num_sge = 1,
-                     .opcode = IBV_WR_ATOMIC_FETCH_AND_ADD,
-                     .wr = {.atomic =
-                                {
-                                    .remote_addr = remote_addr,
-                                    .compare_add = n,
-                                    .rkey = rkey,
-                                }},
-                 }});
-    return 0;
-}
-template <size_t StrictBound>
-int RDMAConnection::prep_cas(RDMABatchFixed<StrictBound> &b, uint64_t local_addr, uint32_t lkey,
-                             uint64_t remote_addr, uint32_t rkey, uint64_t expected,
-                             uint64_t desired) {
-    DEBUGY(!m_atomic_support_) {
-        errno = EPERM;
-        DLOG_ERROR("rdma cas: this device don't support atomic operations");
-        return -1;
-    }
-    DEBUGY(remote_addr % 8) {
-        errno = EINVAL;
-        DLOG_ERROR("rdma cas: remote addr must be 8-byte aligned");
-        return -1;
-    }
-
-    b.push_back({ibv_sge{.addr = local_addr, .length = 8, .lkey = lkey},
-                 ibv_send_wr{
-                     .num_sge = 1,
-                     .opcode = IBV_WR_ATOMIC_CMP_AND_SWP,
-                     .wr = {.atomic =
-                                {
-                                    .remote_addr = remote_addr,
-                                    .compare_add = expected,
-                                    .swap = desired,
-                                    .rkey = rkey,
-                                }},
-                 }});
-    return 0;
-}
 
 }  // namespace rdma_rc

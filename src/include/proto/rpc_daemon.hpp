@@ -225,7 +225,7 @@ DelPageRDMARefReply delPageRDMARef(DaemonContext& daemon_context,
 struct TryMigratePageRequest : public RequestMsg {
     page_id_t page_id;
     page_id_t swap_page_id;
-    uint64_t score;
+    uint64_t hot_score;
     uintptr_t swapout_page_addr;  // 当swapout_page_addr == 0且swapout_page_rkey == 0时代表不换出页
     uintptr_t swapin_page_addr;
     uint32_t swapout_page_rkey;
