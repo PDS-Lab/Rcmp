@@ -36,6 +36,27 @@ JoinDaemonReply joinDaemon(MasterContext& master_context,
     rack_table->daemon_connect->peer_session = master_context.get_erpc().create_session(
         rack_table->daemon_connect->ip + ":" + std::to_string(rack_table->daemon_connect->port), 0);
 
+    size_t rack_count = master_context.m_cluster_manager.cluster_rack_table.size();
+    JoinDaemonReply* reply_ptr =
+        req.alloc_flex_resp(sizeof(JoinDaemonReply::RackInfo) * rack_count);
+    reply_ptr->other_rack_count = rack_count;
+    master_context.m_cluster_manager.cluster_rack_table.foreach_all(
+        [&, i = 0](std::pair<const rack_id_t, RackMacTable*>& p) mutable {
+            DLOG_ASSERT(i < rack_count);
+
+            MasterToDaemonConnection* conn = p.second->daemon_connect;
+            auto& info = reply_ptr->other_rack_infos[i];
+            auto peer_addr = conn->rdma_conn->get_peer_addr();
+            info.rack_id = conn->rack_id;
+            info.daemon_id = conn->daemon_id;
+            info.daemon_ipv4 = conn->ip;
+            info.daemon_erpc_port = conn->port;
+            info.daemon_rdma_ipv4 = peer_addr.first;
+            info.daemon_rdma_port = peer_addr.second;
+            i++;
+            return true;
+        });
+
     master_context.m_cluster_manager.cluster_rack_table.insert(req.rack_id, rack_table);
     master_context.m_cluster_manager.connect_table.insert(daemon_connection.daemon_id,
                                                           &daemon_connection);
@@ -47,12 +68,11 @@ JoinDaemonReply joinDaemon(MasterContext& master_context,
 
     auto local_addr = master_context.m_listen_conn.get_local_addr();
 
-    JoinDaemonReply reply;
-    reply.daemon_mac_id = mac_id;
-    reply.master_mac_id = master_context.m_master_id;
-    reply.rdma_ipv4 = local_addr.first;
-    reply.rdma_port = local_addr.second;
-    return reply;
+    reply_ptr->daemon_mac_id = mac_id;
+    reply_ptr->master_mac_id = master_context.m_master_id;
+    reply_ptr->rdma_ipv4 = local_addr.first;
+    reply_ptr->rdma_port = local_addr.second;
+    return {};
 }
 
 JoinClientReply joinClient(MasterContext& master_context,
@@ -103,7 +123,8 @@ AllocPageReply allocPage(MasterContext& master_context, MasterToDaemonConnection
         PageRackMetadata* page_meta = new PageRackMetadata();
         page_meta->rack_id = daemon_connection.rack_id;
         page_meta->daemon_id = daemon_connection.daemon_id;
-        // DLOG("alloc page: %lu ---> rack %d", new_page_id + c, rack_table->daemon_connect->rack_id);
+        // DLOG("alloc page: %lu ---> rack %d", new_page_id + c,
+        // rack_table->daemon_connect->rack_id);
         master_context.m_page_directory.insert(new_page_id + c, page_meta);
         c++;
     }
@@ -283,18 +304,9 @@ LatchRemotePageReply latchRemotePage(MasterContext& master_context,
         }
     }
 
-    MasterToDaemonConnection* dest_daemon = dynamic_cast<MasterToDaemonConnection*>(
-        master_context.get_connection(page_meta->daemon_id));
-
-    auto peer_addr = dest_daemon->rdma_conn->get_peer_addr();
-
     LatchRemotePageReply reply;
     reply.dest_rack_id = page_meta->rack_id;
     reply.dest_daemon_id = page_meta->daemon_id;
-    reply.dest_daemon_ipv4 = dest_daemon->ip;
-    reply.dest_daemon_erpc_port = dest_daemon->port;
-    reply.dest_daemon_rdma_ipv4 = peer_addr.first;
-    reply.dest_daemon_rdma_port = peer_addr.second;
     return reply;
 }
 

@@ -166,24 +166,83 @@ void DaemonContext::connectWithMaster() {
     m_master_connection.master_id = resp->master_mac_id;
     m_daemon_id = resp->daemon_mac_id;
 
-    std::string peer_ip(resp->rdma_ipv4.get_string());
-    uint16_t peer_port(resp->rdma_port);
-
-    rpc.free_msg_buffer(req_raw);
-    rpc.free_msg_buffer(resp_raw);
-
     DLOG_ASSERT(m_master_connection.master_id == master_id, "Fail to get master id");
     DLOG_ASSERT(m_daemon_id != master_id, "Fail to get daemon id");
+
+    std::string peer_ip(resp->rdma_ipv4.get_string());
+    uint16_t peer_port(resp->rdma_port);
 
     RDMARCConnectParam param;
     param.mac_id = m_daemon_id;
     param.role = CXL_DAEMON;
 
     m_master_connection.rdma_conn = new rdma_rc::RDMAConnection();
-
     m_master_connection.rdma_conn->connect(peer_ip, peer_port, &param, sizeof(param));
 
     DLOG("Connection with master OK, my id is %d", m_daemon_id);
+
+    for (size_t i = 0; i < resp->other_rack_count; ++i) {
+        auto &rack_info = resp->other_rack_infos[i];
+
+        // 与该daemon建立erpc与RDMA RC
+        DaemonToDaemonConnection *dd_conn = new DaemonToDaemonConnection();
+        std::string server_uri =
+            rack_info.daemon_ipv4.get_string() + ":" + std::to_string(rack_info.daemon_erpc_port);
+        dd_conn->peer_session = rpc.create_session(server_uri, 0);
+        dd_conn->daemon_id = rack_info.daemon_id;
+        dd_conn->rack_id = rack_info.rack_id;
+        dd_conn->ip = rack_info.daemon_ipv4.get_string();
+        dd_conn->port = rack_info.daemon_erpc_port;
+        DLOG("First connect daemon: %u. peer_session = %d", dd_conn->daemon_id,
+             dd_conn->peer_session);
+
+        using CrossRackConnectRPC = RPC_TYPE_STRUCT(rpc_daemon::crossRackConnect);
+
+        auto conn_req_raw = rpc.alloc_msg_buffer_or_die(sizeof(CrossRackConnectRPC::RequestType));
+        auto conn_resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(CrossRackConnectRPC::ResponseType));
+
+        auto conn_req =
+            reinterpret_cast<CrossRackConnectRPC::RequestType *>(conn_req_raw.get_buf());
+        conn_req->mac_id = m_daemon_id;
+        conn_req->ip = m_options.daemon_ip;
+        conn_req->port = m_options.daemon_port;
+        conn_req->rack_id = m_options.rack_id;
+        conn_req->conn_mac_id = rack_info.daemon_id;
+
+        std::promise<void> pro;
+        std::future<void> fu = pro.get_future();
+        rpc.enqueue_request(dd_conn->peer_session, CrossRackConnectRPC::rpc_type, conn_req_raw,
+                            conn_resp_raw, erpc_general_promise_flag_cb, static_cast<void *>(&pro));
+
+        while (fu.wait_for(0s) == std::future_status::timeout) {
+            rpc.run_event_loop_once();
+        }
+
+        auto conn_resp =
+            reinterpret_cast<CrossRackConnectRPC::ResponseType *>(conn_resp_raw.get_buf());
+
+        std::string peer_ip(conn_resp->rdma_ipv4.get_string());
+        uint16_t peer_port(conn_resp->rdma_port);
+
+        rpc.free_msg_buffer(conn_req_raw);
+        rpc.free_msg_buffer(conn_resp_raw);
+
+        RDMARCConnectParam param;
+        param.mac_id = m_daemon_id;
+        param.role = CXL_DAEMON;
+
+        DLOG("Connect with daemon %d [%s] ...", dd_conn->daemon_id, peer_ip.c_str());
+
+        dd_conn->rdma_conn = new rdma_rc::RDMAConnection();
+        dd_conn->rdma_conn->connect(peer_ip, peer_port, &param, sizeof(param));
+
+        m_connect_table.insert(dd_conn->daemon_id, dd_conn);
+
+        DLOG("Connection with daemon %d OK", dd_conn->daemon_id);
+    }
+
+    rpc.free_msg_buffer(req_raw);
+    rpc.free_msg_buffer(resp_raw);
 }
 
 void DaemonContext::registerCXLMR() {

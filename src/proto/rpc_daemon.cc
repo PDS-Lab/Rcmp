@@ -219,71 +219,13 @@ retry:
             reinterpret_cast<LatchRemotePageRPC::ResponseType*>(latch_resp_raw.get_buf());
 
         // 2. 获取对端连接
-        auto p = daemon_context.m_connect_table.find_or_emplace(latch_resp->dest_daemon_id, [&]() {
-            // TODO: 防止双方互访建立多余连接
-
-            // 与该daemon建立erpc与RDMA RC
-            DaemonToDaemonConnection* dd_conn = new DaemonToDaemonConnection();
-            std::string server_uri = latch_resp->dest_daemon_ipv4.get_string() + ":" +
-                                     std::to_string(latch_resp->dest_daemon_erpc_port);
-            dd_conn->peer_session = rpc.create_session(server_uri, 0);
-            dd_conn->daemon_id = latch_resp->dest_daemon_id;
-            dd_conn->rack_id = latch_resp->dest_rack_id;
-            dd_conn->ip = latch_resp->dest_daemon_ipv4.get_string();
-            dd_conn->port = latch_resp->dest_daemon_erpc_port;
-            DLOG("First connect daemon: %u. peer_session = %d", dd_conn->daemon_id,
-                 dd_conn->peer_session);
-
-            using CrossRackConnectRPC = RPC_TYPE_STRUCT(rpc_daemon::crossRackConnect);
-
-            auto conn_req_raw =
-                rpc.alloc_msg_buffer_or_die(sizeof(CrossRackConnectRPC::RequestType));
-            auto conn_resp_raw =
-                rpc.alloc_msg_buffer_or_die(sizeof(CrossRackConnectRPC::ResponseType));
-
-            auto conn_req =
-                reinterpret_cast<CrossRackConnectRPC::RequestType*>(conn_req_raw.get_buf());
-            conn_req->mac_id = daemon_context.m_daemon_id;
-            conn_req->ip = daemon_context.m_options.daemon_ip;
-            conn_req->port = daemon_context.m_options.daemon_port;
-            conn_req->rack_id = daemon_context.m_options.rack_id;
-            conn_req->conn_mac_id = latch_resp->dest_daemon_id;
-
-            std::promise<void> pro;
-            std::future<void> fu = pro.get_future();
-            rpc.enqueue_request(dd_conn->peer_session, CrossRackConnectRPC::rpc_type, conn_req_raw,
-                                conn_resp_raw, erpc_general_promise_flag_cb,
-                                static_cast<void*>(&pro));
-
-            this_cort::reset_resume_cond(
-                [&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
-            this_cort::yield();
-
-            auto conn_resp =
-                reinterpret_cast<CrossRackConnectRPC::ResponseType*>(conn_resp_raw.get_buf());
-
-            std::string peer_ip(conn_resp->rdma_ipv4.get_string());
-            uint16_t peer_port(conn_resp->rdma_port);
-
-            rpc.free_msg_buffer(conn_req_raw);
-            rpc.free_msg_buffer(conn_resp_raw);
-
-            RDMARCConnectParam param;
-            param.mac_id = daemon_context.m_daemon_id;
-            param.role = CXL_DAEMON;
-
-            dd_conn->rdma_conn = new rdma_rc::RDMAConnection();
-            dd_conn->rdma_conn->connect(peer_ip, peer_port, &param, sizeof(param));
-
-            DLOG("Connection with daemon %d OK", dd_conn->daemon_id);
-
-            return dd_conn;
-        });
+        auto dest_conn_it = daemon_context.m_connect_table.find(latch_resp->dest_daemon_id);
+        DLOG_ASSERT(dest_conn_it != daemon_context.m_connect_table.end(), "Can't find peer daemon connection");
 
         rpc.free_msg_buffer(latch_req_raw);
         rpc.free_msg_buffer(latch_resp_raw);
 
-        dest_daemon_conn = dynamic_cast<DaemonToDaemonConnection*>(p.first->second);
+        dest_daemon_conn = dynamic_cast<DaemonToDaemonConnection*>(dest_conn_it->second);
 
         // 3. 获取远端内存rdma ref
         {
@@ -451,7 +393,7 @@ retry:
                         ba, my_data_buf, my_rkey, my_size,
                         (rem_page_md_cache->remote_page_addr + page_offset),
                         rem_page_md_cache->remote_page_rkey, false);
-                    // DLOG("write size %u remote addr [%#lx, %u] to local addr [%#lx, %u]",
+                    // DLOG("write size %u remote addr [%#lx, %u] from local addr [%#lx, %u]",
                     // my_size,
                     //      rem_page_md_cache->remote_page_addr,
                     //      rem_page_md_cache->remote_page_rkey, my_data_buf, my_rkey);
@@ -588,7 +530,7 @@ retry:
             // DLOG("swap = %ld", swap_page_id);
             /* 1.2 注册换出页的地址，并获取rkey */
             auto swap_page_it = daemon_context.m_page_table.find(swap_page_id);
-            DLOG_ASSERT(swap_page_meta_pair != daemon_context.m_page_table.end(),
+            DLOG_ASSERT(swap_page_it != daemon_context.m_page_table.end(),
                         "Can't find swap page %lu", swap_page_id);
 
             swap_page_metadata = swap_page_it->second;
@@ -1026,7 +968,7 @@ TryMigratePageReply tryMigratePage(DaemonContext& daemon_context,
     SharedCortMutex* ref_lock;
     auto ref_lock_pair = daemon_context.m_page_ref_lock.find_or_emplace(
         req.page_id, []() { return new SharedCortMutex(); });
-    DLOG_ASSERT(p_lock.first != daemon_context.m_page_ref_lock.end(),
+    DLOG_ASSERT(ref_lock_pair.first != daemon_context.m_page_ref_lock.end(),
                 "Can't find page %lu's ref lock", req.page_id);
     ref_lock = ref_lock_pair.first->second;
 
@@ -1036,7 +978,7 @@ TryMigratePageReply tryMigratePage(DaemonContext& daemon_context,
 
     PageMetadata* page_meta;
     auto page_meta_it = daemon_context.m_page_table.find(req.page_id);
-    DLOG_ASSERT(p_page_meta != daemon_context.m_page_table.end(), "Can't find page %lu",
+    DLOG_ASSERT(page_meta_it != daemon_context.m_page_table.end(), "Can't find page %lu",
                 req.page_id);
     page_meta = page_meta_it->second;
     // DLOG("DN: %u recv tryMigratePage for page %lu. swap page = %lu", daemon_context.m_daemon_id,

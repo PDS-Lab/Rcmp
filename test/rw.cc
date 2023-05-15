@@ -33,6 +33,8 @@ int main(int argc, char *argv[]) {
     cmd.add<uint64_t>("start_addr");
     cmd.add<size_t>("alloc_page_cnt");
     cmd.add<int>("thread");
+    cmd.add<int>("node_id");
+    cmd.add<int>("no_node");
     bool ret = cmd.parse(argc, argv);
     DLOG_ASSERT(ret);
 
@@ -43,10 +45,6 @@ int main(int argc, char *argv[]) {
     options.cxl_memory_size = cmd.get<size_t>("cxl_memory_size");
     options.rack_id = cmd.get<uint32_t>("rack_id");
     options.with_cxl = true;
-
-    // RCHMSMemPool pool;
-
-    // pool.ref = rchms::Open(options);
 
     // pool.ref->__NotifyPerf();
 
@@ -64,6 +62,8 @@ int main(int argc, char *argv[]) {
     }
 
     run_bench({
+        .NID = cmd.get<int>("node_id"),
+        .NODES = cmd.get<int>("no_node"),
         .IT = cmd.get<size_t>("iteration"),
         .TH = cmd.get<int>("thread"),
         .RA = cmd.get<int>("read_ratio"),

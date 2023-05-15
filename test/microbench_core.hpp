@@ -1,5 +1,8 @@
 #include <cstdint>
+#include <sw/redis++/redis++.h>
 #include <random>
+#include <string>
+#include <thread>
 
 #include "config.hpp"
 #include "log.hpp"
@@ -7,6 +10,7 @@
 #include "utils.hpp"
 
 using namespace std;
+using namespace sw::redis;
 
 inline long rdd(long cli_id, long x) {
     long m = 0xc6a4a7935bd1e995L;
@@ -25,6 +29,23 @@ inline long rdd(long cli_id, long x) {
     return h;
 }
 
+inline void redis_sync(Redis &redis, string sync_key, int NID, int NODES) {
+    std::string key = sync_key + to_string(NID);
+    std::string value = "ok";
+
+    redis.set(key, value, 30s);
+    for (int i = 0; i < NODES; ++i) {
+        std::string key = sync_key + to_string(i);
+        auto val = redis.get(key);
+        while (val) {
+            val = redis.get(key);
+            this_thread::sleep_for(100ms);
+        }
+    }
+
+    DLOG("%s sync done", sync_key.c_str());
+}
+
 struct PerfStatistics : public Histogram {
     PerfStatistics() : Histogram(1000000, 0, 1000000) {}
     PerfStatistics(Histogram &&h) : Histogram(h) {}
@@ -41,6 +62,8 @@ struct MemPoolBase {
 };
 
 struct BenchParam {
+    int NID;                // node id
+    int NODES;              // node number
     size_t IT;              // iteration(per thread)
     int TH;                 // thread count
     int RA;                 // read ratio
@@ -53,13 +76,19 @@ struct BenchParam {
 };
 
 inline void run_bench(BenchParam param) {
-    DLOG("start running ...");
+    DLOG("start runing ...");
 
-    {
-        MemPoolBase *pool = param.instances[0];
+    auto redis = Redis("tcp://192.168.1.52:6379");
+
+    redis_sync(redis, "start", param.NID, param.NODES);
+
+    MemPoolBase *pool = param.instances[0];
+    if (param.APC) {
         MemPoolBase::GAddr ga = pool->Alloc(param.APC * (MemPoolBase::alloc_unit));
         DLOG_EXPR(ga, ==, param.SA);
     }
+
+    redis_sync(redis, "alloc", param.NID, param.NODES);
 
     DLOG("start testing ...");
 
@@ -115,9 +144,11 @@ inline void run_bench(BenchParam param) {
         DLOG("AVG: %fus, P50: %dus, P99: %dus, P999: %dus, P9999: %dus\n", all_ps.getAverage(),
              all_ps.getPercentile(50), all_ps.getPercentile(99), all_ps.getPercentile(99.9),
              all_ps.getPercentile(99.99));
+
+        redis_sync(redis, "rand_write", param.NID, param.NODES);
     }
 
-    if (0) {
+    if (1) {
         vector<thread> ths;
         vector<uint64_t> diff_times(param.TH, 0);
         vector<PerfStatistics> ps(param.TH);
@@ -167,6 +198,8 @@ inline void run_bench(BenchParam param) {
         DLOG("AVG: %fus, P50: %dus, P99: %dus, P999: %dus, P9999: %dus\n", all_ps.getAverage(),
              all_ps.getPercentile(50), all_ps.getPercentile(99), all_ps.getPercentile(99.9),
              all_ps.getPercentile(99.99));
+
+        redis_sync(redis, "rand_read", param.NID, param.NODES);
     }
 
     // if (0) {
@@ -283,6 +316,8 @@ inline void run_bench(BenchParam param) {
         DLOG("AVG: %fus, P50: %dus, P99: %dus, P999: %dus, P9999: %dus\n", all_ps.getAverage(),
              all_ps.getPercentile(50), all_ps.getPercentile(99), all_ps.getPercentile(99.9),
              all_ps.getPercentile(99.99));
+
+        redis_sync(redis, "zipf_write", param.NID, param.NODES);
     }
 
     if (0) {
@@ -343,6 +378,8 @@ inline void run_bench(BenchParam param) {
         DLOG("AVG: %fus, P50: %dus, P99: %dus, P999: %dus, P9999: %dus\n", all_ps.getAverage(),
              all_ps.getPercentile(50), all_ps.getPercentile(99), all_ps.getPercentile(99.9),
              all_ps.getPercentile(99.99));
+
+        redis_sync(redis, "zipf_read", param.NID, param.NODES);
     }
 
     // if (0) {
@@ -385,4 +422,6 @@ inline void run_bench(BenchParam param) {
     //     DLOG("p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", hyw.getPercentile(50),
     //          hyw.getPercentile(99), hyw.getPercentile(99.9), hyw.getPercentile(99.99));
     // }
+
+    redis_sync(redis, "test end", param.NID, param.NODES);
 }

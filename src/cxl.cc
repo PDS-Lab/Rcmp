@@ -60,4 +60,5 @@ void cxl_memory_open(CXLMemFormat &format, void *cxl_memory_addr) {
     DLOG("msgq_zone_start_addr: %p", format.msgq_zone_start_addr);
     DLOG("reserve_zone_addr: %p", format.reserve_zone_addr);
     DLOG("page_data_start_addr: %p", format.page_data_start_addr);
+    DLOG("end_addr: %p", format.end_addr);
 }

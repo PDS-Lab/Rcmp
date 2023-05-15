@@ -7,7 +7,8 @@
 
 namespace rpc_master {
 
-struct JoinDaemonRequest : public RequestMsg {
+struct JoinDaemonReply;
+struct JoinDaemonRequest : public RequestMsg, detail::RawResponseReturn<JoinDaemonReply> {
     IPv4String ip;
     uint16_t port;
     rack_id_t rack_id;
@@ -19,6 +20,18 @@ struct JoinDaemonReply : public ResponseMsg {
     mac_id_t master_mac_id;
     IPv4String rdma_ipv4;
     uint16_t rdma_port;
+
+    struct RackInfo {
+        rack_id_t rack_id;
+        mac_id_t daemon_id;
+        IPv4String daemon_ipv4;
+        uint16_t daemon_erpc_port;
+        IPv4String daemon_rdma_ipv4;
+        uint16_t daemon_rdma_port;
+    };
+    
+    size_t other_rack_count;
+    RackInfo other_rack_infos[0];
 };
 /**
  * @brief 将daemon加入到集群中。在建立连接时调用。
@@ -113,10 +126,6 @@ struct LatchRemotePageRequest : public RequestMsg {
 struct LatchRemotePageReply : public ResponseMsg {
     rack_id_t dest_rack_id;
     mac_id_t dest_daemon_id;
-    IPv4String dest_daemon_ipv4;
-    uint16_t dest_daemon_erpc_port;
-    IPv4String dest_daemon_rdma_ipv4;
-    uint16_t dest_daemon_rdma_port;
 };
 /**
  * @brief 获取并锁定远端page不被swap

@@ -3,6 +3,8 @@ function(add_test TEST_FILE)
   add_executable(${TEST_NAME} ${TEST_FILE})
   target_link_libraries(${TEST_NAME}
   rchms
+  redis++
+  hiredis
   )
   message(STATUS "[ADD TEST] : ${TEST_NAME}")
 endfunction()

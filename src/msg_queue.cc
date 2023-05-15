@@ -204,6 +204,7 @@ void MsgQueueRPC::enqueue_request(uint8_t rpc_type, MsgBuffer& msg_buf, msgq_cal
 }
 
 void MsgQueueRPC::enqueue_response(MsgBuffer& req_buf, MsgBuffer& resp_buf) {
+    // TODO: set resp complete flag of req header
     resp_buf.m_msg.msg_type = MsgHeader::RESP;
     resp_buf.m_msg.cb = req_buf.m_msg.cb;
     resp_buf.m_msg.arg = req_buf.m_msg.arg;

@@ -80,7 +80,7 @@ void erpc_call_target(erpc::ReqHandle *req_handle, void *context) {
                 dynamic_cast<typename EFW::PeerContext *>(self_ctx->get_connection(req->mac_id));
         }
 
-        *resp = EFW::func(*self_ctx, *peer_connection, *req);
+        EFW::func(*self_ctx, *peer_connection, *req);
         rpc.enqueue_response(req_wrap, resp_raw);
     });
 }
