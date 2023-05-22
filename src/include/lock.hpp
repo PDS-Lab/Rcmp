@@ -3,85 +3,79 @@
 #include <pthread.h>
 
 #include <atomic>
+#include <boost/fiber/condition_variable.hpp>
+#include <boost/fiber/mutex.hpp>
 #include <mutex>
+#include <shared_mutex>
 
-class Mutex : public std::mutex {};
+#include "utils.hpp"
+
+using Mutex = std::mutex;
+using SharedMutex = std::shared_mutex;
 
 class SpinMutex {
    public:
-    SpinMutex();
-    ~SpinMutex();
+    SpinMutex() { pthread_spin_init(&m_spinlock, 0); }
 
-    void lock();
-    bool try_lock();
-    void unlock();
+    ~SpinMutex() { pthread_spin_destroy(&m_spinlock); }
+
+    void lock() { pthread_spin_lock(&m_spinlock); }
+
+    bool try_lock() { return pthread_spin_trylock(&m_spinlock) == 0; }
+
+    void unlock() { pthread_spin_unlock(&m_spinlock); }
 
    private:
     pthread_spinlock_t m_spinlock;
 };
 
-class TinySpinMutex {
+using CortMutex = boost::fibers::mutex;
+
+class CortSharedMutex {
    public:
-    TinySpinMutex();
+    CortSharedMutex() : state(0) {}
 
-    void lock();
-    bool try_lock();
-    void unlock();
-
-   private:
-    std::atomic_flag m_flag;
-};
-
-class SharedMutex {
-   public:
-    SharedMutex();
-    ~SharedMutex();
-
-    void lock();
-    bool try_lock();
-    void unlock();
-    void lock_shared();
-    bool try_lock_shared();
-    void unlock_shared();
-
-   private:
-    pthread_rwlock_t m_rwlock;
-};
-
-template <typename __SharedMutex>
-class SharedLockGuard {
-   public:
-    SharedLockGuard(__SharedMutex& mutex, bool isWriteLock) : m_mutex(mutex), m_is_write(isWriteLock) {
-        if (m_is_write) {
-            m_mutex.lock();
-        } else {
-            m_mutex.lock_shared();
-        }
+    void lock() {
+        std::unique_lock<boost::fibers::mutex> lk(mtx);
+        g1.wait(lk, [=] { return !write_entered(); });
+        state |= _S_write_entered;
+        g2.wait(lk, [=] { return readers() == 0; });
     }
 
-    ~SharedLockGuard() {
-        if (m_is_write) {
-            m_mutex.unlock();
+    void unlock() {
+        std::lock_guard<boost::fibers::mutex> lk(mtx);
+        state = 0;
+        g1.notify_all();
+    }
+
+    void lock_shared() {
+        std::unique_lock<boost::fibers::mutex> lk(mtx);
+        g1.wait(lk, [=] { return state < _S_max_readers; });
+        ++state;
+    }
+
+    void unlock_shared() {
+        std::lock_guard<boost::fibers::mutex> lk(mtx);
+        auto prev = state--;
+        if (write_entered()) {
+            if (readers() == 0) {
+                g2.notify_one();
+            }
         } else {
-            m_mutex.unlock_shared();
+            if (prev == _S_max_readers) {
+                g1.notify_one();
+            }
         }
     }
 
    private:
-    bool m_is_write;
-    __SharedMutex& m_mutex;
-};
+    boost::fibers::mutex mtx;
+    boost::fibers::condition_variable g1, g2;
+    unsigned state;
 
-class SharedCortMutex {
-   public:
-    SharedCortMutex();
-    ~SharedCortMutex();
+    static constexpr unsigned _S_write_entered = 1U << (sizeof(unsigned) * __CHAR_BIT__ - 1);
+    static constexpr unsigned _S_max_readers = ~_S_write_entered;
 
-    void lock();
-    void unlock();
-    void lock_shared();
-    void unlock_shared();
-
-   private:
-    std::atomic<uint32_t> m_rw_cnt;
+    bool write_entered() const { return state & _S_write_entered; }
+    unsigned readers() const { return state & _S_max_readers; }
 };

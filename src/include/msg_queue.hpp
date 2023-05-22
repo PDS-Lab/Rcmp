@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "allocator.hpp"
+#include "common.hpp"
 #include "concurrent_queue.hpp"
 #include "config.hpp"
 

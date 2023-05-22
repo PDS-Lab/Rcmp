@@ -1,15 +1,9 @@
 #include "allocator.hpp"
 
-#include <strings.h>
-
-#include <cstdint>
-
 #include "log.hpp"
 #include "utils.hpp"
 
-IDGenerator::IDGenerator() : m_gen_cur(0), m_size(0) {}
-
-IDGenerator::id_t IDGenerator::gen() {
+IDGenerator::id_t IDGenerator::Gen() {
     if (UNLIKELY(m_size + 1 > m_bset.size())) {
         return -1;
     }
@@ -31,9 +25,9 @@ IDGenerator::id_t IDGenerator::gen() {
     return -1;
 }
 
-IDGenerator::id_t IDGenerator::multiGen(size_t count) {
+IDGenerator::id_t IDGenerator::MultiGen(size_t count) {
     if (count == 1) {
-        return gen();
+        return Gen();
     }
 
     if (UNLIKELY(m_size + count > m_bset.size())) {
@@ -75,7 +69,7 @@ IDGenerator::id_t IDGenerator::multiGen(size_t count) {
     return -1;
 }
 
-void IDGenerator::recycle(IDGenerator::id_t id) {
+void IDGenerator::Recycle(IDGenerator::id_t id) {
     DLOG_ASSERT(m_bset[id] == true, "IDGenerator double recycle");
 
     std::lock_guard<Mutex> guard(m_lck);
@@ -84,9 +78,9 @@ void IDGenerator::recycle(IDGenerator::id_t id) {
     m_size -= 1;
 }
 
-void IDGenerator::multiRecycle(id_t id, size_t count) {
+void IDGenerator::MultiRecycle(id_t id, size_t count) {
     if (count == 1) {
-        recycle(id);
+        Recycle(id);
         return;
     }
 
@@ -100,30 +94,7 @@ void IDGenerator::multiRecycle(id_t id, size_t count) {
     m_size -= count;
 }
 
-bool IDGenerator::empty() const { return size() == 0; }
-
-bool IDGenerator::full() const { return size() == capacity(); }
-
-size_t IDGenerator::size() const { return m_size; }
-
-size_t IDGenerator::capacity() const { return m_bset.size(); }
-
-void IDGenerator::addCapacity(size_t n) {
+void IDGenerator::Expand(size_t n) {
     std::lock_guard<Mutex> guard(m_lck);
     m_bset.insert(m_bset.end(), n, false);
 }
-
-SingleAllocator::SingleAllocator(size_t total_size, size_t unit_size) : m_unit(unit_size) {
-    addCapacity(total_size / unit_size);
-}
-
-uintptr_t SingleAllocator::allocate(size_t n) {
-    DLOG_ASSERT(n == 1, "Must allocate 1 element");
-    IDGenerator::id_t id = gen();
-    if (UNLIKELY(id == -1)) {
-        return -1;
-    }
-    return id * m_unit;
-}
-
-void SingleAllocator::deallocate(uintptr_t ptr) { recycle(ptr / m_unit); }

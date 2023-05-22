@@ -95,4 +95,9 @@ class IBRpcWrap {
    private:
     std::unique_ptr<IBRpc> rpc_;
 };
+
+inline std::string concat_server_uri(std::string ip, uint16_t port) {
+    return ip + ':' + std::to_string(port);
+}
+
 }  // namespace erpc

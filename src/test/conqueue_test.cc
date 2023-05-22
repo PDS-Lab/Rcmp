@@ -21,7 +21,7 @@ int main() {
     for (int i = 0; i < PT; ++i) {
         vs.emplace_back([&q]() {
             for (int j = 0; j < IT; ++j) {
-                q.forceEnqueue(j);
+                q.ForceEnqueue(j);
             }
         });
     }
@@ -32,9 +32,9 @@ int main() {
         vs.emplace_back([i, &q, &over, &sum]() {
             int n;
             while (!over) {
-                if (q.tryDequeue(&n)) sum[i] += n;
+                if (q.TryDequeue(&n)) sum[i] += n;
             }
-            while (q.tryDequeue(&n)) {
+            while (q.TryDequeue(&n)) {
                 sum[i] += n;
             }
         });

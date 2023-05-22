@@ -2,14 +2,13 @@
 
 #include "common.hpp"
 #include "impl.hpp"
-#include "rpc_base.hpp"
 
 namespace rpc_client {
 
-struct RemovePageCacheRequest : public RequestMsg {
+struct RemovePageCacheRequest {
     page_id_t page_id;
 };
-struct RemovePageCacheReply : public ResponseMsg {};
+struct RemovePageCacheReply {};
 /**
  * @brief 清理page cache
  *
@@ -22,20 +21,19 @@ RemovePageCacheReply removePageCache(ClientContext& client_context,
                                      RemovePageCacheRequest& req);
 
 struct GetCurrentWriteDataReply;
-struct GetCurrentWriteDataRequest : public RequestMsg,
-                                    detail::RawResponseReturn<GetCurrentWriteDataReply> {
+struct GetCurrentWriteDataRequest {
     void* dio_write_buf;
     size_t dio_write_size;
 };
-struct GetCurrentWriteDataReply : public ResponseMsg {
+struct GetCurrentWriteDataReply {
     uint8_t data[0];
 };
 GetCurrentWriteDataReply getCurrentWriteData(ClientContext& client_context,
                                              ClientToDaemonConnection& daemon_connection,
                                              GetCurrentWriteDataRequest& req);
 
-struct GetPagePastAccessFreqRequest : public RequestMsg {};
-struct GetPagePastAccessFreqReply : public ResponseMsg {
+struct GetPagePastAccessFreqRequest {};
+struct GetPagePastAccessFreqReply {
     page_id_t oldest_page_id;
     uint64_t last_access_ts;
 };

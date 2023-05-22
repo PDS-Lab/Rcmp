@@ -60,105 +60,6 @@ class IPv4String {
     } raw;
 };
 
-template <typename T>
-class SpinFuture;
-
-template <typename T>
-class SpinPromise {
-   public:
-    SpinPromise() : ready_(false) {}
-    ~SpinPromise() {}
-
-    SpinFuture<T> get_future() { return SpinFuture<T>(this); }
-
-    void set_value(const T &value) {
-        value_ = value;
-        ready_.store(true, std::memory_order_release);
-    }
-
-   private:
-    friend class SpinFuture<T>;
-
-    T value_;
-    std::atomic_bool ready_;
-};
-
-template <typename T>
-class SpinFuture {
-   public:
-    SpinFuture(SpinPromise<T> *promise) : promise_(promise) {}
-    ~SpinFuture() {}
-
-    const T &get() const {
-        while (!promise_->ready_.load(std::memory_order_acquire)) {
-            // spin
-        }
-        return promise_->value_;
-    }
-
-    template <typename _Rep, typename _Period>
-    std::future_status wait_for(const std::chrono::duration<_Rep, _Period> &__rel) const {
-        if (promise_->ready_.load(std::memory_order_acquire)) return std::future_status::ready;
-        if (__rel > __rel.zero()) {
-            std::this_thread::sleep_for(__rel);
-            if (promise_->ready_.load(std::memory_order_acquire)) return std::future_status::ready;
-        }
-        return std::future_status::timeout;
-    }
-
-   private:
-    SpinPromise<T> *promise_;
-};
-
-template <>
-class SpinPromise<void>;
-template <>
-class SpinFuture<void>;
-
-template <>
-class SpinPromise<void> {
-   public:
-    SpinPromise() : ready_(false) {}
-    ~SpinPromise() {}
-
-    SpinFuture<void> get_future();
-
-    void set_value() { ready_.store(true, std::memory_order_release); }
-
-   private:
-    friend class SpinFuture<void>;
-
-    std::atomic_bool ready_;
-};
-
-template <>
-class SpinFuture<void> {
-   public:
-    SpinFuture(SpinPromise<void> *promise) : promise_(promise) {}
-    ~SpinFuture() {}
-
-    void get() const {
-        while (!promise_->ready_.load(std::memory_order_acquire)) {
-            // spin
-        }
-    }
-
-    template <typename _Rep, typename _Period>
-    std::future_status wait_for(const std::chrono::duration<_Rep, _Period> &__rel) const {
-        if (promise_->ready_.load(std::memory_order_acquire)) return std::future_status::ready;
-        if (__rel > __rel.zero()) {
-            std::this_thread::sleep_for(__rel);
-            if (promise_->ready_.load(std::memory_order_acquire)) return std::future_status::ready;
-        }
-        return std::future_status::timeout;
-    }
-
-   private:
-    SpinPromise<void> *promise_;
-};
-
-inline SpinFuture<void> SpinPromise<void>::get_future() { return SpinFuture<void>(this); }
-
 struct NOCOPYABLE {
     NOCOPYABLE() = default;
     ~NOCOPYABLE() = default;
@@ -185,6 +86,17 @@ template <typename R, typename... Args>
 struct function_traits<R (*)(Args...)> : public function_traits_helper<R, Args...> {};
 template <typename R, typename... Args>
 struct function_traits<R (&)(Args...)> : public function_traits_helper<R, Args...> {};
+
+template <typename T>
+struct container_traits;
+
+template <template <typename T> class C, typename T>
+struct container_traits<C<T>> {
+    using type = T;
+
+    template <typename R>
+    using recontain_type = C<R>;
+};
 
 struct atomic_po_val_t {
     union {

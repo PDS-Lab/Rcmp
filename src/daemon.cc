@@ -1,3 +1,5 @@
+#include <boost/fiber/algo/round_robin.hpp>
+#include <boost/fiber/operations.hpp>
 #include <chrono>
 #include <cstdint>
 #include <future>
@@ -7,11 +9,14 @@
 #include "common.hpp"
 #include "config.hpp"
 #include "cxl.hpp"
+#include "eRPC/erpc.h"
 #include "impl.hpp"
 #include "log.hpp"
 #include "msg_queue.hpp"
-#include "proto/rpc.hpp"
+#include "promise.hpp"
 #include "proto/rpc_adaptor.hpp"
+#include "proto/rpc_daemon.hpp"
+#include "proto/rpc_register.hpp"
 #include "rdma_rc.hpp"
 #include "utils.hpp"
 
@@ -22,7 +27,7 @@ DaemonContext &DaemonContext::getInstance() {
     return daemon_ctx;
 }
 
-void DaemonContext::initCXLPool() {
+void DaemonContext::InitCXLPool() {
     // 1. 打开cxl设备映射
     m_cxl_memory_addr =
         cxl_open_simulate(m_options.cxl_devdax_path, m_options.cxl_memory_size, &m_cxl_devdax_fd);
@@ -31,26 +36,22 @@ void DaemonContext::initCXLPool() {
                     (m_options.max_client_limit + 1) * MsgQueueManager::RING_ELEM_SIZE);
 
     // 2. 确认page个数
-    m_total_page_num = m_cxl_format.super_block->page_data_zone_size / page_size;
-    m_max_swap_page_num = m_options.swap_zone_size / page_size;
-    m_max_data_page_num = m_total_page_num - m_max_swap_page_num;
-    m_cxl_page_allocator.reset(
-        new SingleAllocator(m_cxl_format.super_block->page_data_zone_size, page_size));
+    m_page_table.total_page_num = m_cxl_format.super_block->page_data_zone_size / page_size;
+    m_page_table.max_swap_page_num = m_options.swap_zone_size / page_size;
+    m_page_table.max_data_page_num = m_page_table.total_page_num - m_page_table.max_swap_page_num;
+    m_page_table.page_allocator.reset(
+        new SingleAllocator<page_size>(m_cxl_format.super_block->page_data_zone_size));
 
-    m_current_used_page_num = 0;
+    m_page_table.current_used_page_num = 0;
 
-    DLOG("m_total_page_num: %lu", m_total_page_num);
-    DLOG("m_max_swap_page_num: %lu", m_max_swap_page_num);
-    DLOG("m_max_data_page_num: %lu", m_max_data_page_num);
+    DLOG("total_page_num: %lu", m_page_table.total_page_num);
+    DLOG("max_swap_page_num: %lu", m_page_table.max_swap_page_num);
+    DLOG("max_data_page_num: %lu", m_page_table.max_data_page_num);
 }
 
-void DaemonContext::initCoroutinePool() {
-    m_cort_sched.reset(new CortScheduler(m_options.prealloc_cort_num));
-}
-
-void DaemonContext::initRPCNexus() {
+void DaemonContext::InitRPCNexus() {
     // 1. init erpc
-    std::string server_uri = m_options.daemon_ip + ":" + std::to_string(m_options.daemon_port);
+    std::string server_uri = erpc::concat_server_uri(m_options.daemon_ip, m_options.daemon_port);
     m_erpc_ctx.nexus.reset(new erpc::NexusWrap(server_uri));
 
     m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::crossRackConnect)::rpc_type,
@@ -74,8 +75,8 @@ void DaemonContext::initRPCNexus() {
     // 2. init msgq
     m_msgq_manager.nexus.reset(new msgq::MsgQueueNexus(m_cxl_format.msgq_zone_start_addr));
     m_msgq_manager.start_addr = m_cxl_format.msgq_zone_start_addr;
-    m_msgq_manager.msgq_allocator.reset(new SingleAllocator(
-        m_cxl_format.super_block->msgq_zone_size, MsgQueueManager::RING_ELEM_SIZE));
+    m_msgq_manager.msgq_allocator.reset(new SingleAllocator<MsgQueueManager::RING_ELEM_SIZE>(
+        m_cxl_format.super_block->msgq_zone_size));
 
     msgq::MsgQueue *public_q = m_msgq_manager.allocQueue();
     DLOG_ASSERT(public_q == m_msgq_manager.nexus->m_public_msgq);
@@ -104,13 +105,13 @@ void DaemonContext::initRPCNexus() {
                                             bind_msgq_rpc_func<false>(rpc_daemon::__stopPerf));
 }
 
-void DaemonContext::initRDMARC() {
+void DaemonContext::InitRDMARC() {
     rdma_rc::RDMAEnv::init();
 
     rdma_rc::RDMAConnection::register_connect_hook([this](rdma_rc::RDMAConnection *rdma_conn,
                                                           void *param_) {
         auto param = reinterpret_cast<RDMARCConnectParam *>(param_);
-        auto conn_ = get_connection(param->mac_id);
+        auto conn_ = GetConnection(param->mac_id);
         switch (param->role) {
             case MN:
             case CN:
@@ -120,112 +121,91 @@ void DaemonContext::initRDMARC() {
             case DAEMON:
             case CXL_DAEMON: {
                 DaemonToDaemonConnection *conn = dynamic_cast<DaemonToDaemonConnection *>(conn_);
-                conn->rdma_conn = rdma_conn;
+                conn->rdma_conn.reset(rdma_conn);
             } break;
         }
 
         DLOG("[RDMA_RC] Get New Connect: %s", rdma_conn->get_peer_addr().first.c_str());
     });
+
     rdma_rc::RDMAConnection::register_disconnect_hook([](rdma_rc::RDMAConnection *conn) {
         DLOG("[RDMA_RC] Disconnect: %s", conn->get_peer_addr().first.c_str());
     });
+
     m_listen_conn.listen(m_options.daemon_rdma_ip);
 }
 
-void DaemonContext::connectWithMaster() {
-    auto &rpc = get_erpc();
+void DaemonContext::ConnectWithMaster() {
+    auto &rpc = GetErpc();
 
-    std::string master_uri = m_options.master_ip + ":" + std::to_string(m_options.master_port);
-    m_master_connection.peer_session = rpc.create_session(master_uri, 0);
+    auto &master_connection = m_conn_manager.GetMasterConnection();
 
-    using JoinDaemonRPC = RPC_TYPE_STRUCT(rpc_master::joinDaemon);
+    master_connection.erpc_conn.reset(new ErpcClient(rpc, m_options.master_ip, m_options.master_port));
 
-    auto req_raw = rpc.alloc_msg_buffer_or_die(sizeof(JoinDaemonRPC::RequestType));
-    auto resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(JoinDaemonRPC::ResponseType));
-
-    auto req = reinterpret_cast<JoinDaemonRPC::RequestType *>(req_raw.get_buf());
-    req->ip = m_options.daemon_ip;
-    req->port = m_options.daemon_port;
-    req->free_page_num = m_max_data_page_num;
-    req->rack_id = m_options.rack_id;
-    req->with_cxl = m_options.with_cxl;
-
-    std::promise<void> pro;
-    std::future<void> fu = pro.get_future();
-    rpc.enqueue_request(m_master_connection.peer_session, JoinDaemonRPC::rpc_type, req_raw,
-                        resp_raw, erpc_general_promise_flag_cb, static_cast<void *>(&pro));
+    auto fu = master_connection.erpc_conn->call<SpinPromise>(
+        rpc_master::joinDaemon, {
+                                    .ip = m_options.daemon_ip,
+                                    .port = m_options.daemon_port,
+                                    .rack_id = m_options.rack_id,
+                                    .with_cxl = m_options.with_cxl,
+                                    .free_page_num = m_page_table.max_data_page_num,
+                                });
 
     while (fu.wait_for(1ns) == std::future_status::timeout) {
         rpc.run_event_loop_once();
     }
 
-    auto resp = reinterpret_cast<JoinDaemonRPC::ResponseType *>(resp_raw.get_buf());
+    auto &resp = fu.get();
 
-    m_master_connection.ip = m_options.master_ip;
-    m_master_connection.port = m_options.master_port;
-    m_master_connection.master_id = resp->master_mac_id;
-    m_daemon_id = resp->daemon_mac_id;
+    master_connection.ip = m_options.master_ip;
+    master_connection.port = m_options.master_port;
+    master_connection.master_id = resp.master_mac_id;
+    m_daemon_id = resp.daemon_mac_id;
 
-    DLOG_ASSERT(m_master_connection.master_id == master_id, "Fail to get master id");
+    DLOG_ASSERT(master_connection.master_id == master_id, "Fail to get master id");
     DLOG_ASSERT(m_daemon_id != master_id, "Fail to get daemon id");
 
-    std::string peer_ip(resp->rdma_ipv4.get_string());
-    uint16_t peer_port(resp->rdma_port);
+    std::string peer_ip(resp.rdma_ipv4.get_string());
+    uint16_t peer_port(resp.rdma_port);
 
     RDMARCConnectParam param;
     param.mac_id = m_daemon_id;
     param.role = CXL_DAEMON;
 
-    m_master_connection.rdma_conn = new rdma_rc::RDMAConnection();
-    m_master_connection.rdma_conn->connect(peer_ip, peer_port, &param, sizeof(param));
+    master_connection.rdma_conn.reset(new rdma_rc::RDMAConnection());
+    master_connection.rdma_conn->connect(peer_ip, peer_port, &param, sizeof(param));
 
     DLOG("Connection with master OK, my id is %d", m_daemon_id);
 
-    for (size_t i = 0; i < resp->other_rack_count; ++i) {
-        auto &rack_info = resp->other_rack_infos[i];
+    for (size_t i = 0; i < resp.other_rack_count; ++i) {
+        auto &rack_info = resp.other_rack_infos[i];
 
         // 与该daemon建立erpc与RDMA RC
         DaemonToDaemonConnection *dd_conn = new DaemonToDaemonConnection();
-        std::string server_uri =
-            rack_info.daemon_ipv4.get_string() + ":" + std::to_string(rack_info.daemon_erpc_port);
-        dd_conn->peer_session = rpc.create_session(server_uri, 0);
+        dd_conn->erpc_conn.reset(new ErpcClient(rpc, rack_info.daemon_ipv4.get_string(), rack_info.daemon_erpc_port));
         dd_conn->daemon_id = rack_info.daemon_id;
         dd_conn->rack_id = rack_info.rack_id;
         dd_conn->ip = rack_info.daemon_ipv4.get_string();
         dd_conn->port = rack_info.daemon_erpc_port;
-        DLOG("First connect daemon: %u. peer_session = %d", dd_conn->daemon_id,
-             dd_conn->peer_session);
+        DLOG("First connect daemon: %u", dd_conn->daemon_id);
 
-        using CrossRackConnectRPC = RPC_TYPE_STRUCT(rpc_daemon::crossRackConnect);
+        auto fu = dd_conn->erpc_conn->call<SpinPromise>(rpc_daemon::crossRackConnect,
+                                                        {
+                                                            .mac_id = m_daemon_id,
+                                                            .ip = m_options.daemon_ip,
+                                                            .port = m_options.daemon_port,
+                                                            .rack_id = m_options.rack_id,
+                                                            .conn_mac_id = rack_info.daemon_id,
+                                                        });
 
-        auto conn_req_raw = rpc.alloc_msg_buffer_or_die(sizeof(CrossRackConnectRPC::RequestType));
-        auto conn_resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(CrossRackConnectRPC::ResponseType));
-
-        auto conn_req =
-            reinterpret_cast<CrossRackConnectRPC::RequestType *>(conn_req_raw.get_buf());
-        conn_req->mac_id = m_daemon_id;
-        conn_req->ip = m_options.daemon_ip;
-        conn_req->port = m_options.daemon_port;
-        conn_req->rack_id = m_options.rack_id;
-        conn_req->conn_mac_id = rack_info.daemon_id;
-
-        std::promise<void> pro;
-        std::future<void> fu = pro.get_future();
-        rpc.enqueue_request(dd_conn->peer_session, CrossRackConnectRPC::rpc_type, conn_req_raw,
-                            conn_resp_raw, erpc_general_promise_flag_cb, static_cast<void *>(&pro));
-
-        while (fu.wait_for(0s) == std::future_status::timeout) {
+        while (fu.wait_for(1ns) == std::future_status::timeout) {
             rpc.run_event_loop_once();
         }
 
-        auto conn_resp =
-            reinterpret_cast<CrossRackConnectRPC::ResponseType *>(conn_resp_raw.get_buf());
+        auto &conn_resp = fu.get();
 
-        std::string peer_ip(conn_resp->rdma_ipv4.get_string());
-        uint16_t peer_port(conn_resp->rdma_port);
-
-        rpc.free_msg_buffer(conn_req_raw);
-        rpc.free_msg_buffer(conn_resp_raw);
+        std::string peer_ip(conn_resp.rdma_ipv4.get_string());
+        uint16_t peer_port(conn_resp.rdma_port);
 
         RDMARCConnectParam param;
         param.mac_id = m_daemon_id;
@@ -233,19 +213,16 @@ void DaemonContext::connectWithMaster() {
 
         DLOG("Connect with daemon %d [%s] ...", dd_conn->daemon_id, peer_ip.c_str());
 
-        dd_conn->rdma_conn = new rdma_rc::RDMAConnection();
+        dd_conn->rdma_conn.reset(new rdma_rc::RDMAConnection());
         dd_conn->rdma_conn->connect(peer_ip, peer_port, &param, sizeof(param));
 
-        m_connect_table.insert(dd_conn->daemon_id, dd_conn);
+        m_conn_manager.AddConnection(dd_conn->daemon_id, dd_conn);
 
         DLOG("Connection with daemon %d OK", dd_conn->daemon_id);
     }
-
-    rpc.free_msg_buffer(req_raw);
-    rpc.free_msg_buffer(resp_raw);
 }
 
-void DaemonContext::registerCXLMR() {
+void DaemonContext::RegisterCXLMR() {
     uintptr_t cxl_start_ptr = reinterpret_cast<uintptr_t>(m_cxl_format.start_addr);
     // ! cxl mmapped is aligned by 2GB
     while (cxl_start_ptr < reinterpret_cast<uintptr_t>(m_cxl_format.end_addr)) {
@@ -256,22 +233,7 @@ void DaemonContext::registerCXLMR() {
     }
 }
 
-DaemonConnection *DaemonContext::get_connection(mac_id_t mac_id) {
-    DLOG_ASSERT(mac_id != m_daemon_id, "Can't find self connection");
-    if (mac_id == master_id) {
-        return &m_master_connection;
-    }
-
-    auto it = m_connect_table.find(mac_id);
-    DLOG_ASSERT(it != m_connect_table.end(), "Can't find mac %d", mac_id);
-    return it->second;
-}
-
-CortScheduler &DaemonContext::get_cort_sched() { return *m_cort_sched; }
-
-erpc::IBRpcWrap &DaemonContext::get_erpc() { return m_erpc_ctx.rpc_set[0]; }
-
-ibv_mr *DaemonContext::get_mr(void *p) {
+ibv_mr *DaemonContext::GetMR(void *p) {
     if (p >= m_cxl_format.start_addr && p < m_cxl_format.end_addr) {
         return m_rdma_page_mr_table[(reinterpret_cast<uintptr_t>(p) -
                                      reinterpret_cast<const uintptr_t>(m_cxl_format.start_addr)) /
@@ -331,12 +293,11 @@ int main(int argc, char *argv[]) {
     DaemonContext &daemon_context = DaemonContext::getInstance();
     daemon_context.m_options = options;
 
-    daemon_context.initCXLPool();
-    daemon_context.initCoroutinePool();
-    daemon_context.initRDMARC();
-    daemon_context.initRPCNexus();
-    daemon_context.connectWithMaster();
-    daemon_context.registerCXLMR();
+    daemon_context.InitCXLPool();
+    daemon_context.InitRDMARC();
+    daemon_context.InitRPCNexus();
+    daemon_context.ConnectWithMaster();
+    daemon_context.RegisterCXLMR();
 
     std::thread log_worker = std::thread([&daemon_context]() {
         while (true) {
@@ -347,10 +308,11 @@ int main(int argc, char *argv[]) {
         }
     });
 
+    boost::fibers::use_scheduling_algorithm<boost::fibers::algo::round_robin>();
     while (true) {
         daemon_context.m_msgq_manager.rpc->run_event_loop_once();
-        daemon_context.get_erpc().run_event_loop_once();
-        daemon_context.get_cort_sched().runOnce();
+        daemon_context.GetErpc().run_event_loop_once();
+        boost::this_fiber::yield();
     }
 
     log_worker.join();

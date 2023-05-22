@@ -1,22 +1,25 @@
 #include "proto/rpc_daemon.hpp"
 
 #include <atomic>
+#include <boost/fiber/operations.hpp>
 #include <chrono>
 #include <cstdint>
 #include <future>
+#include <mutex>
 #include <queue>
 #include <random>
+#include <shared_mutex>
 
 #include "common.hpp"
 #include "config.hpp"
-#include "cort_sched.hpp"
 #include "eRPC/erpc.h"
 #include "lock.hpp"
 #include "log.hpp"
-#include "proto/rpc.hpp"
+#include "promise.hpp"
 #include "proto/rpc_adaptor.hpp"
 #include "proto/rpc_client.hpp"
 #include "proto/rpc_master.hpp"
+#include "proto/rpc_register.hpp"
 #include "rdma_rc.hpp"
 #include "stats.hpp"
 #include "udp_client.hpp"
@@ -62,40 +65,23 @@ void allocPageMemoryTmp(DaemonContext& daemon_context, page_id_t start_page_id, 
 
 /*************************************************************/
 
-JoinRackReply joinRack(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
-                       JoinRackRequest& req) {
+void joinRack(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
+              JoinRackRequest& req, ResponseHandle<JoinRackReply>& resp_handle) {
     DLOG_ASSERT(req.rack_id == daemon_context.m_options.rack_id,
                 "Can't join different rack %d ---> %d", req.rack_id,
                 daemon_context.m_options.rack_id);
 
     // 1. 通知master获取mac id
-    auto& rpc = daemon_context.get_erpc();
+    auto fu = daemon_context.m_conn_manager.GetMasterConnection().erpc_conn->call<CortPromise>(
+        rpc_master::joinClient, {
+                                    .rack_id = daemon_context.m_options.rack_id,
+                                });
 
-    using JoinClientRPC = RPC_TYPE_STRUCT(rpc_master::joinClient);
-    auto req_raw = rpc.alloc_msg_buffer_or_die(sizeof(JoinClientRPC::RequestType));
-    auto resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(JoinClientRPC::ResponseType));
+    auto& resp = fu.get();
 
-    auto join_req = reinterpret_cast<JoinClientRPC::RequestType*>(req_raw.get_buf());
-    join_req->rack_id = daemon_context.m_options.rack_id;
+    client_connection.client_id = resp.mac_id;
 
-    std::promise<void> pro;
-    std::future<void> fu = pro.get_future();
-    rpc.enqueue_request(daemon_context.m_master_connection.peer_session, JoinClientRPC::rpc_type,
-                        req_raw, resp_raw, erpc_general_promise_flag_cb, static_cast<void*>(&pro));
-
-    this_cort::reset_resume_cond(
-        [&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
-    this_cort::yield();
-
-    auto resp = reinterpret_cast<JoinClientRPC::ResponseType*>(resp_raw.get_buf());
-
-    client_connection.client_id = resp->mac_id;
-
-    daemon_context.m_client_connect_table.push_back(&client_connection);
-    daemon_context.m_connect_table.insert(client_connection.client_id, &client_connection);
-
-    rpc.free_msg_buffer(req_raw);
-    rpc.free_msg_buffer(resp_raw);
+    daemon_context.m_conn_manager.AddConnection(client_connection.client_id, &client_connection);
 
     // 2. 分配msg queue
     msgq::MsgQueue* q = daemon_context.m_msgq_manager.allocQueue();
@@ -114,188 +100,134 @@ JoinRackReply joinRack(DaemonContext& daemon_context, DaemonToClientConnection& 
     DLOG("Connect with client [rack:%d --- id:%d]", daemon_context.m_options.rack_id,
          client_connection.client_id);
 
-    JoinRackReply reply;
+    resp_handle.Init();
+    auto& reply = resp_handle.Get();
     reply.client_mac_id = client_connection.client_id;
     reply.daemon_mac_id = daemon_context.m_daemon_id;
-    return reply;
 }
 
-CrossRackConnectReply crossRackConnect(DaemonContext& daemon_context,
-                                       DaemonToDaemonConnection& daemon_connection,
-                                       CrossRackConnectRequest& req) {
+void crossRackConnect(DaemonContext& daemon_context, DaemonToDaemonConnection& daemon_connection,
+                      CrossRackConnectRequest& req,
+                      ResponseHandle<CrossRackConnectReply>& resp_handle) {
     DLOG_ASSERT(req.conn_mac_id == daemon_context.m_daemon_id, "Can't connect this daemon");
 
-    daemon_context.m_connect_table.insert(req.mac_id, &daemon_connection);
-    daemon_context.m_other_daemon_connect_table.push_back(&daemon_connection);
+    daemon_context.m_conn_manager.AddConnection(req.mac_id, &daemon_connection);
 
     daemon_connection.daemon_id = req.mac_id;
     daemon_connection.rack_id = req.rack_id;
     daemon_connection.ip = req.ip.get_string();
     daemon_connection.port = req.port;
-    daemon_connection.peer_session = daemon_context.get_erpc().create_session(
-        daemon_connection.ip + ":" + std::to_string(daemon_connection.port), 0);
+    daemon_connection.erpc_conn.reset(
+        new ErpcClient(daemon_context.GetErpc(), daemon_connection.ip, daemon_connection.port));
 
     DLOG("Connect with daemon [rack:%d --- id:%d], port = %d", daemon_connection.rack_id,
          daemon_connection.daemon_id, daemon_connection.port);
 
     auto local_addr = daemon_context.m_listen_conn.get_local_addr();
 
-    CrossRackConnectReply reply;
+    resp_handle.Init();
+    auto& reply = resp_handle.Get();
     reply.daemon_mac_id = daemon_context.m_daemon_id;
     reply.rdma_ipv4 = local_addr.first;
     reply.rdma_port = local_addr.second;
-    return reply;
 }
 
-GetPageCXLRefOrProxyReply getPageCXLRefOrProxy(DaemonContext& daemon_context,
-                                               DaemonToClientConnection& client_connection,
-                                               GetPageCXLRefOrProxyRequest& req) {
+void getPageCXLRefOrProxy(DaemonContext& daemon_context,
+                          DaemonToClientConnection& client_connection,
+                          GetPageCXLRefOrProxyRequest& req,
+                          ResponseHandle<GetPageCXLRefOrProxyReply>& resp_handle) {
     PageMetadata* page_metadata;
     page_id_t page_id = GetPageID(req.gaddr);
     offset_t page_offset = GetPageOffset(req.gaddr);
-    GetPageCXLRefOrProxyReply* reply_ptr;
 retry:
-    SharedCortMutex* ref_lock;
-
-    auto ref_lock_pair = daemon_context.m_page_ref_lock.find_or_emplace(
-        page_id, []() { return new SharedCortMutex(); });
-    ref_lock = ref_lock_pair.first->second;
+    CortSharedMutex* ref_shmut =
+        daemon_context.m_page_ref_lock
+            .find_or_emplace(page_id, []() { return new CortSharedMutex(); })
+            .first->second;
 
     // 给page ref加读锁
-    ref_lock->lock_shared();
+    std::shared_lock<CortSharedMutex> page_ref_lock(*ref_shmut);
 
-    auto page_it = daemon_context.m_page_table.find(page_id);
+    auto page_it = daemon_context.m_page_table.table.find(page_id);
 
-    if (page_it != daemon_context.m_page_table.end()) {
+    if (page_it != daemon_context.m_page_table.table.end()) {
         daemon_context.m_stats.page_hit++;
 
         page_metadata = page_it->second;
         // DLOG("insert ref_client for page %lu", page_id);
         page_metadata->ref_client.insert(&client_connection);
 
-        reply_ptr = req.alloc_flex_resp(0);
+        resp_handle.Init();
+        auto& reply = resp_handle.Get();
+        reply.refs = true;
+        reply.offset = page_metadata->cxl_memory_offset;
 
-        reply_ptr->refs = true;
-        reply_ptr->offset = page_metadata->cxl_memory_offset;
-
-        ref_lock->unlock_shared();
-        return {};
+        return;
     }
+
+    // 本地未命中
 
     daemon_context.m_stats.page_miss++;
 
     DaemonToDaemonConnection* dest_daemon_conn;
-    auto& rpc = daemon_context.get_erpc();
 
     auto page_hot_pair = daemon_context.m_hot_stats.find_or_emplace(page_id, [&]() {
+        // 如果是第一次访问该page，走DirectIO流程（rem_page_md_cache不存在时，说明一定时第一次访问）
         RemotePageMetaCache* rem_page_md_cache =
             new RemotePageMetaCache(8, daemon_context.m_options.hot_decay_lambda);
 
-        // 如果是第一次访问该page，走DirectIO流程（rem_page_md_cache不存在时，说明一定时第一次访问）
         // 1. 获取mn上page的daemon，并锁定该page
-        using LatchRemotePageRPC = RPC_TYPE_STRUCT(rpc_master::latchRemotePage);
-        auto latch_req_raw = rpc.alloc_msg_buffer_or_die(sizeof(LatchRemotePageRPC::RequestType));
-        auto latch_resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(LatchRemotePageRPC::ResponseType));
+        {
+            auto latch_fu =
+                daemon_context.m_conn_manager.GetMasterConnection().erpc_conn->call<CortPromise>(
+                    rpc_master::latchRemotePage, {
+                                                     .mac_id = daemon_context.m_daemon_id,
+                                                     .isWriteLock = false,
+                                                     .page_id = page_id,
+                                                     .page_id_swap = 0,
+                                                 });
 
-        auto latch_req =
-            reinterpret_cast<LatchRemotePageRPC::RequestType*>(latch_req_raw.get_buf());
-        latch_req->mac_id = daemon_context.m_daemon_id;
-        latch_req->page_id = page_id;
-        latch_req->page_id_swap = 0;
-        latch_req->isWriteLock = false;
+            auto& latch_resp = latch_fu.get();
 
-        SpinPromise<void> pro;
-        SpinFuture<void> fu = pro.get_future();
-        rpc.enqueue_request(daemon_context.m_master_connection.peer_session,
-                            LatchRemotePageRPC::rpc_type, latch_req_raw, latch_resp_raw,
-                            erpc_general_bool_flag_cb, static_cast<void*>(&pro));
-
-        // 1.1 一起等待latch完成
-        this_cort::reset_resume_cond(
-            [&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
-        this_cort::yield();
-
-        auto latch_resp =
-            reinterpret_cast<LatchRemotePageRPC::ResponseType*>(latch_resp_raw.get_buf());
-
-        // 2. 获取对端连接
-        auto dest_conn_it = daemon_context.m_connect_table.find(latch_resp->dest_daemon_id);
-        DLOG_ASSERT(dest_conn_it != daemon_context.m_connect_table.end(), "Can't find peer daemon connection");
-
-        rpc.free_msg_buffer(latch_req_raw);
-        rpc.free_msg_buffer(latch_resp_raw);
-
-        dest_daemon_conn = dynamic_cast<DaemonToDaemonConnection*>(dest_conn_it->second);
+            // 获取对端连接
+            dest_daemon_conn = dynamic_cast<DaemonToDaemonConnection*>(
+                daemon_context.m_conn_manager.GetConnection(latch_resp.dest_daemon_id));
+        }
 
         // 3. 获取远端内存rdma ref
         {
-            using GetPageRDMARefRPC = RPC_TYPE_STRUCT(rpc_daemon::getPageRDMARef);
+            auto rref_fu = dest_daemon_conn->erpc_conn->call<CortPromise>(
+                rpc_daemon::getPageRDMARef, {
+                                                .mac_id = daemon_context.m_daemon_id,
+                                                .page_id = page_id,
+                                            });
 
-            auto rref_req_raw = rpc.alloc_msg_buffer_or_die(sizeof(GetPageRDMARefRPC::RequestType));
-            auto rref_resp_raw =
-                rpc.alloc_msg_buffer_or_die(sizeof(GetPageRDMARefRPC::ResponseType));
-
-            auto rref_req =
-                reinterpret_cast<GetPageRDMARefRPC::RequestType*>(rref_req_raw.get_buf());
-            rref_req->mac_id = daemon_context.m_daemon_id;
-            rref_req->page_id = page_id;
-
-            std::promise<void> pro;
-            std::future<void> fu = pro.get_future();
-            rpc.enqueue_request(dest_daemon_conn->peer_session, GetPageRDMARefRPC::rpc_type,
-                                rref_req_raw, rref_resp_raw, erpc_general_promise_flag_cb,
-                                static_cast<void*>(&pro));
-
-            this_cort::reset_resume_cond(
-                [&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
-            this_cort::yield();
-
-            auto rref_resp =
-                reinterpret_cast<GetPageRDMARefRPC::ResponseType*>(rref_resp_raw.get_buf());
-            rem_page_md_cache->remote_page_addr = rref_resp->addr;
-            rem_page_md_cache->remote_page_rkey = rref_resp->rkey;
+            auto& rref_resp = rref_fu.get();
+            rem_page_md_cache->remote_page_addr = rref_resp.addr;
+            rem_page_md_cache->remote_page_rkey = rref_resp.rkey;
             rem_page_md_cache->remote_page_daemon_conn = dest_daemon_conn;
-
-            rpc.free_msg_buffer(rref_req_raw);
-            rpc.free_msg_buffer(rref_resp_raw);
         }
 
         // 4. unlatch
         {
-            using UnLatchRemotePageRPC = RPC_TYPE_STRUCT(rpc_master::unLatchRemotePage);
-            auto unlacth_req_raw =
-                rpc.alloc_msg_buffer_or_die(sizeof(UnLatchRemotePageRPC::RequestType));
-            auto unlatch_resp_raw =
-                rpc.alloc_msg_buffer_or_die(sizeof(UnLatchRemotePageRPC::ResponseType));
+            auto unlatch_fu =
+                daemon_context.m_conn_manager.GetMasterConnection().erpc_conn->call<CortPromise>(
+                    rpc_master::unLatchRemotePage, {
+                                                       .mac_id = daemon_context.m_daemon_id,
+                                                       .page_id = page_id,
+                                                   });
 
-            auto unlatch_req =
-                reinterpret_cast<UnLatchRemotePageRPC::RequestType*>(unlacth_req_raw.get_buf());
-            unlatch_req->mac_id = daemon_context.m_daemon_id;
-            unlatch_req->page_id = page_id;
-
-            std::promise<void> pro;
-            std::future<void> fu = pro.get_future();
-            rpc.enqueue_request(daemon_context.m_master_connection.peer_session,
-                                UnLatchRemotePageRPC::rpc_type, unlacth_req_raw, unlatch_resp_raw,
-                                erpc_general_promise_flag_cb, static_cast<void*>(&pro));
-
-            this_cort::reset_resume_cond(
-                [&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
-            this_cort::yield();
-
-            rpc.free_msg_buffer(unlacth_req_raw);
-            rpc.free_msg_buffer(unlatch_resp_raw);
+            auto& resp = unlatch_fu.get();
         }
 
         return rem_page_md_cache;
     });
 
     auto page_hot_iter = page_hot_pair.first;
-
     RemotePageMetaCache* rem_page_md_cache = page_hot_iter->second;
 
-    // 只有刚好等于水位线时，才进行迁移
     size_t current_hot = rem_page_md_cache->stats.add(getTimestamp());
+    // 只有刚好等于水位线时，才进行迁移
     if (current_hot != daemon_context.m_options.hot_swap_watermark) {
         daemon_context.m_stats.page_dio++;
 
@@ -309,61 +241,66 @@ retry:
         uintptr_t my_data_buf;
         uint32_t my_rkey;
         uint32_t my_size;
-        msgq::MsgBuffer wd_resp_raw;
+        // msgq::MsgBuffer wd_resp_raw;
 
         switch (req.type) {
             case GetPageCXLRefOrProxyRequest::WRITE: {
                 // 5.1 如果是写操作,等待获取CN上的数据
-                using GetCurrentWriteDataRPC = RPC_TYPE_STRUCT(rpc_client::getCurrentWriteData);
-                auto wd_req_raw = client_connection.msgq_rpc->alloc_msg_buffer(
-                    sizeof(GetCurrentWriteDataRPC::RequestType));
-                auto wd_req =
-                    reinterpret_cast<GetCurrentWriteDataRPC::RequestType*>(wd_req_raw.get_buf());
-                wd_req->mac_id = daemon_context.m_daemon_id;
-                wd_req->dio_write_buf = req.cn_write_buf;
-                wd_req->dio_write_size = req.cn_write_size;
+                // using GetCurrentWriteDataRPC = RPC_TYPE_STRUCT(rpc_client::getCurrentWriteData);
+                // auto wd_req_raw = client_connection.msgq_rpc->alloc_msg_buffer(
+                //     sizeof(GetCurrentWriteDataRPC::RequestType));
+                // auto wd_req =
+                //     reinterpret_cast<GetCurrentWriteDataRPC::RequestType*>(wd_req_raw.get_buf());
+                // wd_req->mac_id = daemon_context.m_daemon_id;
+                // wd_req->dio_write_buf = req.cn_write_buf;
+                // wd_req->dio_write_size = req.cn_write_size;
 
-                SpinPromise<msgq::MsgBuffer> wd_pro;
-                SpinFuture<msgq::MsgBuffer> wd_fu = wd_pro.get_future();
-                client_connection.msgq_rpc->enqueue_request(GetCurrentWriteDataRPC::rpc_type,
-                                                            wd_req_raw, msgq_general_bool_flag_cb,
-                                                            static_cast<void*>(&wd_pro));
+                // SpinPromise<msgq::MsgBuffer> wd_pro;
+                // SpinFuture<msgq::MsgBuffer> wd_fu = wd_pro.get_future();
+                // client_connection.msgq_rpc->enqueue_request(GetCurrentWriteDataRPC::rpc_type,
+                //                                             wd_req_raw,
+                //                                             msgq_general_bool_flag_cb,
+                //                                             static_cast<void*>(&wd_pro));
 
-                this_cort::reset_resume_cond(
-                    [&wd_fu]() { return wd_fu.wait_for(0s) != std::future_status::timeout; });
-                this_cort::yield();
+                // this_cort::ResetResumeCond(
+                //     [&wd_fu]() { return wd_fu.wait_for(0s) != std::future_status::timeout; });
+                // this_cort::yield();
 
-                msgq::MsgBuffer wd_resp_raw = wd_fu.get();
-                auto wd_resp =
-                    reinterpret_cast<GetCurrentWriteDataRPC::ResponseType*>(wd_resp_raw.get_buf());
+                // msgq::MsgBuffer wd_resp_raw = wd_fu.get();
+                // auto wd_resp =
+                //     reinterpret_cast<GetCurrentWriteDataRPC::ResponseType*>(wd_resp_raw.get_buf());
 
-                ibv_mr* mr = daemon_context.get_mr(wd_resp->data);
+                // ibv_mr* mr = daemon_context.GetMR(wd_resp->data);
 
-                my_data_buf = reinterpret_cast<uintptr_t>(wd_resp->data);
-                my_rkey = mr->rkey;
-                my_size = req.cn_write_size;
+                // my_data_buf = reinterpret_cast<uintptr_t>(wd_resp->data);
+                // my_rkey = mr->rkey;
+                // my_size = req.cn_write_size;
 
-                // 必须在msgq enqueue之后alloc resp，防止发送阻塞
-                reply_ptr = req.alloc_flex_resp(0);
+                // // 必须在msgq enqueue之后alloc resp，防止发送阻塞
+                // reply_ptr = req.alloc_flex_resp(0);
+
+                DLOG_FATAL("Not Support");
                 break;
             }
             case GetPageCXLRefOrProxyRequest::READ: {
                 // 5.2 如果是读操作，则动态申请读取resp buf
-                reply_ptr = req.alloc_flex_resp(req.cn_read_size);
+                resp_handle.Init(req.cn_read_size);
+                auto& reply = resp_handle.Get();
 
-                ibv_mr* mr = daemon_context.get_mr(reply_ptr->read_data);
-                my_data_buf = reinterpret_cast<uintptr_t>(reply_ptr->read_data);
+                ibv_mr* mr = daemon_context.GetMR(reply.read_data);
+                my_data_buf = reinterpret_cast<uintptr_t>(reply.read_data);
                 my_rkey = mr->rkey;
                 my_size = req.cn_read_size;
                 break;
             }
             case GetPageCXLRefOrProxyRequest::WRITE_RAW: {
-                ibv_mr* mr = daemon_context.get_mr(req.cn_write_raw_buf);
+                // 5.3 如果是写操作,直接获取req上的写数据
+                resp_handle.Init();
 
+                ibv_mr* mr = daemon_context.GetMR(req.cn_write_raw_buf);
                 my_data_buf = reinterpret_cast<uintptr_t>(req.cn_write_raw_buf);
                 my_rkey = mr->rkey;
                 my_size = req.cn_write_size;
-                reply_ptr = req.alloc_flex_resp(0);
                 break;
             }
         }
@@ -382,11 +319,11 @@ retry:
                     //      rem_page_md_cache->remote_page_rkey, my_data_buf, my_rkey);
                     break;
                 case GetPageCXLRefOrProxyRequest::WRITE:
-                    dest_daemon_conn->rdma_conn->prep_write(
-                        ba, my_data_buf, my_rkey, my_size,
-                        (rem_page_md_cache->remote_page_addr + page_offset),
-                        rem_page_md_cache->remote_page_rkey, false);
-                    client_connection.msgq_rpc->free_msg_buffer(wd_resp_raw);
+                    // dest_daemon_conn->rdma_conn->prep_write(
+                    //     ba, my_data_buf, my_rkey, my_size,
+                    //     (rem_page_md_cache->remote_page_addr + page_offset),
+                    //     rem_page_md_cache->remote_page_rkey, false);
+                    // client_connection.msgq_rpc->free_msg_buffer(wd_resp_raw);
                     break;
                 case GetPageCXLRefOrProxyRequest::WRITE_RAW:
                     dest_daemon_conn->rdma_conn->prep_write(
@@ -401,34 +338,29 @@ retry:
             }
             auto fu = dest_daemon_conn->rdma_conn->submit(ba);
 
-            this_cort::reset_resume_cond([&fu]() { return fu.try_get() == 0; });
-            this_cort::yield();
+            while (fu.try_get() != 0) {
+                boost::this_fiber::yield();
+            }
         }
 
-        // 给page ref取消读锁
-        ref_lock->unlock_shared();
-
-        reply_ptr->refs = false;
-        return {};
+        auto &reply = resp_handle.Get();
+        reply.refs = false;
+        return;
     }
 
     // page swap
     {
         // 给page ref取消读锁
-        ref_lock->unlock_shared();
+        page_ref_lock.unlock();
 
-        ref_lock->lock();
+        std::unique_lock<CortSharedMutex> page_ref_lock(*ref_shmut);
+
         // 双if判断
         if (daemon_context.m_hot_stats.find(page_id) != page_hot_iter) {
-            ref_lock->unlock();
             goto retry;
         }
 
         daemon_context.m_stats.page_swap++;
-
-        // 清空其访问的记录，避免多个CN的读写引起同时对一个页的迁移
-        // freq改为原子变量
-        // rem_page_md_cache->stats.clear();
 
         // 1 为page swap的区域准备内存，并确定是否需要换出页
         dest_daemon_conn = rem_page_md_cache->remote_page_daemon_conn;
@@ -437,8 +369,8 @@ retry:
         page_id_t swap_page_id = invalid_page_id;
         uintptr_t swapin_addr, swapout_addr = 0;
         uint32_t swapin_key, swapout_key = 0;
-        SharedCortMutex* ref_lock_swapout;
-        ibv_mr* mr;
+        CortSharedMutex* ref_swapout_shmut;
+        ibv_mr* swapout_mr;
         PageMetadata* swap_page_metadata;
 
         // 交换的情况，需要将自己的一个page交换到对方, 这个读写过程由对方完成
@@ -487,7 +419,7 @@ retry:
                     client_conn->msgq_rpc->enqueue_request(GetPagePastAccessFreqRPC::rpc_type,
                                                            wd_req_raw, msgq_general_bool_flag_cb,
                                                            static_cast<void*>(&pro));
-                    this_cort::reset_resume_cond(
+                    this_cort::ResetResumeCond(
                         [&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
                     this_cort::yield();
 
@@ -537,22 +469,22 @@ retry:
             swapout_addr =
                 reinterpret_cast<uintptr_t>(daemon_context.m_cxl_format.page_data_start_addr) +
                 swap_page_metadata->cxl_memory_offset;
-            mr = daemon_context.get_mr(reinterpret_cast<void*>(swapout_addr));
-            swapout_key = mr->rkey;
+            swapout_mr = daemon_context.GetMR(reinterpret_cast<void*>(swapout_addr));
+            swapout_key = swapout_mr->rkey;
 
             // 给即将换出页的page_meta上写锁
             auto p_lock_swapout = daemon_context.m_page_ref_lock.find_or_emplace(
                 swap_page_id, []() { return new SharedCortMutex(); });
-            ref_lock_swapout = p_lock_swapout.first->second;
+            ref_swapout_shmut = p_lock_swapout.first->second;
 
-            ref_lock_swapout->lock();
+            ref_swapout_shmut->lock();
         }
 
         swapin_addr =
             reinterpret_cast<uintptr_t>(daemon_context.m_cxl_format.page_data_start_addr) +
             page_metadata->cxl_memory_offset;
-        mr = daemon_context.get_mr(reinterpret_cast<void*>(swapin_addr));
-        swapin_key = mr->rkey;
+        swapout_mr = daemon_context.GetMR(reinterpret_cast<void*>(swapin_addr));
+        swapin_key = swapout_mr->rkey;
 
         // DLOG(
         //     "DN %u: Expect inPage %lu (from DN: %u) outPage %lu. swapin_addr = %ld, swapin_key ="
@@ -586,7 +518,7 @@ retry:
             delPageRefAndCacheBroadcast(daemon_context, swap_page_id, swap_page_metadata);
         }
         // 2.1.2 等待latch完成
-        this_cort::reset_resume_cond(
+        this_cort::ResetResumeCond(
             [&latch_fu]() { return latch_fu.wait_for(0s) != std::future_status::timeout; });
         this_cort::yield();
 
@@ -622,7 +554,7 @@ retry:
                             migrate_req_raw, migrate_resp_raw, erpc_general_promise_flag_cb,
                             static_cast<void*>(&migrate_pro));
 
-        this_cort::reset_resume_cond(
+        this_cort::ResetResumeCond(
             [&migrate_fu]() { return migrate_fu.wait_for(0s) != std::future_status::timeout; });
         this_cort::yield();
 
@@ -645,17 +577,17 @@ retry:
             // 清除迁移走的page位于当前DN上的元数据
             daemon_context.m_page_table.erase(swap_page_id);
             // 换出页已迁移完毕，解锁
-            ref_lock_swapout->unlock();
+            ref_swapout_shmut->unlock();
         } else {
             // TODO: 拒绝swap
         }
 
         // 换近页已迁移完毕，解锁
-        ref_lock->unlock();
+        ref_shmut->unlock();
 
         /* 4. 向mn发送unLatchPageAndBalance，更改page dir，返回RPC*/
         // DLOG("DN %u: unLatchPageAndBalance!", daemon_context.m_daemon_id);
-        using unLatchPageAndBalanceRPC = RPC_TYPE_STRUCT(rpc_master::unLatchPageAndBalance);
+        using unLatchPageAndBalanceRPC = RPC_TYPE_STRUCT(rpc_master::unLatchPageAndSwap);
         auto unlatchB_req_raw =
             rpc.alloc_msg_buffer_or_die(sizeof(unLatchPageAndBalanceRPC::RequestType));
         auto unlatchB_resp_raw =
@@ -678,7 +610,7 @@ retry:
                             unLatchPageAndBalanceRPC::rpc_type, unlatchB_req_raw, unlatchB_resp_raw,
                             erpc_general_bool_flag_cb, static_cast<void*>(&unlatchB_pro));
 
-        this_cort::reset_resume_cond(
+        this_cort::ResetResumeCond(
             [&unlatchB_fu]() { return unlatchB_fu.wait_for(0s) != std::future_status::timeout; });
         this_cort::yield();
 
@@ -739,7 +671,7 @@ AllocPageReply allocPage(DaemonContext& daemon_context, DaemonToClientConnection
     DLOG("alloc %lu new pages", req.count);
 
     // 向Master调用allocPage
-    auto& rpc = daemon_context.get_erpc();
+    auto& rpc = daemon_context.GetErpc();
 
     using PageAllocRPC = RPC_TYPE_STRUCT(rpc_master::allocPage);
 
@@ -756,8 +688,7 @@ AllocPageReply allocPage(DaemonContext& daemon_context, DaemonToClientConnection
                         req_raw, resp_raw, erpc_general_promise_flag_cb, static_cast<void*>(&pro));
 
     // 等待期间可能出现由于本地page不足而发生page swap
-    this_cort::reset_resume_cond(
-        [&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
+    this_cort::ResetResumeCond([&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
     this_cort::yield();
 
     auto resp = reinterpret_cast<PageAllocRPC::ResponseType*>(resp_raw.get_buf());
@@ -813,7 +744,7 @@ GetPageRDMARefReply getPageRDMARef(DaemonContext& daemon_context,
     uintptr_t local_addr =
         reinterpret_cast<uintptr_t>(daemon_context.m_cxl_format.page_data_start_addr) +
         page_meta->cxl_memory_offset;
-    ibv_mr* mr = daemon_context.get_mr(reinterpret_cast<void*>(local_addr));
+    ibv_mr* mr = daemon_context.GetMR(reinterpret_cast<void*>(local_addr));
 
     DLOG_ASSERT(mr->addr != nullptr, "The page %lu isn't registered to rdma memory", req.page_id);
 
@@ -880,7 +811,7 @@ DelPageRDMARefReply delPageRDMARef(DaemonContext& daemon_context,
  */
 void delPageRefAndCacheBroadcast(DaemonContext& daemon_context, page_id_t page_id,
                                  PageMetadata* page_meta, mac_id_t unless_daemon) {
-    auto& rpc = daemon_context.get_erpc();
+    auto& rpc = daemon_context.GetErpc();
     // DLOG("DN %u: delPageRefBroadcast page %lu", daemon_context.m_daemon_id, page_id);
     // del page ref
     using DelPageRDMARefRPC = RPC_TYPE_STRUCT(rpc_daemon::delPageRDMARef);
@@ -938,7 +869,7 @@ void delPageRefAndCacheBroadcast(DaemonContext& daemon_context, page_id_t page_i
 
     for (size_t i = 0; i < del_ref_pro_vec.size(); i++) {
         auto fu = del_ref_pro_vec[i].get_future();
-        this_cort::reset_resume_cond(
+        this_cort::ResetResumeCond(
             [&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
         this_cort::yield();
 
@@ -950,7 +881,7 @@ void delPageRefAndCacheBroadcast(DaemonContext& daemon_context, page_id_t page_i
     for (auto client_conn : page_meta->ref_client) {
         // DLOG("Get cache del client_conn get_future for i = %ld", i);
         auto fu = remove_cache_pro_vec[i].get_future();
-        this_cort::reset_resume_cond(
+        this_cort::ResetResumeCond(
             [&fu]() { return fu.wait_for(0s) != std::future_status::timeout; });
         this_cort::yield();
 
@@ -997,7 +928,7 @@ TryMigratePageReply tryMigratePage(DaemonContext& daemon_context,
     uintptr_t local_addr =
         reinterpret_cast<uintptr_t>(daemon_context.m_cxl_format.page_data_start_addr) +
         page_meta->cxl_memory_offset;
-    ibv_mr* mr = daemon_context.get_mr(reinterpret_cast<void*>(local_addr));
+    ibv_mr* mr = daemon_context.GetMR(reinterpret_cast<void*>(local_addr));
     uint32_t lkey = mr->lkey;
 
     DaemonConnection* daemon_conn_temp;
@@ -1026,7 +957,7 @@ TryMigratePageReply tryMigratePage(DaemonContext& daemon_context,
         uintptr_t swapin_addr =
             reinterpret_cast<uintptr_t>(daemon_context.m_cxl_format.page_data_start_addr) +
             local_page_meta->cxl_memory_offset;
-        mr = daemon_context.get_mr(reinterpret_cast<void*>(swapin_addr));
+        mr = daemon_context.GetMR(reinterpret_cast<void*>(swapin_addr));
         lkey = mr->lkey;
         daemon_conn->rdma_conn->prep_read(ba, swapin_addr, lkey, page_size, req.swapout_page_addr,
                                           req.swapout_page_rkey, false);
@@ -1038,7 +969,7 @@ TryMigratePageReply tryMigratePage(DaemonContext& daemon_context,
     //     "req.swapin_page_rkey = %u",
     //     daemon_context.m_daemon_id, local_addr, lkey, req.swapin_page_addr,
     //     req.swapin_page_rkey);
-    this_cort::reset_resume_cond([&fu]() { return fu.try_get() == 0; });
+    this_cort::ResetResumeCond([&fu]() { return fu.try_get() == 0; });
     this_cort::yield();
 
     // DLOG("DN %u: reply", daemon_context.m_daemon_id);

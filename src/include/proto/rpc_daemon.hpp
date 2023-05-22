@@ -5,18 +5,18 @@
 #include "common.hpp"
 #include "impl.hpp"
 #include "log.hpp"
+#include "proto/rpc_adaptor.hpp"
 #include "rchms.hpp"
-#include "rpc_base.hpp"
 #include "utils.hpp"
 
 namespace rpc_daemon {
 
-struct JoinRackRequest : public RequestMsg {
+struct JoinRackRequest {
     IPv4String client_ipv4;
     uint16_t client_port;
     rack_id_t rack_id;
 };
-struct JoinRackReply : public ResponseMsg {
+struct JoinRackReply {
     mac_id_t client_mac_id;
     mac_id_t daemon_mac_id;
 };
@@ -28,27 +28,26 @@ struct JoinRackReply : public ResponseMsg {
  * @return true 加入成功
  * @return false 加入失败
  */
-JoinRackReply joinRack(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
-                       JoinRackRequest& req);
+void joinRack(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
+                       JoinRackRequest& req, ResponseHandle<JoinRackReply> &resp_handle);
 
-struct CrossRackConnectRequest : public RequestMsg {
+struct CrossRackConnectRequest {
+    mac_id_t mac_id;
     IPv4String ip;
     uint16_t port;
     rack_id_t rack_id;
     mac_id_t conn_mac_id;
 };
-struct CrossRackConnectReply : public ResponseMsg {
+struct CrossRackConnectReply {
     mac_id_t daemon_mac_id;
     IPv4String rdma_ipv4;
     uint16_t rdma_port;
 };
-CrossRackConnectReply crossRackConnect(DaemonContext& daemon_context,
+void crossRackConnect(DaemonContext& daemon_context,
                                        DaemonToDaemonConnection& daemon_connection,
-                                       CrossRackConnectRequest& req);
+                                       CrossRackConnectRequest& req, ResponseHandle<CrossRackConnectReply> &resp_handle);
 
-struct GetPageCXLRefOrProxyReply;
-struct GetPageCXLRefOrProxyRequest : public RequestMsg,
-                                     detail::RawResponseReturn<GetPageCXLRefOrProxyReply> {
+struct GetPageCXLRefOrProxyRequest {
     enum {
         READ,
         WRITE,
@@ -69,7 +68,7 @@ struct GetPageCXLRefOrProxyRequest : public RequestMsg,
         };
     };
 };
-struct GetPageCXLRefOrProxyReply : public ResponseMsg {
+struct GetPageCXLRefOrProxyReply {
     bool refs;
     union {
         struct {  // refs == true
@@ -89,15 +88,16 @@ struct GetPageCXLRefOrProxyReply : public ResponseMsg {
  * @param req
  * @return GetPageRefOrProxyReply
  */
-GetPageCXLRefOrProxyReply getPageCXLRefOrProxy(DaemonContext& daemon_context,
+void getPageCXLRefOrProxy(DaemonContext& daemon_context,
                                                DaemonToClientConnection& client_connection,
-                                               GetPageCXLRefOrProxyRequest& req);
+                                               GetPageCXLRefOrProxyRequest& req, ResponseHandle<GetPageCXLRefOrProxyReply> &resp_handle);
 
-struct AllocPageMemoryRequest : public RequestMsg {
+struct AllocPageMemoryRequest {
+    mac_id_t mac_id;
     page_id_t start_page_id;
     size_t count;
 };
-struct AllocPageMemoryReply : public ResponseMsg {
+struct AllocPageMemoryReply {
     bool ret;
 };
 /**
@@ -108,14 +108,14 @@ struct AllocPageMemoryReply : public ResponseMsg {
  * @param req
  * @return AllocPageMemoryReply
  */
-AllocPageMemoryReply allocPageMemory(DaemonContext& daemon_context,
+void allocPageMemory(DaemonContext& daemon_context,
                                      DaemonToMasterConnection& master_connection,
-                                     AllocPageMemoryRequest& req);
+                                     AllocPageMemoryRequest& req, ResponseHandle<AllocPageMemoryReply>);
 
-struct AllocRequest : public RequestMsg {
+struct AllocRequest {
     size_t size;
 };
-struct AllocReply : public ResponseMsg {
+struct AllocReply {
     rchms::GAddr gaddr;
 };
 /**
@@ -128,10 +128,10 @@ struct AllocReply : public ResponseMsg {
  */
 AllocReply alloc(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
                  AllocRequest& req);
-struct AllocPageRequest : public RequestMsg {
+struct AllocPageRequest {
     size_t count;
 };
-struct AllocPageReply : public ResponseMsg {
+struct AllocPageReply {
     page_id_t start_page_id;  // 分配的起始页id
     size_t start_count;       // 实际在请求方rack分配的个数
 };
@@ -147,11 +147,11 @@ struct AllocPageReply : public ResponseMsg {
 AllocPageReply allocPage(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
                          AllocPageRequest& req);
 
-struct FreePageRequest : public RequestMsg {
+struct FreePageRequest {
     page_id_t start_page_id;
     size_t count;
 };
-struct FreePageReply : public ResponseMsg {
+struct FreePageReply {
     bool ret;
 };
 /**
@@ -164,12 +164,11 @@ struct FreePageReply : public ResponseMsg {
 FreePageReply freePage(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
                        FreePageRequest& req);
 
-
-struct FreeRequest : public RequestMsg {
+struct FreeRequest {
     rchms::GAddr gaddr;
     size_t n;
 };
-struct FreeReply : public ResponseMsg {
+struct FreeReply {
     bool ret;
 };
 /**
@@ -183,10 +182,11 @@ struct FreeReply : public ResponseMsg {
 FreeReply free(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
                FreeRequest& req);
 
-struct GetPageRDMARefRequest : public RequestMsg {
+struct GetPageRDMARefRequest {
+    mac_id_t mac_id;
     page_id_t page_id;
 };
-struct GetPageRDMARefReply : public ResponseMsg {
+struct GetPageRDMARefReply {
     uintptr_t addr;
     uint32_t rkey;
 };
@@ -199,14 +199,14 @@ struct GetPageRDMARefReply : public ResponseMsg {
  * @param req
  * @return GetPageRDMARefReply
  */
-GetPageRDMARefReply getPageRDMARef(DaemonContext& daemon_context,
+void getPageRDMARef(DaemonContext& daemon_context,
                                    DaemonToDaemonConnection& daemon_connection,
-                                   GetPageRDMARefRequest& req);
+                                   GetPageRDMARefRequest& req, ResponseHandle<GetPageRDMARefReply> &resp_handle);
 
-struct DelPageRDMARefRequest : public RequestMsg {
+struct DelPageRDMARefRequest {
     page_id_t page_id;
 };
-struct DelPageRDMARefReply : public ResponseMsg {
+struct DelPageRDMARefReply {
     bool isDel;
 };
 /**
@@ -222,7 +222,7 @@ DelPageRDMARefReply delPageRDMARef(DaemonContext& daemon_context,
                                    DaemonToDaemonConnection& daemon_connection,
                                    DelPageRDMARefRequest& req);
 
-struct TryMigratePageRequest : public RequestMsg {
+struct TryMigratePageRequest {
     page_id_t page_id;
     page_id_t swap_page_id;
     uint64_t hot_score;
@@ -231,16 +231,16 @@ struct TryMigratePageRequest : public RequestMsg {
     uint32_t swapout_page_rkey;
     uint32_t swapin_page_rkey;
 };
-struct TryMigratePageReply : public ResponseMsg {
+struct TryMigratePageReply {
     bool swaped;
 };
 /**
- * @brief 
- * 
- * @param daemon_context 
- * @param daemon_connection 
- * @param req 
- * @return TryMigratePageReply 
+ * @brief
+ *
+ * @param daemon_context
+ * @param daemon_connection
+ * @param req
+ * @return TryMigratePageReply
  */
 TryMigratePageReply tryMigratePage(DaemonContext& daemon_context,
                                    DaemonToDaemonConnection& daemon_connection,
@@ -248,20 +248,20 @@ TryMigratePageReply tryMigratePage(DaemonContext& daemon_context,
 
 /************************* for test ***************************/
 
-struct __TestDataSend1Request : public RequestMsg {
+struct __TestDataSend1Request {
     size_t size;
     int data[64];
 };
-struct __TestDataSend1Reply : public ResponseMsg {
+struct __TestDataSend1Reply {
     size_t size;
     int data[64];
 };
 
-struct __TestDataSend2Request : public RequestMsg {
+struct __TestDataSend2Request {
     size_t size;
     int data[72];
 };
-struct __TestDataSend2Reply : public ResponseMsg {
+struct __TestDataSend2Reply {
     size_t size;
     int data[72];
 };
@@ -290,14 +290,14 @@ __TestDataSend2Reply __testdataSend2(DaemonContext& daemon_context,
                                      DaemonToClientConnection& client_connection,
                                      __TestDataSend2Request& req);
 
-struct __notifyPerfRequest : public RequestMsg {};
-struct __notifyPerfReply : public ResponseMsg {};
+struct __notifyPerfRequest {};
+struct __notifyPerfReply {};
 __notifyPerfReply __notifyPerf(DaemonContext& daemon_context,
                                DaemonToClientConnection& client_connection,
                                __notifyPerfRequest& req);
 
-struct __stopPerfRequest : public RequestMsg {};
-struct __stopPerfReply : public ResponseMsg {};
+struct __stopPerfRequest {};
+struct __stopPerfReply {};
 __stopPerfReply __stopPerf(DaemonContext& daemon_context,
                            DaemonToClientConnection& client_connection, __stopPerfRequest& req);
 

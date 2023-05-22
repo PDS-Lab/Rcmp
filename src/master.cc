@@ -1,13 +1,14 @@
+#include <boost/fiber/operations.hpp>
 #include <type_traits>
 
 #include "cmdline.h"
 #include "common.hpp"
-#include "cort_sched.hpp"
 #include "eRPC/erpc.h"
 #include "impl.hpp"
 #include "log.hpp"
-#include "proto/rpc.hpp"
 #include "proto/rpc_adaptor.hpp"
+#include "proto/rpc_master.hpp"
+#include "proto/rpc_register.hpp"
 #include "rdma_rc.hpp"
 
 MasterContext &MasterContext::getInstance() {
@@ -15,18 +16,16 @@ MasterContext &MasterContext::getInstance() {
     return master_ctx;
 }
 
-MasterContext::MasterContext() : m_cort_sched(8) {}
-
 void MasterContext::initCluster() {
     m_cluster_manager.mac_id_allocator.reset(new IDGenerator());
-    m_cluster_manager.mac_id_allocator->addCapacity(m_options.max_cluster_mac_num);
-    IDGenerator::id_t id = m_cluster_manager.mac_id_allocator->gen();
+    m_cluster_manager.mac_id_allocator->Expand(m_options.max_cluster_mac_num);
+    IDGenerator::id_t id = m_cluster_manager.mac_id_allocator->Gen();
     DLOG_ASSERT(id == master_id, "Can't alloc master mac id");
     m_master_id = master_id;
 
     m_page_id_allocator.reset(new IDGenerator());
-    m_page_id_allocator->addCapacity(1);
-    id = m_page_id_allocator->gen();
+    m_page_id_allocator->Expand(1);
+    id = m_page_id_allocator->Gen();
     // 保证page id不为0，这就保证了分配的GAddr是非null
     DLOG_ASSERT(id == 0, "Can't init page id");
 }
@@ -36,7 +35,7 @@ void MasterContext::initRDMARC() {
 
     m_listen_conn.register_connect_hook([&](rdma_rc::RDMAConnection *rdma_conn, void *param_) {
         auto param = reinterpret_cast<RDMARCConnectParam *>(param_);
-        auto conn_ = get_connection(param->mac_id);
+        auto conn_ = GetConnection(param->mac_id);
         switch (param->role) {
             case MN:
             case CN:
@@ -46,7 +45,7 @@ void MasterContext::initRDMARC() {
             case DAEMON:
             case CXL_DAEMON: {
                 MasterToDaemonConnection *conn = dynamic_cast<MasterToDaemonConnection *>(conn_);
-                conn->rdma_conn = rdma_conn;
+                conn->rdma_conn.reset(rdma_conn);
             } break;
         }
     });
@@ -55,7 +54,7 @@ void MasterContext::initRDMARC() {
 }
 
 void MasterContext::initRPCNexus() {
-    std::string master_uri = m_options.master_ip + ":" + std::to_string(m_options.master_port);
+    std::string master_uri = erpc::concat_server_uri(m_options.master_ip, m_options.master_port);
     m_erpc_ctx.nexus.reset(new erpc::NexusWrap(master_uri));
 
     m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_master::joinDaemon)::rpc_type,
@@ -68,8 +67,9 @@ void MasterContext::initRPCNexus() {
                                         bind_erpc_func<false>(rpc_master::latchRemotePage));
     m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_master::unLatchRemotePage)::rpc_type,
                                         bind_erpc_func<false>(rpc_master::unLatchRemotePage));
-    m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_master::unLatchPageAndBalance)::rpc_type,
-                                        bind_erpc_func<false>(rpc_master::unLatchPageAndBalance));
+    m_erpc_ctx.nexus->register_req_func(
+        RPC_TYPE_STRUCT(rpc_master::unLatchPageAndSwap)::rpc_type,
+        bind_erpc_func<false>(rpc_master::unLatchPageAndSwap));
 
     erpc::SMHandlerWrap smhw;
     smhw.set_empty();
@@ -79,18 +79,12 @@ void MasterContext::initRPCNexus() {
     DLOG_ASSERT(m_erpc_ctx.rpc_set.size() == 1);
 }
 
-void MasterContext::initCoroutinePool() {}
-
-MasterConnection *MasterContext::get_connection(mac_id_t mac_id) {
+MasterConnection *MasterContext::GetConnection(mac_id_t mac_id) {
     DLOG_ASSERT(mac_id != m_master_id, "Can't find self connection");
     auto it = m_cluster_manager.connect_table.find(mac_id);
     DLOG_ASSERT(it != m_cluster_manager.connect_table.end(), "Can't find mac %d", mac_id);
     return it->second;
 }
-
-CortScheduler &MasterContext::get_cort_sched() { return m_cort_sched; }
-
-erpc::IBRpcWrap &MasterContext::get_erpc() { return m_erpc_ctx.rpc_set[0]; }
 
 int main(int argc, char *argv[]) {
     cmdline::parser cmd;
@@ -116,8 +110,8 @@ int main(int argc, char *argv[]) {
     DLOG("START OK");
 
     while (true) {
-        master_context.get_erpc().run_event_loop_once();
-        master_context.get_cort_sched().runOnce();
+        master_context.GetErpc().run_event_loop_once();
+        boost::this_fiber::yield();
     }
 
     return 0;

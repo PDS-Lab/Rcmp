@@ -13,23 +13,23 @@ void event_loop() {
     if ((++loop_cnt) % 2 == 0) {
         // get event
         if (loop_cnt % 12 == 0) {
-            sched.addTask([]() {
+            sched.Spawn([]() {
                 DLOG("unlatch");
                 latch = false;
             });
         } else if (loop_cnt % 4 == 0) {
-            sched.addTask([]() {
+            sched.Spawn([]() {
                 if (!latch) {
                     latch = true;
                 } else {
-                    this_cort::reset_resume_cond([]() { return !latch; });
+                    this_cort::ResetResumeCond([]() { return !latch; });
                     this_cort::yield();
                     latch = true;
                 }
                 DLOG("latch");
             });
         } else if (loop_cnt % 2 == 0) {
-            sched.addTask([=]() { DLOG("%d", loop_cnt); });
+            sched.Spawn([=]() { DLOG("%d", loop_cnt); });
         }
     }
 }
@@ -37,6 +37,6 @@ void event_loop() {
 int main() {
     while (1) {
         event_loop();
-        sched.runOnce();
+        sched.RunOnce();
     }
 }

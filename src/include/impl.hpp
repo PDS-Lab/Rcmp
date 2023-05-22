@@ -4,6 +4,7 @@
 
 #include <list>
 #include <memory>
+#include <set>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -12,13 +13,13 @@
 #include "common.hpp"
 #include "concurrent_hashmap.hpp"
 #include "config.hpp"
-#include "cort_sched.hpp"
 #include "cxl.hpp"
 #include "eRPC/erpc.h"
 #include "lock.hpp"
 #include "log.hpp"
 #include "msg_queue.hpp"
 #include "options.hpp"
+#include "proto/rpc_adaptor.hpp"
 #include "rchms.hpp"
 #include "rdma_rc.hpp"
 #include "stats.hpp"
@@ -30,11 +31,11 @@
 struct PageRackMetadata {
     uint32_t rack_id;
     mac_id_t daemon_id;
-    SharedMutex latch;
+    CortSharedMutex latch;
 };
 
 struct MasterConnection {
-    int peer_session;
+    std::unique_ptr<ErpcClient> erpc_conn;
 
     virtual ~MasterConnection() = default;
 };
@@ -50,10 +51,13 @@ struct MasterToDaemonConnection : public MasterConnection {
     rack_id_t rack_id;
     mac_id_t daemon_id;
 
-    rdma_rc::RDMAConnection *rdma_conn;
+    std::unique_ptr<rdma_rc::RDMAConnection> rdma_conn;
 };
 
 struct RackMacTable {
+    size_t GetCurrentAllocatedPageNum() const { return current_allocated_page_num; }
+    size_t GetMaxFreePageNum() const { return max_free_page_num; }
+
     bool with_cxl;
     MasterToDaemonConnection *daemon_connect;
     size_t max_free_page_num;
@@ -62,9 +66,33 @@ struct RackMacTable {
 };
 
 struct ClusterManager {
-    ConcurrentHashMap<rack_id_t, RackMacTable *, SharedCortMutex> cluster_rack_table;
-    ConcurrentHashMap<mac_id_t, MasterConnection *, SharedCortMutex> connect_table;
+    ConcurrentHashMap<rack_id_t, RackMacTable *, CortSharedMutex> cluster_rack_table;
+    ConcurrentHashMap<mac_id_t, MasterConnection *, CortSharedMutex> connect_table;
     std::unique_ptr<IDGenerator> mac_id_allocator;
+};
+
+struct PageDirectory {
+    PageRackMetadata *FindPage(page_id_t page_id) {
+        return table[page_id];
+    }
+
+    void AddPage(RackMacTable *rack_table, page_id_t page_id) {
+        PageRackMetadata *page_meta = new PageRackMetadata();
+        page_meta->rack_id = rack_table->daemon_connect->rack_id;
+        page_meta->daemon_id = rack_table->daemon_connect->daemon_id;
+        table.insert(page_id, page_meta);
+        rack_table->current_allocated_page_num++;
+    }
+
+    void RemovePage(RackMacTable *rack_table, page_id_t page_id) {
+        auto it = table.find(page_id);
+        PageRackMetadata* page_meta = it->second;
+        table.erase(it);
+        delete page_meta;
+        rack_table->current_allocated_page_num--;
+    }
+
+    ConcurrentHashMap<page_id_t, PageRackMetadata *, CortSharedMutex> table;
 };
 
 struct MasterContext : public NOCOPYABLE {
@@ -74,7 +102,7 @@ struct MasterContext : public NOCOPYABLE {
 
     ClusterManager m_cluster_manager;
 
-    ConcurrentHashMap<page_id_t, PageRackMetadata *, SharedCortMutex> m_page_directory;
+    PageDirectory m_page_directory;
     std::unique_ptr<IDGenerator> m_page_id_allocator;
 
     struct {
@@ -83,7 +111,6 @@ struct MasterContext : public NOCOPYABLE {
     } m_erpc_ctx;
 
     rdma_rc::RDMAConnection m_listen_conn;
-    CortScheduler m_cort_sched;
 
     struct {
         uint64_t page_swap = 0;
@@ -98,9 +125,9 @@ struct MasterContext : public NOCOPYABLE {
     void initRPCNexus();
     void initCoroutinePool();
 
-    MasterConnection *get_connection(mac_id_t mac_id);
-    erpc::IBRpcWrap &get_erpc();
-    CortScheduler &get_cort_sched();
+    mac_id_t GetMacID() const { return m_master_id; }
+    MasterConnection *GetConnection(mac_id_t mac_id);
+    erpc::IBRpcWrap &GetErpc() { return m_erpc_ctx.rpc_set[0]; }
 };
 
 /************************  Daemon   **********************/
@@ -115,8 +142,8 @@ struct DaemonConnection {
 struct DaemonToMasterConnection : public DaemonConnection {
     mac_id_t master_id;
 
-    int peer_session;
-    rdma_rc::RDMAConnection *rdma_conn;
+    std::unique_ptr<ErpcClient> erpc_conn;
+    std::unique_ptr<rdma_rc::RDMAConnection> rdma_conn;
 };
 
 struct DaemonToClientConnection : public DaemonConnection {
@@ -129,15 +156,15 @@ struct DaemonToDaemonConnection : public DaemonConnection {
     rack_id_t rack_id;
     mac_id_t daemon_id;
 
-    int peer_session;
-    rdma_rc::RDMAConnection *rdma_conn;
+    std::unique_ptr<ErpcClient> erpc_conn;
+    std::unique_ptr<rdma_rc::RDMAConnection> rdma_conn;
 };
 
 struct PageMetadata {
     std::atomic<uint8_t> status{0};
     offset_t cxl_memory_offset;  // 相对于format.page_data_start_addr
-    std::unordered_set<DaemonToClientConnection *> ref_client;
-    std::unordered_set<DaemonToDaemonConnection *> ref_daemon;
+    std::set<DaemonToClientConnection *> ref_client;
+    std::set<DaemonToDaemonConnection *> ref_daemon;
 };
 
 struct RemotePageMetaCache {
@@ -154,12 +181,51 @@ struct MsgQueueManager {
 
     void *start_addr;
     uint32_t ring_cnt;
-    std::unique_ptr<SingleAllocator> msgq_allocator;
+    std::unique_ptr<SingleAllocator<RING_ELEM_SIZE>> msgq_allocator;
     std::unique_ptr<msgq::MsgQueueNexus> nexus;
     std::unique_ptr<msgq::MsgQueueRPC> rpc;
 
     msgq::MsgQueue *allocQueue();
     void freeQueue(msgq::MsgQueue *msgq);
+};
+
+struct PageTableManager {
+    size_t total_page_num;     // 所有page的个数
+    size_t max_swap_page_num;  // swap区的page个数
+    size_t max_data_page_num;  // 所有可用数据页个数
+
+    std::atomic<size_t> current_used_page_num;  // 当前使用的数据页个数
+
+    ConcurrentHashMap<page_id_t, PageMetadata *, CortSharedMutex> table;
+    std::unique_ptr<SingleAllocator<page_size>> page_allocator;
+};
+
+struct ConnectionManager {
+    DaemonToMasterConnection &GetMasterConnection() { return m_master_connection; }
+
+    DaemonConnection *GetConnection(mac_id_t mac_id) {
+        if (mac_id == master_id) {
+            return &GetMasterConnection();
+        }
+        auto it = m_connect_table.find(mac_id);
+        DLOG_ASSERT(it != m_connect_table.end(), "Can't find mac %d", mac_id);
+        return it->second;
+    }
+
+    void AddConnection(mac_id_t mac_id, DaemonToClientConnection *conn) {
+        m_connect_table.insert({mac_id, conn});
+        m_client_connect_table.insert(conn);
+    }
+
+    void AddConnection(mac_id_t mac_id, DaemonToDaemonConnection *conn) {
+        m_connect_table.insert({mac_id, conn});
+        m_other_daemon_connect_table.insert(conn);
+    }
+
+    DaemonToMasterConnection m_master_connection;
+    std::set<DaemonToClientConnection *> m_client_connect_table;
+    std::set<DaemonToDaemonConnection *> m_other_daemon_connect_table;
+    std::unordered_map<mac_id_t, DaemonConnection *> m_connect_table;
 };
 
 struct DaemonContext : public NOCOPYABLE {
@@ -170,29 +236,16 @@ struct DaemonContext : public NOCOPYABLE {
     int m_cxl_devdax_fd;
     void *m_cxl_memory_addr;
 
-    size_t m_total_page_num;     // 所有page的个数
-    size_t m_max_swap_page_num;  // swap区的page个数
-    size_t m_max_data_page_num;  // 所有可用数据页个数
-
-    std::atomic<size_t> m_current_used_page_num;  // 当前使用的数据页个数
-
     CXLMemFormat m_cxl_format;
     MsgQueueManager m_msgq_manager;
-    DaemonToMasterConnection m_master_connection;
-    std::vector<DaemonToClientConnection *> m_client_connect_table;
-    std::vector<DaemonToDaemonConnection *> m_other_daemon_connect_table;
-    std::unique_ptr<SingleAllocator> m_cxl_page_allocator;
-    ConcurrentHashMap<mac_id_t, DaemonConnection *, SharedCortMutex> m_connect_table;
-    ConcurrentHashMap<page_id_t, PageMetadata *, SharedCortMutex> m_page_table;
-    ConcurrentHashMap<page_id_t, PageMetadata *, SharedCortMutex> m_swap_page_table;
-    ConcurrentHashMap<page_id_t, RemotePageMetaCache *, SharedCortMutex> m_hot_stats;
-    ConcurrentHashMap<page_id_t, SharedCortMutex *, SharedCortMutex> m_page_ref_lock;
+    ConnectionManager m_conn_manager;
+    ConcurrentHashMap<page_id_t, RemotePageMetaCache *, CortSharedMutex> m_hot_stats;
+    ConcurrentHashMap<page_id_t, CortSharedMutex *, CortSharedMutex> m_page_ref_lock;
+    PageTableManager m_page_table;
 
     rdma_rc::RDMAConnection m_listen_conn;
     std::vector<ibv_mr *> m_rdma_page_mr_table;  // 为cxl注册的mr，初始化长度后不可更改
     std::unordered_map<void *, ibv_mr *> m_rdma_mr_table;
-
-    std::unique_ptr<CortScheduler> m_cort_sched;
 
     struct {
         volatile bool running;
@@ -209,17 +262,21 @@ struct DaemonContext : public NOCOPYABLE {
 
     static DaemonContext &getInstance();
 
-    void initCXLPool();
-    void initCoroutinePool();
-    void initRPCNexus();
-    void initRDMARC();
-    void connectWithMaster();
-    void registerCXLMR();
+    mac_id_t GetMacID() const { return m_daemon_id; }
 
-    DaemonConnection *get_connection(mac_id_t mac_id);
-    erpc::IBRpcWrap &get_erpc();
-    CortScheduler &get_cort_sched();
-    ibv_mr *get_mr(void *p);
+    erpc::IBRpcWrap &GetErpc() { return m_erpc_ctx.rpc_set[0]; }
+
+    DaemonConnection *GetConnection(mac_id_t mac_id) {
+        return m_conn_manager.GetConnection(mac_id);
+    }
+
+    ibv_mr *GetMR(void *p);
+
+    void InitCXLPool();
+    void InitRPCNexus();
+    void InitRDMARC();
+    void ConnectWithMaster();
+    void RegisterCXLMR();
 };
 
 /************************  Client   **********************/
@@ -267,8 +324,6 @@ struct ClientContext : public NOCOPYABLE {
     volatile bool m_msgq_stop;
     std::thread m_msgq_worker;
 
-    CortScheduler m_cort_sched;
-
     char *m_batch_buffer = new char[write_batch_buffer_size + write_batch_buffer_overflow_size];
     size_t m_batch_cur = 0;
     std::vector<std::tuple<rchms::GAddr, size_t, offset_t>> m_batch_list;
@@ -281,8 +336,8 @@ struct ClientContext : public NOCOPYABLE {
 
     ClientContext();
 
-    ClientConnection *get_connection(mac_id_t mac_id);
-    CortScheduler &get_cort_sched();
+    mac_id_t GetMacID() const;
+    ClientConnection *GetConnection(mac_id_t mac_id);
 };
 
 struct rchms::PoolContext::PoolContextImpl : public ClientContext {};

@@ -1,6 +1,8 @@
 #pragma once
 
+#include <mutex>
 #include <random>
+#include <shared_mutex>
 #include <unordered_map>
 
 #include "config.hpp"
@@ -39,6 +41,23 @@ class ConcurrentHashMap {
 
     const iterator end() { return {0, m_shards[0].m_map.end()}; }
 
+    bool empty() const {
+        for (size_t i = 0; i < BucketNum; ++i) {
+            if (!m_shards[i].m_map.empty()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    size_t size() const {
+        size_t count = 0;
+        for (size_t i = 0; i < BucketNum; ++i) {
+            count += m_shards[i].m_map.size();
+        }
+        return count;
+    }
+
     /**
      * @brief 与std::unordered_map::insert相同
      *
@@ -51,7 +70,7 @@ class ConcurrentHashMap {
         auto& shard = m_shards[index];
         auto& map = shard.m_map;
 
-        SharedLockGuard<__Mutex> guard(shard.m_lock, true);
+        std::unique_lock<__Mutex> guard(shard.m_lock);
         auto p = map.emplace(key, val);
         return {{index, p.first}, p.second};
     }
@@ -68,7 +87,7 @@ class ConcurrentHashMap {
         auto& shard = m_shards[index];
         auto& map = shard.m_map;
 
-        SharedLockGuard<__Mutex> guard(shard.m_lock, false);
+        std::shared_lock<__Mutex> guard(shard.m_lock);
         auto it = map.find(key);
         if (it != map.end()) {
             return {index, it};
@@ -88,9 +107,11 @@ class ConcurrentHashMap {
         auto& shard = m_shards[index];
         auto& map = shard.m_map;
 
-        SharedLockGuard<__Mutex> guard(shard.m_lock, false);
+        std::shared_lock<__Mutex> guard(shard.m_lock);
         return map.at(key);
     }
+
+    V& operator[](K key) { return at(key); }
 
     /**
      * @brief 查找一个元素。如果不存在，则调用cotr_fn()插入新元素
@@ -101,7 +122,7 @@ class ConcurrentHashMap {
      * @return std::pair<iterator, bool> 如果插入成功，返回true；查找成功返回false
      */
     template <typename ConFn>
-    std::pair<iterator, bool> find_or_emplace(K key, ConFn&& cotr_fn) {
+    std::pair<iterator, bool> find_or_emplace(K key, ConFn&& ctor_fn) {
         int index = hash(key);
         auto& shard = m_shards[index];
         auto& map = shard.m_map;
@@ -111,13 +132,13 @@ class ConcurrentHashMap {
             return {iter, false};
         }
 
-        SharedLockGuard<__Mutex> guard(shard.m_lock, true);
+        std::unique_lock<__Mutex> guard(shard.m_lock);
         auto it = map.find(key);
         if (it != map.end()) {
             return {{index, it}, false};
         }
 
-        auto p = map.emplace(key, cotr_fn());
+        auto p = map.emplace(key, std::move(ctor_fn()));
         return {{index, p.first}, p.second};
     }
 
@@ -132,7 +153,7 @@ class ConcurrentHashMap {
         auto& shard = m_shards[it.hidx];
         auto& map = shard.m_map;
 
-        SharedLockGuard<__Mutex> guard(shard.m_lock, true);
+        std::unique_lock<__Mutex> guard(shard.m_lock);
         map.erase(it.it);
     }
 
@@ -148,7 +169,7 @@ class ConcurrentHashMap {
             auto& shard = m_shards[i];
             auto& map = shard.m_map;
 
-            SharedLockGuard<__Mutex> guard(shard.m_lock, false);
+            std::shared_lock<__Mutex> guard(shard.m_lock);
             for (auto& p : map) {
                 if (!f(p)) {
                     return;
@@ -173,7 +194,7 @@ class ConcurrentHashMap {
             auto& shard = m_shards[i];
             auto& map = shard.m_map;
 
-            SharedLockGuard<__Mutex> guard(shard.m_lock, false);
+            std::shared_lock<__Mutex> guard(shard.m_lock);
             for (auto& p : map) {
                 if (!f(p)) {
                     return;
@@ -181,23 +202,6 @@ class ConcurrentHashMap {
             }
             i = (i + 1) % BucketNum;
         } while (i != i_);
-    }
-
-    bool empty() const {
-        for (size_t i = 0; i < BucketNum; ++i) {
-            if (!m_shards[i].m_map.empty()) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    size_t size() const {
-        size_t count = 0;
-        for (size_t i = 0; i < BucketNum; ++i) {
-            count += m_shards[i].m_map.size();
-        }
-        return count;
     }
 
    private:

@@ -2,20 +2,19 @@
 
 #include "common.hpp"
 #include "impl.hpp"
-#include "rpc_base.hpp"
+#include "proto/rpc_adaptor.hpp"
 #include "utils.hpp"
 
 namespace rpc_master {
 
-struct JoinDaemonReply;
-struct JoinDaemonRequest : public RequestMsg, detail::RawResponseReturn<JoinDaemonReply> {
+struct JoinDaemonRequest {
     IPv4String ip;
     uint16_t port;
     rack_id_t rack_id;
     bool with_cxl;
     size_t free_page_num;
 };
-struct JoinDaemonReply : public ResponseMsg {
+struct JoinDaemonReply {
     mac_id_t daemon_mac_id;
     mac_id_t master_mac_id;
     IPv4String rdma_ipv4;
@@ -29,7 +28,7 @@ struct JoinDaemonReply : public ResponseMsg {
         IPv4String daemon_rdma_ipv4;
         uint16_t daemon_rdma_port;
     };
-    
+
     size_t other_rack_count;
     RackInfo other_rack_infos[0];
 };
@@ -41,13 +40,13 @@ struct JoinDaemonReply : public ResponseMsg {
  * @param req
  * @return JoinDaemonReply
  */
-JoinDaemonReply joinDaemon(MasterContext& master_context,
-                           MasterToDaemonConnection& daemon_connection, JoinDaemonRequest& req);
+void joinDaemon(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
+                JoinDaemonRequest& req, ResponseHandle<JoinDaemonReply>& resp_handle);
 
-struct JoinClientRequest : public RequestMsg {
+struct JoinClientRequest {
     rack_id_t rack_id;
 };
-struct JoinClientReply : public ResponseMsg {
+struct JoinClientReply {
     mac_id_t mac_id;
 };
 /**
@@ -58,13 +57,13 @@ struct JoinClientReply : public ResponseMsg {
  * @param req
  * @return JoinClientReply
  */
-JoinClientReply joinClient(MasterContext& master_context,
-                           MasterToClientConnection& client_connection, JoinClientRequest& req);
+void joinClient(MasterContext& master_context, MasterToClientConnection& client_connection,
+                JoinClientRequest& req, ResponseHandle<JoinClientReply>& resp_handle);
 
-struct AllocPageRequest : public RequestMsg {
+struct AllocPageRequest {
     size_t count;
 };
-struct AllocPageReply : public ResponseMsg {
+struct AllocPageReply {
     page_id_t start_page_id;  // 分配的起始页id
     size_t start_count;       // 实际在请求方rack分配的个数
 };
@@ -78,14 +77,14 @@ struct AllocPageReply : public ResponseMsg {
  * @param req
  * @return AllocPageReply
  */
-AllocPageReply allocPage(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
-                         AllocPageRequest& req);
+void allocPage(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
+               AllocPageRequest& req, ResponseHandle<AllocPageReply>& resp_handle);
 
-struct FreePageRequest : public RequestMsg {
+struct FreePageRequest {
     page_id_t start_page_id;
     size_t count;
 };
-struct FreePageReply : public ResponseMsg {
+struct FreePageReply {
     bool ret;
 };
 /**
@@ -95,13 +94,13 @@ struct FreePageReply : public ResponseMsg {
  * @param daemon_connection
  * @param req
  */
-FreePageReply freePage(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
-                       FreePageRequest& req);
+void freePage(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
+              FreePageRequest& req, ResponseHandle<FreePageReply>& resp_handle);
 
-struct GetRackDaemonByPageIDRequest : public RequestMsg {
+struct GetRackDaemonByPageIDRequest {
     page_id_t page_id;
 };
-struct GetRackDaemonByPageIDReply : public ResponseMsg {
+struct GetRackDaemonByPageIDReply {
     IPv4String dest_daemon_ipv4;
     uint16_t dest_daemon_port;
     rack_id_t rack_id;
@@ -114,16 +113,18 @@ struct GetRackDaemonByPageIDReply : public ResponseMsg {
  * @param req
  * @return GetRackDaemonByPageIDReply
  */
-GetRackDaemonByPageIDReply getRackDaemonByPageID(MasterContext& master_context,
-                                                 MasterToDaemonConnection& daemon_connection,
-                                                 GetRackDaemonByPageIDRequest& req);
+void getRackDaemonByPageID(MasterContext& master_context,
+                           MasterToDaemonConnection& daemon_connection,
+                           GetRackDaemonByPageIDRequest& req,
+                           ResponseHandle<GetRackDaemonByPageIDReply>& resp_handle);
 
-struct LatchRemotePageRequest : public RequestMsg {
+struct LatchRemotePageRequest {
+    mac_id_t mac_id;
     bool isWriteLock;
     page_id_t page_id;
     page_id_t page_id_swap;
 };
-struct LatchRemotePageReply : public ResponseMsg {
+struct LatchRemotePageReply {
     rack_id_t dest_rack_id;
     mac_id_t dest_daemon_id;
 };
@@ -135,14 +136,15 @@ struct LatchRemotePageReply : public ResponseMsg {
  * @param req
  * @return LatchRemotePageReply 返回目标daemon的rdma ip与port，以供建立连接
  */
-LatchRemotePageReply latchRemotePage(MasterContext& master_context,
-                                     MasterToDaemonConnection& daemon_connection,
-                                     LatchRemotePageRequest& req);
+void latchRemotePage(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
+                     LatchRemotePageRequest& req,
+                     ResponseHandle<LatchRemotePageReply>& resp_handle);
 
-struct UnLatchRemotePageRequest : public RequestMsg {
+struct UnLatchRemotePageRequest {
+    mac_id_t mac_id;
     page_id_t page_id;
 };
-struct UnLatchRemotePageReply : public ResponseMsg {};
+struct UnLatchRemotePageReply {};
 /**
  * @brief 解锁远端page
  *
@@ -151,11 +153,11 @@ struct UnLatchRemotePageReply : public ResponseMsg {};
  * @param req
  * @return UnLatchRemotePageReply 返回目标daemon的rdma ip与port，以供建立连接
  */
-UnLatchRemotePageReply unLatchRemotePage(MasterContext& master_context,
-                                         MasterToDaemonConnection& daemon_connection,
-                                         UnLatchRemotePageRequest& req);
+void unLatchRemotePage(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
+                       UnLatchRemotePageRequest& req,
+                       ResponseHandle<UnLatchRemotePageReply>& resp_handle);
 
-struct UnLatchPageAndBalanceRequest : public RequestMsg {
+struct UnLatchPageAndSwapRequest {
     page_id_t page_id;
     mac_id_t new_daemon_id;
     rack_id_t new_rack_id;
@@ -163,17 +165,17 @@ struct UnLatchPageAndBalanceRequest : public RequestMsg {
     mac_id_t new_daemon_id_swap;
     rack_id_t new_rack_id_swap;
 };
-struct UnLatchPageAndBalanceReply : public ResponseMsg {};
+struct UnLatchPageAndSwapReply {};
 /**
  * @brief 解锁远端page，并将该page转移至该daemon手中
  *
  * @param master_context
  * @param daemon_connection
  * @param req
- * @return UnLatchPageAndBalanceReply 返回目标daemon的rdma ip与port，以供建立连接
+ * @return UnLatchPageAndSwapReply 返回目标daemon的rdma ip与port，以供建立连接
  */
-UnLatchPageAndBalanceReply unLatchPageAndBalance(MasterContext& master_context,
-                                                 MasterToDaemonConnection& daemon_connection,
-                                                 UnLatchPageAndBalanceRequest& req);
+void unLatchPageAndSwap(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
+                        UnLatchPageAndSwapRequest& req,
+                        ResponseHandle<UnLatchPageAndSwapReply>& resp_handle);
 
 }  // namespace rpc_master

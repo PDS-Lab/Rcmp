@@ -235,10 +235,10 @@ offset_t MsgQueue::alloc_msg_buffer(size_t size) {
     return reinterpret_cast<uintptr_t>(ptr) - reinterpret_cast<uintptr_t>(m_ra.base());
 }
 
-void MsgQueue::enqueue_msg(MsgBuffer& msg_buf) { msgq_q.forceEnqueue(msg_buf.m_msg); }
+void MsgQueue::enqueue_msg(MsgBuffer& msg_buf) { msgq_q.ForceEnqueue(msg_buf.m_msg); }
 
 uint32_t MsgQueue::dequeue_msg(MsgHeader* hv, size_t max_deq) {
-    return msgq_q.tryDequeue(hv, hv + max_deq);
+    return msgq_q.TryDequeue(hv, hv + max_deq);
 }
 
 void MsgQueue::free_msg_buffer(MsgBuffer& msg_buf) { m_ra.deallocate(msg_buf.get_buf()); }
