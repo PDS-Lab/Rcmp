@@ -19,7 +19,9 @@ void MsgQueueNexus::register_req_func(uint8_t rpc_type, msgq_handler_t handler) 
     __handlers[rpc_type] = handler;
 }
 
-MsgQueueRPC::MsgQueueRPC(MsgQueueNexus* nexus, void* ctx) : m_nexus(nexus), m_ctx(ctx) {}
+MsgQueueRPC::MsgQueueRPC(MsgQueueNexus* nexus, MsgQueue* send_queue, MsgQueue* recv_queue,
+                         void* ctx)
+    : m_nexus(nexus), m_ctx(ctx), m_recv_queue(recv_queue), m_send_queue(send_queue) {}
 
 #if MSGQ_SINGLE_FIFO_ON == 1
 

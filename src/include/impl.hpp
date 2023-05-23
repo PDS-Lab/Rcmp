@@ -16,6 +16,7 @@
 #include "cxl.hpp"
 #include "eRPC/erpc.h"
 #include "lock.hpp"
+#include "lockmap.hpp"
 #include "log.hpp"
 #include "msg_queue.hpp"
 #include "options.hpp"
@@ -72,9 +73,7 @@ struct ClusterManager {
 };
 
 struct PageDirectory {
-    PageRackMetadata *FindPage(page_id_t page_id) {
-        return table[page_id];
-    }
+    PageRackMetadata *FindPage(page_id_t page_id) { return table[page_id]; }
 
     void AddPage(RackMacTable *rack_table, page_id_t page_id) {
         PageRackMetadata *page_meta = new PageRackMetadata();
@@ -86,7 +85,7 @@ struct PageDirectory {
 
     void RemovePage(RackMacTable *rack_table, page_id_t page_id) {
         auto it = table.find(page_id);
-        PageRackMetadata* page_meta = it->second;
+        PageRackMetadata *page_meta = it->second;
         table.erase(it);
         delete page_meta;
         rack_table->current_allocated_page_num--;
@@ -147,7 +146,7 @@ struct DaemonToMasterConnection : public DaemonConnection {
 };
 
 struct DaemonToClientConnection : public DaemonConnection {
-    msgq::MsgQueueRPC *msgq_rpc;
+    std::unique_ptr<MsgQClient> msgq_rpc;
 
     mac_id_t client_id;
 };
@@ -161,7 +160,9 @@ struct DaemonToDaemonConnection : public DaemonConnection {
 };
 
 struct PageMetadata {
-    std::atomic<uint8_t> status{0};
+    bool TryPin() { return !status.test_and_set(); }
+
+    std::atomic_flag status{false};
     offset_t cxl_memory_offset;  // 相对于format.page_data_start_addr
     std::set<DaemonToClientConnection *> ref_client;
     std::set<DaemonToDaemonConnection *> ref_daemon;
@@ -190,6 +191,40 @@ struct MsgQueueManager {
 };
 
 struct PageTableManager {
+    PageMetadata *AllocPageMemory() {
+        DLOG_ASSERT(TestAllocPageMemory(), "Can't allocate more page memory");
+
+        offset_t cxl_memory_offset = page_allocator->allocate(1);
+        DLOG_ASSERT(cxl_memory_offset != -1, "Can't allocate cxl memory");
+
+        PageMetadata *page_metadata = new PageMetadata();
+        page_metadata->cxl_memory_offset = cxl_memory_offset;
+
+        // DLOG("new page %ld ---> %#lx", start_page_id + c, cxl_memory_offset);
+
+        return page_metadata;
+    }
+
+    void ApplyPageMemory(page_id_t page_id, PageMetadata *page_meta) {
+        current_used_page_num++;
+        table.insert(page_id, page_meta);
+    }
+
+    void CancelPageMemory(page_id_t page_id, PageMetadata *page_meta) {
+        page_allocator->deallocate(page_meta->cxl_memory_offset);
+        current_used_page_num--;
+        table.erase(page_id);
+        delete page_meta;
+    }
+
+    bool NearlyFull() const { return current_used_page_num == max_data_page_num; }
+
+    bool TestAllocPageMemory(size_t count = 1) const {
+        return current_used_page_num + count <= total_page_num;
+    }
+
+    size_t GetCurrentUsedPageNum() const { return current_used_page_num; }
+
     size_t total_page_num;     // 所有page的个数
     size_t max_swap_page_num;  // swap区的page个数
     size_t max_data_page_num;  // 所有可用数据页个数
@@ -240,7 +275,7 @@ struct DaemonContext : public NOCOPYABLE {
     MsgQueueManager m_msgq_manager;
     ConnectionManager m_conn_manager;
     ConcurrentHashMap<page_id_t, RemotePageMetaCache *, CortSharedMutex> m_hot_stats;
-    ConcurrentHashMap<page_id_t, CortSharedMutex *, CortSharedMutex> m_page_ref_lock;
+    LockResourceManager<page_id_t, CortSharedMutex> m_page_ref_lock;
     PageTableManager m_page_table;
 
     rdma_rc::RDMAConnection m_listen_conn;
@@ -272,6 +307,10 @@ struct DaemonContext : public NOCOPYABLE {
 
     ibv_mr *GetMR(void *p);
 
+    uintptr_t GetVirtualAddr(offset_t offset) const {
+        return reinterpret_cast<uintptr_t>(m_cxl_format.page_data_start_addr) + offset;
+    }
+
     void InitCXLPool();
     void InitRPCNexus();
     void InitRDMARC();
@@ -290,7 +329,7 @@ struct ClientToMasterConnection : public ClientConnection {
 };
 
 struct ClientToDaemonConnection : public ClientConnection {
-    msgq::MsgQueueRPC *msgq_rpc;
+    std::unique_ptr<MsgQClient> msgq_rpc;
 
     rack_id_t rack_id;
     mac_id_t daemon_id;

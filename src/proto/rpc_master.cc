@@ -1,6 +1,7 @@
 #include "proto/rpc_master.hpp"
 
 #include <chrono>
+#include <memory>
 
 #include "common.hpp"
 #include "eRPC/erpc.h"
@@ -30,8 +31,6 @@ void joinDaemon(MasterContext& master_context, MasterToDaemonConnection& daemon_
     reply.other_rack_count = old_rack_count;
     master_context.m_cluster_manager.cluster_rack_table.foreach_all(
         [&, i = 0](std::pair<const rack_id_t, RackMacTable*>& p) mutable {
-            DLOG_ASSERT(i < rack_count);
-
             MasterToDaemonConnection* conn = p.second->daemon_connect;
             auto& info = reply.other_rack_infos[i];
             auto peer_addr = conn->rdma_conn->get_peer_addr();
@@ -61,9 +60,8 @@ void joinDaemon(MasterContext& master_context, MasterToDaemonConnection& daemon_
     rack_table->daemon_connect->ip = req.ip.get_string();
     rack_table->daemon_connect->port = req.port;
 
-    rack_table->daemon_connect->erpc_conn.reset(new ErpcClient(master_context.GetErpc(),
-                                                               rack_table->daemon_connect->ip,
-                                                               rack_table->daemon_connect->port));
+    rack_table->daemon_connect->erpc_conn = std::make_unique<ErpcClient>(
+        master_context.GetErpc(), rack_table->daemon_connect->ip, rack_table->daemon_connect->port);
 
     master_context.m_cluster_manager.cluster_rack_table.insert(req.rack_id, rack_table);
     master_context.m_cluster_manager.connect_table.insert(daemon_connection.daemon_id,
@@ -162,7 +160,7 @@ void allocPage(MasterContext& master_context, MasterToDaemonConnection& daemon_c
 
         // join all ctx
         for (auto& ctx : ctx_vec) {
-            ctx.fu.wait();
+            ctx.fu.get();
 
             for (size_t i = 0; i < ctx.alloc_cnt; ++i) {
                 master_context.m_page_directory.AddPage(ctx.rack_table,

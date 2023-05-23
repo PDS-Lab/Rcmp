@@ -1,7 +1,7 @@
 #include "rchms.hpp"
 
-#include <cstdint>
 #include <future>
+#include <memory>
 
 #include "common.hpp"
 #include "cxl.hpp"
@@ -9,9 +9,9 @@
 #include "log.hpp"
 #include "msg_queue.hpp"
 #include "options.hpp"
-#include "proto/rpc.hpp"
+#include "promise.hpp"
 #include "proto/rpc_adaptor.hpp"
-#include "proto/rpc_daemon.hpp"
+#include "proto/rpc_register.hpp"
 #include "status.hpp"
 
 using namespace std::chrono_literals;
@@ -31,12 +31,13 @@ PoolContext::PoolContext(ClientOptions options) {
     cxl_memory_open(__impl->m_cxl_format, __impl->m_cxl_memory_addr);
 
     // 2. 与daemon建立连接
-    __impl->m_udp_conn_recver.reset(
-        new UDPServer<msgq::MsgUDPConnPacket>(__impl->m_options.client_port, 1000));
+    __impl->m_udp_conn_recver =
+        std::make_unique<UDPServer<msgq::MsgUDPConnPacket>>(__impl->m_options.client_port, 1000);
 
-    __impl->m_msgq_nexus.reset(new msgq::MsgQueueNexus(__impl->m_cxl_format.msgq_zone_start_addr));
-    __impl->m_msgq_rpc.reset(new msgq::MsgQueueRPC(__impl->m_msgq_nexus.get(), __impl));
-    __impl->m_msgq_rpc->m_send_queue = __impl->m_msgq_nexus->m_public_msgq;
+    __impl->m_msgq_nexus =
+        std::make_unique<msgq::MsgQueueNexus>(__impl->m_cxl_format.msgq_zone_start_addr);
+    __impl->m_msgq_rpc = std::make_unique<msgq::MsgQueueRPC>(
+        __impl->m_msgq_nexus.get(), __impl->m_msgq_nexus->GetPublicMsgQ(), nullptr, __impl);
 
     __impl->m_msgq_nexus->register_req_func(
         RPC_TYPE_STRUCT(rpc_client::getCurrentWriteData)::rpc_type,
@@ -47,19 +48,18 @@ PoolContext::PoolContext(ClientOptions options) {
     __impl->m_msgq_nexus->register_req_func(RPC_TYPE_STRUCT(rpc_client::removePageCache)::rpc_type,
                                             bind_msgq_rpc_func<false>(rpc_client::removePageCache));
 
-    // 3. 发送join rack rpc
-    using JoinRackRPC = RPC_TYPE_STRUCT(rpc_daemon::joinRack);
-    msgq::MsgBuffer req_raw =
-        __impl->m_msgq_rpc->alloc_msg_buffer(sizeof(JoinRackRPC::RequestType));
-    auto req = reinterpret_cast<JoinRackRPC::RequestType *>(req_raw.get_buf());
-    req->client_ipv4 = __impl->m_options.client_ip;
-    req->client_port = __impl->m_options.client_port;
-    req->rack_id = __impl->m_options.rack_id;
+    __impl->m_local_rack_daemon_connection.rack_id = __impl->m_options.rack_id;
+    __impl->m_local_rack_daemon_connection.msgq_rpc = std::make_unique<MsgQClient>(msgq::MsgQueueRPC{
+         __impl->m_msgq_nexus.get(), __impl->m_msgq_nexus->GetPublicMsgQ(), nullptr, __impl
+    });
 
-    std::promise<msgq::MsgBuffer> pro;
-    std::future<msgq::MsgBuffer> fu = pro.get_future();
-    __impl->m_msgq_rpc->enqueue_request(JoinRackRPC::rpc_type, req_raw,
-                                        msgq_general_promise_flag_cb, static_cast<void *>(&pro));
+    // 3. 发送join rack rpc
+    auto fu = __impl->m_local_rack_daemon_connection.msgq_rpc->call<SpinPromise>(
+        rpc_daemon::joinRack, {
+                                  .client_ipv4 = __impl->m_options.client_ip,
+                                  .client_port = __impl->m_options.client_port,
+                                  .rack_id = __impl->m_options.rack_id,
+                              });
 
     // 4. daemon会发送udp消息，告诉recv queue的偏移地址
     msgq::MsgUDPConnPacket msg;
@@ -73,11 +73,10 @@ PoolContext::PoolContext(ClientOptions options) {
         __impl->m_msgq_rpc->run_event_loop_once();
     }
 
-    msgq::MsgBuffer resp_raw = fu.get();
-    auto resp = reinterpret_cast<JoinRackRPC::ResponseType *>(resp_raw.get_buf());
+    auto &resp = fu.get();
 
-    __impl->m_client_id = resp->client_mac_id;
-    __impl->m_local_rack_daemon_connection.daemon_id = resp->daemon_mac_id;
+    __impl->m_client_id = resp.client_mac_id;
+    __impl->m_local_rack_daemon_connection.daemon_id = resp.daemon_mac_id;
     __impl->m_local_rack_daemon_connection.rack_id = __impl->m_options.rack_id;
     __impl->m_local_rack_daemon_connection.msgq_rpc = __impl->m_msgq_rpc.get();
 
@@ -313,7 +312,6 @@ Status PoolContext::FreePage(GAddr gaddr, size_t count) { DLOG_FATAL("Not Suppor
 
 // TODO: write lock
 Status PoolContext::WriteBatch(GAddr gaddr, size_t size, void *buf) {
-
     page_id_t page_id = GetPageID(gaddr);
     offset_t in_page_offset = GetPageOffset(gaddr);
     LocalPageCache *pageCache;
@@ -382,9 +380,7 @@ const ClientOptions &PoolContext::GetOptions() const { return __impl->m_options;
 
 ClientContext::ClientContext() : m_cort_sched(8) {}
 
-mac_id_t ClientContext::GetMacID() const {
-    return m_client_id;
-}
+mac_id_t ClientContext::GetMacID() const { return m_client_id; }
 
 ClientConnection *ClientContext::GetConnection(mac_id_t mac_id) {
     DLOG_ASSERT(mac_id != m_client_id, "Can't find self connection");

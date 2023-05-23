@@ -9,16 +9,13 @@
 #include "lock.hpp"
 #include "utils.hpp"
 
-template <typename K, typename V, typename __Mutex = SharedMutex>
+template <typename K, typename V, typename __SharedMutex = SharedMutex>
 class ConcurrentHashMap {
     constexpr static const size_t BucketNum = 32;
 
     using HashTable = std::unordered_map<K, V>;
 
    public:
-    ConcurrentHashMap() = default;
-    ~ConcurrentHashMap() = default;
-
     /**
      * @brief
      * @warning
@@ -70,7 +67,7 @@ class ConcurrentHashMap {
         auto& shard = m_shards[index];
         auto& map = shard.m_map;
 
-        std::unique_lock<__Mutex> guard(shard.m_lock);
+        std::unique_lock<__SharedMutex> guard(shard.m_lock);
         auto p = map.emplace(key, val);
         return {{index, p.first}, p.second};
     }
@@ -87,7 +84,7 @@ class ConcurrentHashMap {
         auto& shard = m_shards[index];
         auto& map = shard.m_map;
 
-        std::shared_lock<__Mutex> guard(shard.m_lock);
+        std::shared_lock<__SharedMutex> guard(shard.m_lock);
         auto it = map.find(key);
         if (it != map.end()) {
             return {index, it};
@@ -107,7 +104,7 @@ class ConcurrentHashMap {
         auto& shard = m_shards[index];
         auto& map = shard.m_map;
 
-        std::shared_lock<__Mutex> guard(shard.m_lock);
+        std::shared_lock<__SharedMutex> guard(shard.m_lock);
         return map.at(key);
     }
 
@@ -132,7 +129,7 @@ class ConcurrentHashMap {
             return {iter, false};
         }
 
-        std::unique_lock<__Mutex> guard(shard.m_lock);
+        std::unique_lock<__SharedMutex> guard(shard.m_lock);
         auto it = map.find(key);
         if (it != map.end()) {
             return {{index, it}, false};
@@ -153,7 +150,7 @@ class ConcurrentHashMap {
         auto& shard = m_shards[it.hidx];
         auto& map = shard.m_map;
 
-        std::unique_lock<__Mutex> guard(shard.m_lock);
+        std::unique_lock<__SharedMutex> guard(shard.m_lock);
         map.erase(it.it);
     }
 
@@ -169,7 +166,7 @@ class ConcurrentHashMap {
             auto& shard = m_shards[i];
             auto& map = shard.m_map;
 
-            std::shared_lock<__Mutex> guard(shard.m_lock);
+            std::shared_lock<__SharedMutex> guard(shard.m_lock);
             for (auto& p : map) {
                 if (!f(p)) {
                     return;
@@ -194,7 +191,7 @@ class ConcurrentHashMap {
             auto& shard = m_shards[i];
             auto& map = shard.m_map;
 
-            std::shared_lock<__Mutex> guard(shard.m_lock);
+            std::shared_lock<__SharedMutex> guard(shard.m_lock);
             for (auto& p : map) {
                 if (!f(p)) {
                     return;
@@ -206,7 +203,7 @@ class ConcurrentHashMap {
 
    private:
     struct CACHE_ALIGN Shard {
-        __Mutex m_lock;
+        __SharedMutex m_lock;
         HashTable m_map;
     };
 

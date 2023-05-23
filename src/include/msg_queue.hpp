@@ -102,7 +102,8 @@ struct MsgQueue final {
     uint32_t dequeue_msg(MsgHeader *hv, size_t max_deq);
     void free_msg_buffer(MsgBuffer &msg_buf);
 
-    ConcurrentQueue<MsgHeader, 10240, ConcurrentQueueProducerMode::MP, ConcurrentQueueConsumerMode::SC>
+    ConcurrentQueue<MsgHeader, 10240, ConcurrentQueueProducerMode::MP,
+                    ConcurrentQueueConsumerMode::SC>
         msgq_q;
     RingArena<msgq_ring_buf_len, 20> m_ra;
 };
@@ -114,6 +115,10 @@ struct MsgQueueNexus {
 
     MsgQueueNexus(void *msgq_zone_start_addr);
 
+    MsgQueue * GetPublicMsgQ() const { return m_public_msgq; }
+
+    void* GetMsgQZoneStartAddr() const { return m_msgq_zone_start_addr; }
+
     void register_req_func(uint8_t rpc_type, msgq_handler_t handler);
 
     static msgq_handler_t __handlers[max_msgq_handler];
@@ -123,7 +128,7 @@ struct MsgQueueNexus {
 };
 
 struct MsgQueueRPC {
-    MsgQueueRPC(MsgQueueNexus *nexus, void *ctx);
+    MsgQueueRPC(MsgQueueNexus *nexus, MsgQueue *send_queue, MsgQueue *recv_queue, void *ctx);
 
     /**
      * @brief 申请发送buffer

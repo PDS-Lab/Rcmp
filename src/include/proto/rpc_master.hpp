@@ -61,6 +61,7 @@ void joinClient(MasterContext& master_context, MasterToClientConnection& client_
                 JoinClientRequest& req, ResponseHandle<JoinClientReply>& resp_handle);
 
 struct AllocPageRequest {
+    mac_id_t mac_id;
     size_t count;
 };
 struct AllocPageReply {
@@ -158,10 +159,11 @@ void unLatchRemotePage(MasterContext& master_context, MasterToDaemonConnection& 
                        ResponseHandle<UnLatchRemotePageReply>& resp_handle);
 
 struct UnLatchPageAndSwapRequest {
+    mac_id_t mac_id;
     page_id_t page_id;
     mac_id_t new_daemon_id;
     rack_id_t new_rack_id;
-    page_id_t page_id_swap;
+    page_id_t page_id_swap;         // invalid 不换出
     mac_id_t new_daemon_id_swap;
     rack_id_t new_rack_id_swap;
 };

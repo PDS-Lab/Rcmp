@@ -1,4 +1,5 @@
 #include <boost/fiber/operations.hpp>
+#include <memory>
 #include <type_traits>
 
 #include "cmdline.h"
@@ -17,13 +18,13 @@ MasterContext &MasterContext::getInstance() {
 }
 
 void MasterContext::initCluster() {
-    m_cluster_manager.mac_id_allocator.reset(new IDGenerator());
+    m_cluster_manager.mac_id_allocator = std::make_unique<IDGenerator>();
     m_cluster_manager.mac_id_allocator->Expand(m_options.max_cluster_mac_num);
     IDGenerator::id_t id = m_cluster_manager.mac_id_allocator->Gen();
     DLOG_ASSERT(id == master_id, "Can't alloc master mac id");
     m_master_id = master_id;
 
-    m_page_id_allocator.reset(new IDGenerator());
+    m_page_id_allocator = std::make_unique<IDGenerator>();
     m_page_id_allocator->Expand(1);
     id = m_page_id_allocator->Gen();
     // 保证page id不为0，这就保证了分配的GAddr是非null
@@ -55,7 +56,7 @@ void MasterContext::initRDMARC() {
 
 void MasterContext::initRPCNexus() {
     std::string master_uri = erpc::concat_server_uri(m_options.master_ip, m_options.master_port);
-    m_erpc_ctx.nexus.reset(new erpc::NexusWrap(master_uri));
+    m_erpc_ctx.nexus = std::make_unique<erpc::NexusWrap>(master_uri);
 
     m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_master::joinDaemon)::rpc_type,
                                         bind_erpc_func<true>(rpc_master::joinDaemon));

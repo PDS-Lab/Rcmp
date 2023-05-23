@@ -146,6 +146,8 @@ struct ErpcClient {
         peer_session = rpc.create_session(server_uri, 0);
     }
 
+    ErpcClient(erpc::IBRpcWrap &rpc, int peer_session) : rpc(rpc), peer_session(peer_session) {}
+
     template <template <typename T> class PromiseTType, typename RpcFuncType,
               typename Fn = std::remove_reference_t<RpcFuncType>>
     auto call(RpcFuncType &&_, typename ::detail::RpcCallerWrapper<Fn>::RequestType &&req) {
@@ -243,6 +245,8 @@ struct ErpcClient {
 };
 
 struct MsgQClient {
+    MsgQClient(msgq::MsgQueueRPC rpc) : rpc(rpc) {}
+
     template <template <typename T> class PromiseTType, typename RpcFuncType,
               typename Fn = std::remove_reference_t<RpcFuncType>>
     auto call(RpcFuncType &&_, typename ::detail::RpcCallerWrapper<Fn>::RequestType &&req) {
@@ -266,14 +270,14 @@ struct MsgQClient {
         fu.rpc = &rpc;
         fu.pro = new PromiseTType<msgq::MsgBuffer>();
 
-        fu.req_raw = rpc->alloc_msg_buffer(req_size);
+        fu.req_raw = rpc.alloc_msg_buffer(req_size);
 
         auto req_buf = reinterpret_cast<RequestType *>(fu.req_raw.get_buf());
         copy_fn(req_buf, std::move(args...));
 
-        rpc->enqueue_request(RpcCallerWrapper::rpc_type, fu.req_raw,
-                             msgq_general_promise_cb<PromiseTType<msgq::MsgBuffer>>,
-                             static_cast<void *>(fu.pro));
+        rpc.enqueue_request(RpcCallerWrapper::rpc_type, fu.req_raw,
+                            msgq_general_promise_cb<PromiseTType<msgq::MsgBuffer>>,
+                            static_cast<void *>(fu.pro));
 
         return fu;
     }
@@ -290,7 +294,7 @@ struct MsgQClient {
 
         ~MsgQFuture() {
             if (rpc) {
-                (*rpc)->free_msg_buffer(resp_raw);
+                rpc->free_msg_buffer(resp_raw);
             }
             if (pro) {
                 delete pro;
@@ -322,7 +326,7 @@ struct MsgQClient {
         }
 
         PromiseType *pro;
-        std::unique_ptr<msgq::MsgQueueRPC> *rpc;
+        msgq::MsgQueueRPC *rpc;
         msgq::MsgBuffer req_raw;
         msgq::MsgBuffer resp_raw;
     };
@@ -333,5 +337,5 @@ struct MsgQClient {
         pro->set_value(resp);
     }
 
-    std::unique_ptr<msgq::MsgQueueRPC> &rpc;
+    msgq::MsgQueueRPC rpc;
 };

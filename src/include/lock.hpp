@@ -2,13 +2,10 @@
 
 #include <pthread.h>
 
-#include <atomic>
 #include <boost/fiber/condition_variable.hpp>
 #include <boost/fiber/mutex.hpp>
 #include <mutex>
 #include <shared_mutex>
-
-#include "utils.hpp"
 
 using Mutex = std::mutex;
 using SharedMutex = std::shared_mutex;
@@ -42,6 +39,15 @@ class CortSharedMutex {
         g2.wait(lk, [=] { return readers() == 0; });
     }
 
+    bool try_lock() {
+        std::unique_lock<boost::fibers::mutex> lk(mtx, std::try_to_lock);
+        if (lk.owns_lock() && state == 0) {
+            state = _S_write_entered;
+            return true;
+        }
+        return false;
+    }
+
     void unlock() {
         std::lock_guard<boost::fibers::mutex> lk(mtx);
         state = 0;
@@ -52,6 +58,18 @@ class CortSharedMutex {
         std::unique_lock<boost::fibers::mutex> lk(mtx);
         g1.wait(lk, [=] { return state < _S_max_readers; });
         ++state;
+    }
+
+    bool try_lock_shared() {
+        std::unique_lock<boost::fibers::mutex> lk(mtx, std::try_to_lock);
+        if (!lk.owns_lock()) {
+            return false;
+        }
+        if (state < _S_max_readers) {
+            ++state;
+            return true;
+        }
+        return false;
     }
 
     void unlock_shared() {

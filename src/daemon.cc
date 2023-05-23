@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdint>
 #include <future>
+#include <memory>
 #include <thread>
 
 #include "cmdline.h"
@@ -39,8 +40,8 @@ void DaemonContext::InitCXLPool() {
     m_page_table.total_page_num = m_cxl_format.super_block->page_data_zone_size / page_size;
     m_page_table.max_swap_page_num = m_options.swap_zone_size / page_size;
     m_page_table.max_data_page_num = m_page_table.total_page_num - m_page_table.max_swap_page_num;
-    m_page_table.page_allocator.reset(
-        new SingleAllocator<page_size>(m_cxl_format.super_block->page_data_zone_size));
+    m_page_table.page_allocator =
+        std::make_unique<SingleAllocator<page_size>>(m_cxl_format.super_block->page_data_zone_size);
 
     m_page_table.current_used_page_num = 0;
 
@@ -52,7 +53,7 @@ void DaemonContext::InitCXLPool() {
 void DaemonContext::InitRPCNexus() {
     // 1. init erpc
     std::string server_uri = erpc::concat_server_uri(m_options.daemon_ip, m_options.daemon_port);
-    m_erpc_ctx.nexus.reset(new erpc::NexusWrap(server_uri));
+    m_erpc_ctx.nexus = std::make_unique<erpc::NexusWrap>(server_uri);
 
     m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::crossRackConnect)::rpc_type,
                                         bind_erpc_func<true>(rpc_daemon::crossRackConnect));
@@ -73,16 +74,17 @@ void DaemonContext::InitRPCNexus() {
     DLOG_ASSERT(m_erpc_ctx.rpc_set.size() == 1);
 
     // 2. init msgq
-    m_msgq_manager.nexus.reset(new msgq::MsgQueueNexus(m_cxl_format.msgq_zone_start_addr));
+    m_msgq_manager.nexus = std::make_unique<msgq::MsgQueueNexus>(m_cxl_format.msgq_zone_start_addr);
     m_msgq_manager.start_addr = m_cxl_format.msgq_zone_start_addr;
-    m_msgq_manager.msgq_allocator.reset(new SingleAllocator<MsgQueueManager::RING_ELEM_SIZE>(
-        m_cxl_format.super_block->msgq_zone_size));
+    m_msgq_manager.msgq_allocator =
+        std::make_unique<SingleAllocator<MsgQueueManager::RING_ELEM_SIZE>>(
+            m_cxl_format.super_block->msgq_zone_size);
 
     msgq::MsgQueue *public_q = m_msgq_manager.allocQueue();
-    DLOG_ASSERT(public_q == m_msgq_manager.nexus->m_public_msgq);
+    DLOG_ASSERT(public_q == m_msgq_manager.nexus->GetPublicMsgQ());
 
-    m_msgq_manager.rpc.reset(new msgq::MsgQueueRPC(m_msgq_manager.nexus.get(), this));
-    m_msgq_manager.rpc->m_recv_queue = m_msgq_manager.nexus->m_public_msgq;
+    m_msgq_manager.rpc = std::make_unique<msgq::MsgQueueRPC>(
+        m_msgq_manager.nexus.get(), nullptr, m_msgq_manager.nexus->GetPublicMsgQ(), this);
 
     // 3. bind rpc function
     m_msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::joinRack)::rpc_type,
@@ -140,7 +142,8 @@ void DaemonContext::ConnectWithMaster() {
 
     auto &master_connection = m_conn_manager.GetMasterConnection();
 
-    master_connection.erpc_conn.reset(new ErpcClient(rpc, m_options.master_ip, m_options.master_port));
+    master_connection.erpc_conn =
+        std::make_unique<ErpcClient>(rpc, m_options.master_ip, m_options.master_port);
 
     auto fu = master_connection.erpc_conn->call<SpinPromise>(
         rpc_master::joinDaemon, {
@@ -172,7 +175,7 @@ void DaemonContext::ConnectWithMaster() {
     param.mac_id = m_daemon_id;
     param.role = CXL_DAEMON;
 
-    master_connection.rdma_conn.reset(new rdma_rc::RDMAConnection());
+    master_connection.rdma_conn = std::make_unique<rdma_rc::RDMAConnection>();
     master_connection.rdma_conn->connect(peer_ip, peer_port, &param, sizeof(param));
 
     DLOG("Connection with master OK, my id is %d", m_daemon_id);
@@ -182,7 +185,8 @@ void DaemonContext::ConnectWithMaster() {
 
         // 与该daemon建立erpc与RDMA RC
         DaemonToDaemonConnection *dd_conn = new DaemonToDaemonConnection();
-        dd_conn->erpc_conn.reset(new ErpcClient(rpc, rack_info.daemon_ipv4.get_string(), rack_info.daemon_erpc_port));
+        dd_conn->erpc_conn = std::make_unique<ErpcClient>(rpc, rack_info.daemon_ipv4.get_string(),
+                                                          rack_info.daemon_erpc_port);
         dd_conn->daemon_id = rack_info.daemon_id;
         dd_conn->rack_id = rack_info.rack_id;
         dd_conn->ip = rack_info.daemon_ipv4.get_string();
@@ -213,7 +217,7 @@ void DaemonContext::ConnectWithMaster() {
 
         DLOG("Connect with daemon %d [%s] ...", dd_conn->daemon_id, peer_ip.c_str());
 
-        dd_conn->rdma_conn.reset(new rdma_rc::RDMAConnection());
+        dd_conn->rdma_conn = std::make_unique<rdma_rc::RDMAConnection>();
         dd_conn->rdma_conn->connect(peer_ip, peer_port, &param, sizeof(param));
 
         m_conn_manager.AddConnection(dd_conn->daemon_id, dd_conn);
