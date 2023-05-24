@@ -22,7 +22,6 @@ class DaemonOptions {
     uint16_t master_port;   // MN的端口
 
     std::string daemon_ip;
-    std::string daemon_rdma_ip;  // daemon的rdma网卡ip
     uint16_t daemon_port;        // erpc port
 
     uint32_t rack_id;
@@ -42,7 +41,6 @@ class DaemonOptions {
 class MasterOptions {
    public:
     std::string master_ip;       // MN的IP
-    std::string master_rdma_ip;  // rdma网卡IP
     uint16_t master_port;        // MN的端口
 
     size_t max_cluster_mac_num;  // 集群中最多连接个数

@@ -36,9 +36,9 @@ struct PageRackMetadata {
 };
 
 struct MasterConnection {
-    std::unique_ptr<ErpcClient> erpc_conn;
-
     virtual ~MasterConnection() = default;
+
+    virtual msgq::MsgQueueRPC *GetMsgQ() = delete;
 };
 
 struct MasterToClientConnection : public MasterConnection {
@@ -52,6 +52,7 @@ struct MasterToDaemonConnection : public MasterConnection {
     rack_id_t rack_id;
     mac_id_t daemon_id;
 
+    std::unique_ptr<ErpcClient> erpc_conn;
     std::unique_ptr<rdma_rc::RDMAConnection> rdma_conn;
 };
 
@@ -75,12 +76,14 @@ struct ClusterManager {
 struct PageDirectory {
     PageRackMetadata *FindPage(page_id_t page_id) { return table[page_id]; }
 
-    void AddPage(RackMacTable *rack_table, page_id_t page_id) {
+    PageRackMetadata *AddPage(RackMacTable *rack_table, page_id_t page_id) {
         PageRackMetadata *page_meta = new PageRackMetadata();
         page_meta->rack_id = rack_table->daemon_connect->rack_id;
         page_meta->daemon_id = rack_table->daemon_connect->daemon_id;
         table.insert(page_id, page_meta);
         rack_table->current_allocated_page_num++;
+
+        return page_meta;
     }
 
     void RemovePage(RackMacTable *rack_table, page_id_t page_id) {
@@ -92,6 +95,7 @@ struct PageDirectory {
     }
 
     ConcurrentHashMap<page_id_t, PageRackMetadata *, CortSharedMutex> table;
+    std::unique_ptr<IDGenerator> page_id_allocator;
 };
 
 struct MasterContext : public NOCOPYABLE {
@@ -100,9 +104,7 @@ struct MasterContext : public NOCOPYABLE {
     mac_id_t m_master_id;  // 节点id，由master分配
 
     ClusterManager m_cluster_manager;
-
     PageDirectory m_page_directory;
-    std::unique_ptr<IDGenerator> m_page_id_allocator;
 
     struct {
         std::unique_ptr<erpc::NexusWrap> nexus;
@@ -115,9 +117,10 @@ struct MasterContext : public NOCOPYABLE {
         uint64_t page_swap = 0;
     } m_stats;
 
-    MasterContext();
-
-    static MasterContext &getInstance();
+    static MasterContext &getInstance() {
+        static MasterContext master_ctx;
+        return master_ctx;
+    }
 
     void initCluster();
     void initRDMARC();
@@ -125,7 +128,14 @@ struct MasterContext : public NOCOPYABLE {
     void initCoroutinePool();
 
     mac_id_t GetMacID() const { return m_master_id; }
-    MasterConnection *GetConnection(mac_id_t mac_id);
+
+    MasterConnection *GetConnection(mac_id_t mac_id) {
+        DLOG_ASSERT(mac_id != m_master_id, "Can't find self connection");
+        auto it = m_cluster_manager.connect_table.find(mac_id);
+        DLOG_ASSERT(it != m_cluster_manager.connect_table.end(), "Can't find mac %d", mac_id);
+        return it->second;
+    }
+
     erpc::IBRpcWrap &GetErpc() { return m_erpc_ctx.rpc_set[0]; }
 };
 
@@ -136,6 +146,8 @@ struct DaemonConnection {
     uint16_t port;  // erpc port
 
     virtual ~DaemonConnection() = default;
+
+    virtual msgq::MsgQueueRPC *GetMsgQ() = 0;
 };
 
 struct DaemonToMasterConnection : public DaemonConnection {
@@ -143,12 +155,16 @@ struct DaemonToMasterConnection : public DaemonConnection {
 
     std::unique_ptr<ErpcClient> erpc_conn;
     std::unique_ptr<rdma_rc::RDMAConnection> rdma_conn;
+
+    virtual msgq::MsgQueueRPC *GetMsgQ() override { return nullptr; }
 };
 
 struct DaemonToClientConnection : public DaemonConnection {
-    std::unique_ptr<MsgQClient> msgq_rpc;
+    std::unique_ptr<MsgQClient> msgq_conn;
 
     mac_id_t client_id;
+
+    virtual msgq::MsgQueueRPC *GetMsgQ() override { return &msgq_conn->rpc; }
 };
 
 struct DaemonToDaemonConnection : public DaemonConnection {
@@ -157,6 +173,8 @@ struct DaemonToDaemonConnection : public DaemonConnection {
 
     std::unique_ptr<ErpcClient> erpc_conn;
     std::unique_ptr<rdma_rc::RDMAConnection> rdma_conn;
+
+    virtual msgq::MsgQueueRPC *GetMsgQ() override { return nullptr; }
 };
 
 struct PageMetadata {
@@ -169,12 +187,15 @@ struct PageMetadata {
 };
 
 struct RemotePageMetaCache {
+    uint64_t Update() { return stats.add(getTimestamp()); }
+
     FreqStats stats;
     uintptr_t remote_page_addr;
     uint32_t remote_page_rkey;
     DaemonToDaemonConnection *remote_page_daemon_conn;
 
-    RemotePageMetaCache(size_t max_recent_record, float hot_decay_lambda);
+    RemotePageMetaCache(size_t max_recent_record, float hot_decay_lambda)
+        : stats(max_recent_record, hot_decay_lambda, hot_stat_freq_timeout_interval) {}
 };
 
 struct MsgQueueManager {
@@ -186,8 +207,17 @@ struct MsgQueueManager {
     std::unique_ptr<msgq::MsgQueueNexus> nexus;
     std::unique_ptr<msgq::MsgQueueRPC> rpc;
 
-    msgq::MsgQueue *allocQueue();
-    void freeQueue(msgq::MsgQueue *msgq);
+    msgq::MsgQueue *allocQueue() {
+        uintptr_t ring_off = msgq_allocator->allocate(1);
+        DLOG_ASSERT(ring_off != -1, "Can't alloc msg queue");
+        msgq::MsgQueue *r =
+            reinterpret_cast<msgq::MsgQueue *>(reinterpret_cast<uintptr_t>(start_addr) + ring_off);
+        new (r) msgq::MsgQueue();
+        ring_cnt++;
+        return r;
+    }
+
+    void freeQueue(msgq::MsgQueue *msgq) { DLOG_FATAL("Not Support"); }
 };
 
 struct PageTableManager {
@@ -215,6 +245,29 @@ struct PageTableManager {
         current_used_page_num--;
         table.erase(page_id);
         delete page_meta;
+    }
+
+    PageMetadata *FindPageMeta(page_id_t page_id) {
+        auto it = table.find(page_id);
+        if (it == table.end()) {
+            return nullptr;
+        }
+        return it->second;
+    }
+
+    void RandomPickUnvisitPage(bool force, bool &ret, page_id_t &page_id,
+                               PageMetadata *&page_meta) {
+        thread_local std::mt19937 eng(rand());
+
+        table.random_foreach_all(eng, [&](std::pair<const page_id_t, PageMetadata *> &p) {
+            if ((force || p.second->ref_client.empty()) && p.second->TryPin()) {
+                page_id = p.first;
+                page_meta = p.second;
+                ret = true;
+                return false;
+            }
+            return true;
+        });
     }
 
     bool NearlyFull() const { return current_used_page_num == max_data_page_num; }
@@ -295,7 +348,10 @@ struct DaemonContext : public NOCOPYABLE {
         uint64_t page_swap = 0;
     } m_stats;
 
-    static DaemonContext &getInstance();
+    static DaemonContext &getInstance() {
+        static DaemonContext daemon_ctx;
+        return daemon_ctx;
+    }
 
     mac_id_t GetMacID() const { return m_daemon_id; }
 
@@ -305,7 +361,17 @@ struct DaemonContext : public NOCOPYABLE {
         return m_conn_manager.GetConnection(mac_id);
     }
 
-    ibv_mr *GetMR(void *p);
+    ibv_mr *GetMR(void *p) {
+        if (p >= m_cxl_format.start_addr && p < m_cxl_format.end_addr) {
+            return m_rdma_page_mr_table[(reinterpret_cast<uintptr_t>(p) -
+                                         reinterpret_cast<const uintptr_t>(
+                                             m_cxl_format.start_addr)) /
+                                        mem_region_aligned_size];
+        } else {
+            return m_rdma_mr_table[reinterpret_cast<void *>(
+                align_floor(reinterpret_cast<uintptr_t>(p), mem_region_aligned_size))];
+        }
+    }
 
     uintptr_t GetVirtualAddr(offset_t offset) const {
         return reinterpret_cast<uintptr_t>(m_cxl_format.page_data_start_addr) + offset;
@@ -322,25 +388,64 @@ struct DaemonContext : public NOCOPYABLE {
 
 struct ClientConnection {
     virtual ~ClientConnection() = default;
+
+    virtual msgq::MsgQueueRPC *GetMsgQ() = 0;
 };
 
 struct ClientToMasterConnection : public ClientConnection {
     mac_id_t master_id;
+
+    virtual msgq::MsgQueueRPC *GetMsgQ() override { return nullptr; }
 };
 
 struct ClientToDaemonConnection : public ClientConnection {
-    std::unique_ptr<MsgQClient> msgq_rpc;
+    std::unique_ptr<MsgQClient> msgq_conn;
 
     rack_id_t rack_id;
     mac_id_t daemon_id;
+
+    virtual msgq::MsgQueueRPC *GetMsgQ() override { return &msgq_conn->rpc; }
 };
 
 struct LocalPageCache {
+    uint64_t Update() { return stats.add(getTimestamp()); }
+
     FreqStats stats;
     offset_t offset;
 
     LocalPageCache(size_t max_recent_record)
         : stats(max_recent_record, 0, hot_stat_freq_timeout_interval) {}
+};
+
+struct PageTableCache {
+    LocalPageCache *FindCache(page_id_t page_id) {
+        auto it = table.find(page_id);
+        if (it == table.end()) {
+            return nullptr;
+        }
+        return it->second;
+    }
+
+    LocalPageCache *AddCache(page_id_t page_id, offset_t offset) {
+        LocalPageCache *page_cache = new LocalPageCache(8);
+        page_cache->offset = offset;
+
+        table.insert(page_id, page_cache);
+
+        return page_cache;
+    }
+
+    void RemoveCache(page_id_t page_id) {
+        auto it = table.find(page_id);
+        DLOG_ASSERT(it != table.end(), "Can't find page %lu's cache.", page_id);
+
+        LocalPageCache *page_cache = it->second;
+
+        table.erase(it);
+        delete page_cache;
+    }
+
+    ConcurrentHashMap<page_id_t, LocalPageCache *> table;
 };
 
 struct ClientContext : public NOCOPYABLE {
@@ -356,27 +461,37 @@ struct ClientContext : public NOCOPYABLE {
     std::unique_ptr<msgq::MsgQueueRPC> m_msgq_rpc;
     std::unique_ptr<msgq::MsgQueueNexus> m_msgq_nexus;
     ClientToDaemonConnection m_local_rack_daemon_connection;
-    std::unordered_set<page_id_t> m_page;
-    ConcurrentHashMap<page_id_t, LocalPageCache *> m_page_table_cache;
-    ConcurrentHashMap<page_id_t, SharedMutex *> m_ptl_cache_lock;
+    PageTableCache m_page_table_cache;
+    LockResourceManager<page_id_t, SharedMutex> m_ptl_cache_lock;
 
     volatile bool m_msgq_stop;
     std::thread m_msgq_worker;
 
-    char *m_batch_buffer = new char[write_batch_buffer_size + write_batch_buffer_overflow_size];
-    size_t m_batch_cur = 0;
-    std::vector<std::tuple<rchms::GAddr, size_t, offset_t>> m_batch_list;
-    std::thread batch_flush_worker;
+    // char *m_batch_buffer = new char[write_batch_buffer_size + write_batch_buffer_overflow_size];
+    // size_t m_batch_cur = 0;
+    // std::vector<std::tuple<rchms::GAddr, size_t, offset_t>> m_batch_list;
+    // std::thread batch_flush_worker;
 
     struct {
         uint64_t local_hit = 0;
         uint64_t local_miss = 0;
     } m_stats;
 
-    ClientContext();
+    mac_id_t GetMacID() const { return m_client_id; }
 
-    mac_id_t GetMacID() const;
-    ClientConnection *GetConnection(mac_id_t mac_id);
+    ClientConnection *GetConnection(mac_id_t mac_id) {
+        DLOG_ASSERT(mac_id != m_client_id, "Can't find self connection");
+        if (mac_id == m_local_rack_daemon_connection.daemon_id) {
+            return &m_local_rack_daemon_connection;
+        }
+        DLOG_FATAL("Can't find mac %d", mac_id);
+    }
+
+    uintptr_t GetVirtualAddr(offset_t offset) const {
+        return reinterpret_cast<uintptr_t>(m_cxl_format.page_data_start_addr) + offset;
+    }
+
+    erpc::IBRpcWrap &GetErpc() = delete;
 };
 
 struct rchms::PoolContext::PoolContextImpl : public ClientContext {};

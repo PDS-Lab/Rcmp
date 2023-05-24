@@ -20,8 +20,8 @@ namespace detail {
 
 template <typename ResponseType>
 struct ErpcResponseHandle : public ResponseHandle<ResponseType> {
-    ErpcResponseHandle(erpc::IBRpcWrap &rpc, erpc::ReqHandleWrap &req_wrap)
-        : state(false), rpc(rpc), req_wrap(req_wrap) {}
+    ErpcResponseHandle(erpc::IBRpcWrap &rpc, erpc::ReqHandleWrap req_wrap)
+        : state(false), rpc(rpc), req_wrap(req_wrap), resp_raw(nullptr) {}
 
     virtual void Init(size_t flex_size = 0) override {
         DLOG_ASSERT(state == false, "Double Init");
@@ -45,8 +45,34 @@ struct ErpcResponseHandle : public ResponseHandle<ResponseType> {
 
     bool state;
     erpc::IBRpcWrap &rpc;
-    erpc::ReqHandleWrap &req_wrap;
+    erpc::ReqHandleWrap req_wrap;
     erpc::MsgBufferWrap resp_raw;
+};
+
+template <typename ResponseType>
+struct MsgQResponseHandle : public ResponseHandle<ResponseType> {
+    MsgQResponseHandle(msgq::MsgQueueRPC *rpc) : state(false), rpc(rpc) {}
+
+    virtual void Init(size_t flex_size = 0) override {
+        DLOG_ASSERT(state == false, "Double Init");
+
+        resp_raw = rpc->alloc_msg_buffer(sizeof(ResponseType) + flex_size);
+        state = true;
+    }
+
+    virtual ResponseType &Get() override {
+        DLOG_ASSERT(state == true, "Not init yet");
+        return *reinterpret_cast<ResponseType *>(resp_raw.get_buf());
+    }
+
+    msgq::MsgBuffer &GetBuffer() {
+        DLOG_ASSERT(state == true, "Not init yet");
+        return resp_raw;
+    }
+
+    bool state;
+    msgq::MsgQueueRPC *rpc;
+    msgq::MsgBuffer resp_raw;
 };
 
 template <typename EFW, bool ESTABLISH>
@@ -54,9 +80,9 @@ void erpc_call_target(erpc::ReqHandle *req_handle, void *context) {
     auto self_ctx = reinterpret_cast<typename EFW::SelfContext *>(context);
 
     boost::fibers::async(boost::fibers::launch::dispatch, [self_ctx, req_handle]() {
-        auto &rpc = self_ctx->get_erpc();
+        auto &rpc = self_ctx->GetErpc();
         erpc::ReqHandleWrap req_wrap(req_handle);
-        ErpcResponseHandle<typename EFW::RequestType> resp_handle(rpc, req_wrap);
+        ErpcResponseHandle<typename EFW::ResponseType> resp_handle(rpc, req_wrap);
 
         auto req_raw = req_wrap.get_req_msgbuf();
         auto req = reinterpret_cast<typename EFW::RequestType *>(req_raw.get_buf());
@@ -87,23 +113,17 @@ void msgq_call_target(msgq::MsgBuffer &req_raw, void *ctx) {
         msgq::MsgQueueRPC *rpc;
         msgq::MsgBuffer resp_raw;
 
-        // auto alloc_fn = std::function<typename EFW::ResponseType *(size_t)>([&](size_t s) {
-        //     resp_raw =
-        //         peer_connection->msgq_rpc->alloc_msg_buffer(sizeof(typename EFW::ResponseType) +
-        //         s);
-        //     return reinterpret_cast<typename EFW::ResponseType *>(resp_raw.get_buf());
-        // });
-        // req->__func_flex = &alloc_fn;
-
         if (ESTABLISH) {
             peer_connection = new typename EFW::PeerContext();
         } else {
             peer_connection =
                 dynamic_cast<typename EFW::PeerContext *>(self_ctx->GetConnection(req->mac_id));
         }
-        rpc = peer_connection->msgq_rpc;
-        EFW::func(*self_ctx, *peer_connection, *req);
-        rpc->enqueue_response(req_raw, resp_raw);
+        rpc = peer_connection->GetMsgQ();
+
+        MsgQResponseHandle<typename EFW::ResponseType> resp_handle(rpc);
+        EFW::func(*self_ctx, *peer_connection, *req, resp_handle);
+        rpc->enqueue_response(req_raw, resp_handle.GetBuffer());
 
         // 发送端的buffer将由接收端释放
         rpc->free_msg_buffer(req_raw);
@@ -139,6 +159,59 @@ auto bind_msgq_rpc_func(RpcFunc func) {
     detail::MsgqRpcFuncWrapper<RpcFunc>::func = func;
     return detail::msgq_call_target<detail::MsgqRpcFuncWrapper<RpcFunc>, ESTABLISH>;
 }
+
+template <typename ResponseType, typename PromiseType>
+struct ErpcFuture {
+    ErpcFuture() : pro(nullptr), rpc(nullptr), req_raw(nullptr), resp_raw(nullptr) {}
+
+    ErpcFuture(const ErpcFuture &) = delete;
+    ErpcFuture &operator=(const ErpcFuture &) = delete;
+
+    ErpcFuture(ErpcFuture &&other) : ErpcFuture() { swap(other); }
+    ErpcFuture &operator=(ErpcFuture &&other) {
+        swap(other);
+        return *this;
+    }
+
+    ~ErpcFuture() {
+        if (rpc) {
+            rpc->free_msg_buffer(req_raw);
+            rpc->free_msg_buffer(resp_raw);
+        }
+        if (pro) {
+            delete pro;
+        }
+    }
+
+    auto &get() {
+        auto fu = pro->get_future();
+        fu.get();
+        return *reinterpret_cast<ResponseType *>(resp_raw.get_buf());
+    }
+
+    void wait() {
+        auto fu = pro->get_future();
+        fu.wait();
+    }
+
+    template <typename _Rep, typename _Period>
+    auto wait_for(const std::chrono::duration<_Rep, _Period> &__rel) const {
+        auto fu = pro->get_future();
+        return fu.wait_for(__rel);
+    }
+
+    void swap(ErpcFuture &other) {
+        std::swap(pro, other.pro);
+        std::swap(rpc, other.rpc);
+        std::swap(req_raw, other.req_raw);
+        std::swap(resp_raw, other.resp_raw);
+    }
+
+    PromiseType *pro;
+    erpc::IBRpcWrap *rpc;
+    erpc::MsgBufferWrap req_raw;
+    erpc::MsgBufferWrap resp_raw;
+};
 
 struct ErpcClient {
     ErpcClient(erpc::IBRpcWrap &rpc, std::string ip, uint16_t port) : rpc(rpc) {
@@ -184,56 +257,6 @@ struct ErpcClient {
         return fu;
     }
 
-    template <typename ResponseType, typename PromiseType>
-    struct ErpcFuture {
-        ErpcFuture() : pro(nullptr), rpc(nullptr) {}
-
-        ErpcFuture(const ErpcFuture &) = delete;
-        ErpcFuture &operator=(const ErpcFuture &) = delete;
-
-        ErpcFuture(ErpcFuture &&other) : ErpcFuture() { swap(other); }
-        ErpcFuture &operator=(ErpcFuture &&other) { swap(other); }
-
-        ~ErpcFuture() {
-            if (rpc) {
-                rpc->free_msg_buffer(req_raw);
-                rpc->free_msg_buffer(resp_raw);
-            }
-            if (pro) {
-                delete pro;
-            }
-        }
-
-        auto &get() {
-            auto fu = pro->get_future();
-            fu.get();
-            return *reinterpret_cast<ResponseType *>(resp_raw.get_buf());
-        }
-
-        void wait() {
-            auto fu = pro->get_future();
-            fu.wait();
-        }
-
-        template <typename _Rep, typename _Period>
-        auto wait_for(const std::chrono::duration<_Rep, _Period> &__rel) const {
-            auto fu = pro->get_future();
-            return fu.wait_for(__rel);
-        }
-
-        void swap(ErpcFuture &other) {
-            std::swap(pro, other.pro);
-            std::swap(rpc, other.rpc);
-            std::swap(req_raw, other.req_raw);
-            std::swap(resp_raw, other.resp_raw);
-        }
-
-        PromiseType *pro;
-        erpc::IBRpcWrap *rpc;
-        erpc::MsgBufferWrap req_raw;
-        erpc::MsgBufferWrap resp_raw;
-    };
-
     template <typename PromiseType>
     static void erpc_general_promise_cb(void *, void *pr) {
         PromiseType *pro = reinterpret_cast<PromiseType *>(pr);
@@ -242,6 +265,58 @@ struct ErpcClient {
 
     erpc::IBRpcWrap &rpc;
     int peer_session;
+};
+
+template <typename ResponseType, typename PromiseType>
+struct MsgQFuture {
+    MsgQFuture() : pro(nullptr), rpc(nullptr) {}
+
+    MsgQFuture(const MsgQFuture &) = delete;
+    MsgQFuture &operator=(const MsgQFuture &) = delete;
+
+    MsgQFuture(MsgQFuture &&other) : MsgQFuture() { swap(other); }
+    MsgQFuture &operator=(MsgQFuture &&other) {
+        swap(other);
+        return *this;
+    }
+
+    ~MsgQFuture() {
+        if (rpc) {
+            rpc->free_msg_buffer(resp_raw);
+        }
+        if (pro) {
+            delete pro;
+        }
+    }
+
+    auto &get() {
+        auto fu = pro->get_future();
+        resp_raw = fu.get();
+        return *reinterpret_cast<ResponseType *>(resp_raw.get_buf());
+    }
+
+    void wait() {
+        auto fu = pro->get_future();
+        fu.wait();
+    }
+
+    template <typename _Rep, typename _Period>
+    auto wait_for(const std::chrono::duration<_Rep, _Period> &__rel) const {
+        auto fu = pro->get_future();
+        return fu.wait_for(__rel);
+    }
+
+    void swap(MsgQFuture &other) {
+        std::swap(pro, other.pro);
+        std::swap(rpc, other.rpc);
+        std::swap(req_raw, other.req_raw);
+        std::swap(resp_raw, other.resp_raw);
+    }
+
+    PromiseType *pro;
+    msgq::MsgQueueRPC *rpc;
+    msgq::MsgBuffer req_raw;
+    msgq::MsgBuffer resp_raw;
 };
 
 struct MsgQClient {
@@ -266,14 +341,14 @@ struct MsgQClient {
         using RequestType = typename RpcCallerWrapper::RequestType;
         using ResponseType = typename RpcCallerWrapper::ResponseType;
 
-        MsgQFuture<RpcCallerWrapper, PromiseTType<msgq::MsgBuffer>> fu;
+        MsgQFuture<ResponseType, PromiseTType<msgq::MsgBuffer>> fu;
         fu.rpc = &rpc;
         fu.pro = new PromiseTType<msgq::MsgBuffer>();
 
         fu.req_raw = rpc.alloc_msg_buffer(req_size);
 
         auto req_buf = reinterpret_cast<RequestType *>(fu.req_raw.get_buf());
-        copy_fn(req_buf, std::move(args...));
+        copy_fn(req_buf, std::move(args)...);
 
         rpc.enqueue_request(RpcCallerWrapper::rpc_type, fu.req_raw,
                             msgq_general_promise_cb<PromiseTType<msgq::MsgBuffer>>,
@@ -281,55 +356,6 @@ struct MsgQClient {
 
         return fu;
     }
-
-    template <typename RpcCallerWrapper, typename PromiseType>
-    struct MsgQFuture {
-        MsgQFuture() : pro(nullptr), rpc(nullptr) {}
-
-        MsgQFuture(const MsgQFuture &) = delete;
-        MsgQFuture &operator=(const MsgQFuture &) = delete;
-
-        MsgQFuture(MsgQFuture &&other) : MsgQFuture() { swap(other); }
-        MsgQFuture &operator=(MsgQFuture &&other) { swap(other); }
-
-        ~MsgQFuture() {
-            if (rpc) {
-                rpc->free_msg_buffer(resp_raw);
-            }
-            if (pro) {
-                delete pro;
-            }
-        }
-
-        auto &get() {
-            auto fu = pro->get_future();
-            resp_raw = fu.get();
-            return *reinterpret_cast<typename RpcCallerWrapper::ResponseType *>(resp_raw.get_buf());
-        }
-
-        void wait() {
-            auto fu = pro->get_future();
-            fu.wait();
-        }
-
-        template <typename _Rep, typename _Period>
-        auto wait_for(const std::chrono::duration<_Rep, _Period> &__rel) const {
-            auto fu = pro->get_future();
-            return fu.wait_for(__rel);
-        }
-
-        void swap(MsgQFuture &other) {
-            std::swap(pro, other.pro);
-            std::swap(rpc, other.rpc);
-            std::swap(req_raw, other.req_raw);
-            std::swap(resp_raw, other.resp_raw);
-        }
-
-        PromiseType *pro;
-        msgq::MsgQueueRPC *rpc;
-        msgq::MsgBuffer req_raw;
-        msgq::MsgBuffer resp_raw;
-    };
 
     template <typename PromiseType>
     static void msgq_general_promise_cb(msgq::MsgBuffer &resp, void *pr) {

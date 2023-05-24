@@ -12,11 +12,6 @@
 #include "proto/rpc_register.hpp"
 #include "rdma_rc.hpp"
 
-MasterContext &MasterContext::getInstance() {
-    static MasterContext master_ctx;
-    return master_ctx;
-}
-
 void MasterContext::initCluster() {
     m_cluster_manager.mac_id_allocator = std::make_unique<IDGenerator>();
     m_cluster_manager.mac_id_allocator->Expand(m_options.max_cluster_mac_num);
@@ -24,9 +19,9 @@ void MasterContext::initCluster() {
     DLOG_ASSERT(id == master_id, "Can't alloc master mac id");
     m_master_id = master_id;
 
-    m_page_id_allocator = std::make_unique<IDGenerator>();
-    m_page_id_allocator->Expand(1);
-    id = m_page_id_allocator->Gen();
+    m_page_directory.page_id_allocator = std::make_unique<IDGenerator>();
+    m_page_directory.page_id_allocator->Expand(1);
+    id = m_page_directory.page_id_allocator->Gen();
     // 保证page id不为0，这就保证了分配的GAddr是非null
     DLOG_ASSERT(id == 0, "Can't init page id");
 }
@@ -51,7 +46,7 @@ void MasterContext::initRDMARC() {
         }
     });
 
-    m_listen_conn.listen(m_options.master_rdma_ip);
+    m_listen_conn.listen(m_options.master_ip);
 }
 
 void MasterContext::initRPCNexus() {
@@ -80,24 +75,15 @@ void MasterContext::initRPCNexus() {
     DLOG_ASSERT(m_erpc_ctx.rpc_set.size() == 1);
 }
 
-MasterConnection *MasterContext::GetConnection(mac_id_t mac_id) {
-    DLOG_ASSERT(mac_id != m_master_id, "Can't find self connection");
-    auto it = m_cluster_manager.connect_table.find(mac_id);
-    DLOG_ASSERT(it != m_cluster_manager.connect_table.end(), "Can't find mac %d", mac_id);
-    return it->second;
-}
-
 int main(int argc, char *argv[]) {
     cmdline::parser cmd;
     cmd.add<std::string>("master_ip");
-    cmd.add<std::string>("master_rdma_ip");
     cmd.add<uint16_t>("master_port");
     bool ret = cmd.parse(argc, argv);
     DLOG_ASSERT(ret);
 
     rchms::MasterOptions options;
     options.master_ip = cmd.get<std::string>("master_ip");
-    options.master_rdma_ip = cmd.get<std::string>("master_rdma_ip");
     options.master_port = cmd.get<uint16_t>("master_port");
     options.max_cluster_mac_num = 100;
 

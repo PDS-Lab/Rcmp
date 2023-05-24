@@ -142,7 +142,7 @@ class PoolContext {
     Status __StopPerf();
 
    private:
-    PoolContextImpl *__impl;
+    PoolContextImpl *m_impl;
 };
 
 }  // namespace rchms

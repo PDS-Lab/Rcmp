@@ -12,7 +12,7 @@ struct RCHMSMemPool : public MemPoolBase {
     virtual GAddr Alloc(size_t s) override { return ref->AllocPage(s / alloc_unit); }
     virtual void Write(GAddr gaddr, size_t s, void *buf) override { ref->Write(gaddr, s, buf); }
     virtual void WriteBatch(GAddr gaddr, size_t s, void *buf) override {
-        ref->WriteBatch(gaddr, s, buf);
+        // ref->WriteBatch(gaddr, s, buf);
     }
     virtual void Read(GAddr gaddr, size_t s, void *buf) override { ref->Read(gaddr, s, buf); }
 

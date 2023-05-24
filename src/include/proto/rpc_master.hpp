@@ -8,6 +8,7 @@
 namespace rpc_master {
 
 struct JoinDaemonRequest {
+    mac_id_t mac_id;  // unused
     IPv4String ip;
     uint16_t port;
     rack_id_t rack_id;
@@ -17,7 +18,6 @@ struct JoinDaemonRequest {
 struct JoinDaemonReply {
     mac_id_t daemon_mac_id;
     mac_id_t master_mac_id;
-    IPv4String rdma_ipv4;
     uint16_t rdma_port;
 
     struct RackInfo {
@@ -25,7 +25,6 @@ struct JoinDaemonReply {
         mac_id_t daemon_id;
         IPv4String daemon_ipv4;
         uint16_t daemon_erpc_port;
-        IPv4String daemon_rdma_ipv4;
         uint16_t daemon_rdma_port;
     };
 
@@ -44,6 +43,7 @@ void joinDaemon(MasterContext& master_context, MasterToDaemonConnection& daemon_
                 JoinDaemonRequest& req, ResponseHandle<JoinDaemonReply>& resp_handle);
 
 struct JoinClientRequest {
+    mac_id_t mac_id;  // unused
     rack_id_t rack_id;
 };
 struct JoinClientReply {
@@ -145,7 +145,9 @@ struct UnLatchRemotePageRequest {
     mac_id_t mac_id;
     page_id_t page_id;
 };
-struct UnLatchRemotePageReply {};
+struct UnLatchRemotePageReply {
+    bool ret;
+};
 /**
  * @brief 解锁远端page
  *
@@ -163,11 +165,13 @@ struct UnLatchPageAndSwapRequest {
     page_id_t page_id;
     mac_id_t new_daemon_id;
     rack_id_t new_rack_id;
-    page_id_t page_id_swap;         // invalid 不换出
+    page_id_t page_id_swap;  // invalid 不换出
     mac_id_t new_daemon_id_swap;
     rack_id_t new_rack_id_swap;
 };
-struct UnLatchPageAndSwapReply {};
+struct UnLatchPageAndSwapReply {
+    bool ret;
+};
 /**
  * @brief 解锁远端page，并将该page转移至该daemon手中
  *

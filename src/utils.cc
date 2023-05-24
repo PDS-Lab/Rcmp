@@ -19,8 +19,6 @@ void threadBindCore(int core_id) {
     DLOG_ASSERT(result == 0, "Error: Failed to bind thread to core %d", core_id);
 }
 
-uint64_t rdtsc() { return __builtin_ia32_rdtsc(); }
-
 uint64_t getTimestamp() {
     struct timeval tv;
     gettimeofday(&tv, nullptr);
@@ -32,4 +30,3 @@ IPv4String &IPv4String::operator=(const std::string &ip) {
     strcpy(raw.ipstr, ip.c_str());
     return *this;
 }
-std::string IPv4String::get_string() const { return std::string(raw.ipstr); }

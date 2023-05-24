@@ -25,7 +25,6 @@ void joinDaemon(MasterContext& master_context, MasterToDaemonConnection& daemon_
 
     reply.daemon_mac_id = mac_id;
     reply.master_mac_id = master_context.m_master_id;
-    reply.rdma_ipv4 = local_addr.first;
     reply.rdma_port = local_addr.second;
 
     reply.other_rack_count = old_rack_count;
@@ -38,7 +37,6 @@ void joinDaemon(MasterContext& master_context, MasterToDaemonConnection& daemon_
             info.daemon_id = conn->daemon_id;
             info.daemon_ipv4 = conn->ip;
             info.daemon_erpc_port = conn->port;
-            info.daemon_rdma_ipv4 = peer_addr.first;
             info.daemon_rdma_port = peer_addr.second;
             i++;
             return true;
@@ -67,7 +65,7 @@ void joinDaemon(MasterContext& master_context, MasterToDaemonConnection& daemon_
     master_context.m_cluster_manager.connect_table.insert(daemon_connection.daemon_id,
                                                           &daemon_connection);
 
-    master_context.m_page_id_allocator->Expand(rack_table->max_free_page_num);
+    master_context.m_page_directory.page_id_allocator->Expand(rack_table->max_free_page_num);
 
     DLOG("Connect with daemon [rack:%d --- id:%d]", daemon_connection.rack_id,
          daemon_connection.daemon_id);
@@ -97,7 +95,7 @@ void allocPage(MasterContext& master_context, MasterToDaemonConnection& daemon_c
     RackMacTable* rack_table =
         master_context.m_cluster_manager.cluster_rack_table[daemon_connection.rack_id];
 
-    page_id_t new_page_id = master_context.m_page_id_allocator->MultiGen(req.count);
+    page_id_t new_page_id = master_context.m_page_directory.page_id_allocator->MultiGen(req.count);
     DLOG_ASSERT(new_page_id != invalid_page_id, "no unusable page");
 
     size_t current_rack_alloc_page_num = std::min(
@@ -116,7 +114,7 @@ void allocPage(MasterContext& master_context, MasterToDaemonConnection& daemon_c
         // 如果current daemon没有多余page，则向其他rack daemon注册allocPageMemory
 
         struct CTX {
-            ErpcClient::ErpcFuture<rpc_daemon::AllocPageMemoryReply, CortPromise<void>> fu;
+            decltype(((ErpcClient*)0)->call<CortPromise>(rpc_daemon::allocPageMemory, {})) fu;
             RackMacTable* rack_table;
             page_id_t alloc_start_page_id;
             size_t alloc_cnt;
@@ -128,9 +126,10 @@ void allocPage(MasterContext& master_context, MasterToDaemonConnection& daemon_c
         // 遍历rack表，找出有空闲page的rack分配
         master_context.m_cluster_manager.cluster_rack_table.foreach_all(
             [&](std::pair<const rack_id_t, RackMacTable*>& p) {
-                size_t rack_alloc_page_num =
-                    std::min(other_rack_alloc_page_num,
-                             p.second->max_free_page_num - p.second->current_allocated_page_num);
+                RackMacTable* rack_table = p.second;
+                size_t rack_alloc_page_num = std::min(
+                    other_rack_alloc_page_num,
+                    rack_table->GetMaxFreePageNum() - rack_table->GetCurrentAllocatedPageNum());
 
                 if (rack_alloc_page_num == 0) {
                     return true;
@@ -138,9 +137,9 @@ void allocPage(MasterContext& master_context, MasterToDaemonConnection& daemon_c
 
                 CTX ctx;
                 ctx.alloc_start_page_id = new_page_id + alloced_page_idx;
-                ctx.rack_table = p.second;
+                ctx.rack_table = rack_table;
                 ctx.alloc_cnt = rack_alloc_page_num;
-                ctx.fu = p.second->daemon_connect->erpc_conn->call<CortPromise>(
+                ctx.fu = rack_table->daemon_connect->erpc_conn->call<CortPromise>(
                     rpc_daemon::allocPageMemory,
                     {
                         .mac_id = master_context.m_master_id,
@@ -187,7 +186,7 @@ void freePage(MasterContext& master_context, MasterToDaemonConnection& daemon_co
     rack_table = master_context.m_cluster_manager.cluster_rack_table[page_meta->rack_id];
 
     master_context.m_page_directory.RemovePage(rack_table, req.start_page_id);
-    master_context.m_page_id_allocator->Recycle(req.start_page_id);
+    master_context.m_page_directory.page_id_allocator->Recycle(req.start_page_id);
 
     resp_handle.Init();
     FreePageReply& reply = resp_handle.Get();
@@ -230,6 +229,7 @@ void unLatchRemotePage(MasterContext& master_context, MasterToDaemonConnection& 
 
     resp_handle.Init();
     auto& reply = resp_handle.Get();
+    reply.ret = true;
 }
 
 void unLatchPageAndSwap(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
@@ -245,7 +245,7 @@ void unLatchPageAndSwap(MasterContext& master_context, MasterToDaemonConnection&
     //      req.new_rack_id, req.new_daemon_id, daemon_connection.daemon_id);
 
     if (req.page_id_swap != invalid_page_id) {
-        page_meta = page_meta = master_context.m_page_directory.FindPage(req.page_id_swap);
+        page_meta = master_context.m_page_directory.FindPage(req.page_id_swap);
 
         page_meta->rack_id = req.new_rack_id_swap;
         page_meta->daemon_id = req.new_daemon_id_swap;
@@ -260,6 +260,7 @@ void unLatchPageAndSwap(MasterContext& master_context, MasterToDaemonConnection&
 
     resp_handle.Init();
     auto& reply = resp_handle.Get();
+    reply.ret = true;
 }
 
 }  // namespace rpc_master

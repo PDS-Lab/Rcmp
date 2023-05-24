@@ -150,7 +150,7 @@ class UniqueResourceLock {
         : m_pm(std::addressof(lr)), m_owns(false), m_id(id) {}
 
     UniqueResourceLock(__LockResourceManager &lr, ID id, std::try_to_lock_t)
-        : m_pm(std::addressof(lr)), m_owns(lr.try_lock()), m_id(id) {}
+        : m_pm(std::addressof(lr)), m_owns(lr.try_lock(id)), m_id(id) {}
 
     UniqueResourceLock(__LockResourceManager &lr, ID id, std::adopt_lock_t)
         : m_pm(std::addressof(lr)), m_owns(true), m_id(id) {}
@@ -173,18 +173,18 @@ class UniqueResourceLock {
 
     void lock() {
         lockable();
-        m_pm->lock();
+        m_pm->lock(m_id);
         m_owns = true;
     }
 
     bool try_lock() {
         lockable();
-        return m_owns = m_pm->lock();
+        return m_owns = m_pm->lock(m_id);
     }
 
     void unlock() {
         if (!m_owns) std::__throw_system_error(int(std::errc::resource_deadlock_would_occur));
-        m_pm->unlock();
+        m_pm->unlock(m_id);
         m_owns = false;
     }
 
@@ -228,7 +228,7 @@ class SharedResourceLock {
         : m_pm(std::addressof(lr)), m_owns(false), m_id(id) {}
 
     SharedResourceLock(__LockResourceManager &lr, ID id, std::try_to_lock_t)
-        : m_pm(std::addressof(lr)), m_owns(lr.try_lock_shared()), m_id(id) {}
+        : m_pm(std::addressof(lr)), m_owns(lr.try_lock_shared(m_id)), m_id(id) {}
 
     SharedResourceLock(__LockResourceManager &lr, ID id, std::adopt_lock_t)
         : m_pm(std::addressof(lr)), m_owns(true), m_id(id) {}
@@ -251,18 +251,18 @@ class SharedResourceLock {
 
     void lock() {
         lockable();
-        m_pm->lock_shared();
+        m_pm->lock_shared(m_id);
         m_owns = true;
     }
 
     bool try_lock() {
         lockable();
-        return m_owns = m_pm->lock_shared();
+        return m_owns = m_pm->lock_shared(m_id);
     }
 
     void unlock() {
         if (!m_owns) std::__throw_system_error(int(std::errc::resource_deadlock_would_occur));
-        m_pm->unlock_shared();
+        m_pm->unlock_shared(m_id);
         m_owns = false;
     }
 

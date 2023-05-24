@@ -23,11 +23,6 @@
 
 using namespace std::chrono_literals;
 
-DaemonContext &DaemonContext::getInstance() {
-    static DaemonContext daemon_ctx;
-    return daemon_ctx;
-}
-
 void DaemonContext::InitCXLPool() {
     // 1. 打开cxl设备映射
     m_cxl_memory_addr =
@@ -134,7 +129,7 @@ void DaemonContext::InitRDMARC() {
         DLOG("[RDMA_RC] Disconnect: %s", conn->get_peer_addr().first.c_str());
     });
 
-    m_listen_conn.listen(m_options.daemon_rdma_ip);
+    m_listen_conn.listen(m_options.daemon_ip);
 }
 
 void DaemonContext::ConnectWithMaster() {
@@ -168,7 +163,7 @@ void DaemonContext::ConnectWithMaster() {
     DLOG_ASSERT(master_connection.master_id == master_id, "Fail to get master id");
     DLOG_ASSERT(m_daemon_id != master_id, "Fail to get daemon id");
 
-    std::string peer_ip(resp.rdma_ipv4.get_string());
+    std::string peer_ip = m_options.master_ip;
     uint16_t peer_port(resp.rdma_port);
 
     RDMARCConnectParam param;
@@ -208,7 +203,7 @@ void DaemonContext::ConnectWithMaster() {
 
         auto &conn_resp = fu.get();
 
-        std::string peer_ip(conn_resp.rdma_ipv4.get_string());
+        std::string peer_ip = dd_conn->ip;
         uint16_t peer_port(conn_resp.rdma_port);
 
         RDMARCConnectParam param;
@@ -237,38 +232,11 @@ void DaemonContext::RegisterCXLMR() {
     }
 }
 
-ibv_mr *DaemonContext::GetMR(void *p) {
-    if (p >= m_cxl_format.start_addr && p < m_cxl_format.end_addr) {
-        return m_rdma_page_mr_table[(reinterpret_cast<uintptr_t>(p) -
-                                     reinterpret_cast<const uintptr_t>(m_cxl_format.start_addr)) /
-                                    mem_region_aligned_size];
-    } else {
-        return m_rdma_mr_table[reinterpret_cast<void *>(
-            align_floor(reinterpret_cast<uintptr_t>(p), mem_region_aligned_size))];
-    }
-}
-
-RemotePageMetaCache::RemotePageMetaCache(size_t max_recent_record, float hot_decay_lambda)
-    : stats(max_recent_record, hot_decay_lambda, hot_stat_freq_timeout_interval) {}
-
-msgq::MsgQueue *MsgQueueManager::allocQueue() {
-    uintptr_t ring_off = msgq_allocator->allocate(1);
-    DLOG_ASSERT(ring_off != -1, "Can't alloc msg queue");
-    msgq::MsgQueue *r =
-        reinterpret_cast<msgq::MsgQueue *>(reinterpret_cast<uintptr_t>(start_addr) + ring_off);
-    new (r) msgq::MsgQueue();
-    ring_cnt++;
-    return r;
-}
-
-void MsgQueueManager::freeQueue(msgq::MsgQueue *msgq) { DLOG_FATAL("Not Support"); }
-
 int main(int argc, char *argv[]) {
     cmdline::parser cmd;
     cmd.add<std::string>("master_ip");
     cmd.add<uint16_t>("master_port");
     cmd.add<std::string>("daemon_ip");
-    cmd.add<std::string>("daemon_rdma_ip");
     cmd.add<uint16_t>("daemon_port");
     cmd.add<rack_id_t>("rack_id");
     cmd.add<std::string>("cxl_devdax_path");
@@ -282,7 +250,6 @@ int main(int argc, char *argv[]) {
     options.master_ip = cmd.get<std::string>("master_ip");
     options.master_port = cmd.get<uint16_t>("master_port");
     options.daemon_ip = cmd.get<std::string>("daemon_ip");
-    options.daemon_rdma_ip = cmd.get<std::string>("daemon_rdma_ip");
     options.daemon_port = cmd.get<uint16_t>("daemon_port");
     options.rack_id = cmd.get<rack_id_t>("rack_id");
     options.with_cxl = true;

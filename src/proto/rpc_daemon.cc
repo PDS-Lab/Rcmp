@@ -36,17 +36,6 @@ namespace rpc_daemon {
 void delPageRefAndCacheBroadcast(DaemonContext& daemon_context, page_id_t page_id,
                                  PageMetadata* page_meta, mac_id_t unless_daemon = -1);
 
-/**
- * @brief 通知当前rack下所有访问过该page的client删除相应的缓存
- *
- * @param daemon_context
- * @param page_id
- * @param page_meta
- * @return void
- */
-void delPageCacheBroadcast(DaemonContext& daemon_context, page_id_t page_id,
-                           PageMetadata* page_meta);
-
 /*************************************************************/
 
 void joinRack(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
@@ -69,14 +58,14 @@ void joinRack(DaemonContext& daemon_context, DaemonToClientConnection& client_co
 
     // 2. 分配msg queue
     msgq::MsgQueue* q = daemon_context.m_msgq_manager.allocQueue();
-    client_connection.msgq_rpc = std::make_unique<MsgQClient>(
+    client_connection.msgq_conn = std::make_unique<MsgQClient>(
         msgq::MsgQueueRPC{daemon_context.m_msgq_manager.nexus.get(), q,
                           daemon_context.m_msgq_manager.nexus->GetPublicMsgQ(), &daemon_context});
 
     // 3. 通过UDP通知client创建msgq
     msgq::MsgUDPConnPacket pkt;
     pkt.recv_q_off = reinterpret_cast<uintptr_t>(q) -
-                     reinterpret_cast<uintptr_t>(daemon_context.m_cxl_memory_addr);
+                     reinterpret_cast<uintptr_t>(daemon_context.m_cxl_format.msgq_zone_start_addr);
     UDPClient<msgq::MsgUDPConnPacket> udp_cli;
     udp_cli.send(req.client_ipv4.get_string(), req.client_port, pkt);
 
@@ -111,7 +100,6 @@ void crossRackConnect(DaemonContext& daemon_context, DaemonToDaemonConnection& d
     resp_handle.Init();
     auto& reply = resp_handle.Get();
     reply.daemon_mac_id = daemon_context.m_daemon_id;
-    reply.rdma_ipv4 = local_addr.first;
     reply.rdma_port = local_addr.second;
 }
 
@@ -119,7 +107,7 @@ void getPageCXLRefOrProxy(DaemonContext& daemon_context,
                           DaemonToClientConnection& client_connection,
                           GetPageCXLRefOrProxyRequest& req,
                           ResponseHandle<GetPageCXLRefOrProxyReply>& resp_handle) {
-    PageMetadata* page_metadata;
+    PageMetadata* page_meta;
     page_id_t page_id = GetPageID(req.gaddr);
     offset_t page_offset = GetPageOffset(req.gaddr);
 
@@ -127,19 +115,17 @@ retry:
     SharedResourceLock<page_id_t, LockResourceManager<page_id_t, CortSharedMutex>> page_ref_lock(
         daemon_context.m_page_ref_lock, page_id);
 
-    auto page_it = daemon_context.m_page_table.table.find(page_id);
-
-    if (page_it != daemon_context.m_page_table.table.end()) {
+    page_meta = daemon_context.m_page_table.FindPageMeta(page_id);
+    if (page_meta != nullptr) {
         daemon_context.m_stats.page_hit++;
 
-        page_metadata = page_it->second;
         // DLOG("insert ref_client for page %lu", page_id);
-        page_metadata->ref_client.insert(&client_connection);
+        page_meta->ref_client.insert(&client_connection);
 
         resp_handle.Init();
         auto& reply = resp_handle.Get();
         reply.refs = true;
-        reply.offset = page_metadata->cxl_memory_offset;
+        reply.offset = page_meta->cxl_memory_offset;
 
         return;
     }
@@ -205,7 +191,7 @@ retry:
     auto page_hot_iter = page_hot_pair.first;
     RemotePageMetaCache* rem_page_md_cache = page_hot_iter->second;
 
-    size_t current_hot = rem_page_md_cache->stats.add(getTimestamp());
+    size_t current_hot = rem_page_md_cache->Update();
     // 只有刚好等于水位线时，才进行迁移
     if (current_hot != daemon_context.m_options.hot_swap_watermark) {
         daemon_context.m_stats.page_dio++;
@@ -225,11 +211,11 @@ retry:
         switch (req.type) {
             case GetPageCXLRefOrProxyRequest::WRITE: {
                 // 5.1 如果是写操作,等待获取CN上的数据
-                wd_fu = client_connection.msgq_rpc->call<CortPromise>(
+                wd_fu = client_connection.msgq_conn->call<CortPromise>(
                     rpc_client::getCurrentWriteData, {
                                                          .mac_id = daemon_context.m_daemon_id,
-                                                         .dio_write_buf = req.cn_write_buf,
-                                                         .dio_write_size = req.cn_write_size,
+                                                         .dio_write_buf = req.u.write.cn_write_buf,
+                                                         .dio_write_size = req.u.write.cn_write_size,
                                                      });
 
                 auto& wd_resp = wd_fu.get();
@@ -239,28 +225,28 @@ retry:
                 ibv_mr* mr = daemon_context.GetMR(wd_resp.data);
                 my_data_buf = reinterpret_cast<uintptr_t>(wd_resp.data);
                 my_lkey = mr->rkey;
-                my_size = req.cn_write_size;
+                my_size = req.u.write.cn_write_size;
                 break;
             }
             case GetPageCXLRefOrProxyRequest::READ: {
                 // 5.2 如果是读操作，则动态申请读取resp buf
-                resp_handle.Init(req.cn_read_size);
+                resp_handle.Init(req.u.read.cn_read_size);
                 auto& reply = resp_handle.Get();
 
                 ibv_mr* mr = daemon_context.GetMR(reply.read_data);
                 my_data_buf = reinterpret_cast<uintptr_t>(reply.read_data);
                 my_lkey = mr->rkey;
-                my_size = req.cn_read_size;
+                my_size = req.u.read.cn_read_size;
                 break;
             }
             case GetPageCXLRefOrProxyRequest::WRITE_RAW: {
                 // 5.3 如果是写操作,直接获取req上的写数据
                 resp_handle.Init();
 
-                ibv_mr* mr = daemon_context.GetMR(req.cn_write_raw_buf);
-                my_data_buf = reinterpret_cast<uintptr_t>(req.cn_write_raw_buf);
+                ibv_mr* mr = daemon_context.GetMR(req.u.write_raw.cn_write_raw_buf);
+                my_data_buf = reinterpret_cast<uintptr_t>(req.u.write_raw.cn_write_raw_buf);
                 my_lkey = mr->rkey;
-                my_size = req.cn_write_size;
+                my_size = req.u.write_raw.cn_write_raw_size;
                 break;
             }
         }
@@ -326,14 +312,14 @@ retry:
         // 1 为page swap的区域准备内存，并确定是否需要换出页
         dest_daemon_conn = rem_page_md_cache->remote_page_daemon_conn;
 
-        bool is_swap = false;
+        bool is_swap = false;    // request return
         bool need_swap = false;  // swap_page_id != invalid_page_id
         page_id_t swap_page_id = invalid_page_id;
         uintptr_t swapin_addr, swapout_addr = 0;
         uint32_t swapin_key, swapout_key = 0;
         ibv_mr* swapin_mr;
         ibv_mr* swapout_mr;
-        PageMetadata* swap_page_metadata;
+        PageMetadata* swap_page_meta;
         UniqueResourceLock<page_id_t, LockResourceManager<page_id_t, CortSharedMutex>>
             swapout_page_ref_lock;
 
@@ -341,53 +327,53 @@ retry:
 
         // 首先为即将迁移到本地的page申请内存
 
-        page_metadata = daemon_context.m_page_table.AllocPageMemory();
+        page_meta = daemon_context.m_page_table.AllocPageMemory();
         // DLOG("page_metadata->offset = %#lx", page_metadata->cxl_memory_offset);
 
         // 本地不够，淘汰page
         if (daemon_context.m_page_table.NearlyFull()) {
-            // 遍历page table中未被client引用的page作为swap page
-            thread_local std::mt19937 eng(rand());
-            daemon_context.m_page_table.table.random_foreach_all(
-                eng, [&](std::pair<const page_id_t, PageMetadata*>& p) {
-                    if (p.second->ref_client.empty() && p.second->TryPin()) {
-                        swap_page_id = p.first;
-                        need_swap = true;
-                        return false;
-                    }
-                    return true;
-                });
+            daemon_context.m_page_table.RandomPickUnvisitPage(false, need_swap, swap_page_id,
+                                                              swap_page_meta);
 
             // 所有的page都被client引用，则向client获取最久远的page作为swap page
             if (!need_swap) {
                 uint64_t oldest_time = UINT64_MAX;
-                std::priority_queue<std::pair<uint64_t, page_id_t>,
-                                    std::vector<std::pair<uint64_t, page_id_t>>,
-                                    std::greater<std::pair<uint64_t, page_id_t>>>
-                    oldest_heap;
+                MinHeap<std::pair<uint64_t, page_id_t>> oldest_heap;
 
-                for (auto& client_conn : daemon_context.m_conn_manager.m_client_connect_table) {
-                    auto fu = client_conn->msgq_rpc->call<CortPromise>(
-                        rpc_client::getPagePastAccessFreq, {
-                                                               .mac_id = daemon_context.m_daemon_id,
-                                                           });
+                // 向所有client发起获取最旧page的请求
+                {
+                    std::vector<decltype(((MsgQClient*)0)
+                                             ->call<CortPromise>(rpc_client::getPagePastAccessFreq,
+                                                                 {}))>
+                        fu_vec;
 
-                    auto& wd_resp = fu.get();
+                    for (auto& client_conn : daemon_context.m_conn_manager.m_client_connect_table) {
+                        auto fu = client_conn->msgq_conn->call<CortPromise>(
+                            rpc_client::getPagePastAccessFreq,
+                            {
+                                .mac_id = daemon_context.m_daemon_id,
+                            });
 
-                    page_id_t oldest_page_id = wd_resp.oldest_page_id;
-                    uint64_t last_access_ts = wd_resp.last_access_ts;
+                        fu_vec.push_back(std::move(fu));
+                    }
 
-                    oldest_heap.push({last_access_ts, oldest_page_id});
+                    for (auto& fu : fu_vec) {
+                        auto& wd_resp = fu.get();
+
+                        if (wd_resp.oldest_page_id != invalid_page_id) {
+                            oldest_heap.push({wd_resp.last_access_ts, wd_resp.oldest_page_id});
+                        }
+                    }
                 }
 
                 while (!oldest_heap.empty()) {
                     auto oldest_page_pair = oldest_heap.top();
                     oldest_heap.pop();
-                    auto p_swap_page_meta =
-                        daemon_context.m_page_table.table.find(oldest_page_pair.second);
-                    if (p_swap_page_meta != daemon_context.m_page_table.table.end() &&
-                        p_swap_page_meta->second->TryPin()) {
+                    PageMetadata* swap_page_meta_tmp =
+                        daemon_context.m_page_table.FindPageMeta(oldest_page_pair.second);
+                    if (swap_page_meta_tmp != nullptr && swap_page_meta_tmp->TryPin()) {
                         swap_page_id = oldest_page_pair.second;
+                        swap_page_meta = swap_page_meta_tmp;
                         need_swap = true;
                         break;
                     }
@@ -396,22 +382,14 @@ retry:
 
             // 如果client获取最久远的page正在被Pin，则随机选择一个未Pin的page
             if (!need_swap) {
-                daemon_context.m_page_table.table.random_foreach_all(
-                    eng, [&](std::pair<const page_id_t, PageMetadata*>& random_page_pair) {
-                        if (random_page_pair.second->TryPin()) {
-                            swap_page_id = random_page_pair.first;
-                            need_swap = true;
-                            return false;
-                        }
-                        return true;
-                    });
+                daemon_context.m_page_table.RandomPickUnvisitPage(true, need_swap, swap_page_id,
+                                                                  swap_page_meta);
             }
 
             DLOG_ASSERT(need_swap);
             // DLOG("swap = %ld", swap_page_id);
             /* 1.2 注册换出页的地址，并获取rkey */
-            swap_page_metadata = daemon_context.m_page_table.table[swap_page_id];
-            swapout_addr = daemon_context.GetVirtualAddr(swap_page_metadata->cxl_memory_offset);
+            swapout_addr = daemon_context.GetVirtualAddr(swap_page_meta->cxl_memory_offset);
             swapout_mr = daemon_context.GetMR(reinterpret_cast<void*>(swapout_addr));
             swapout_key = swapout_mr->rkey;
 
@@ -421,7 +399,7 @@ retry:
                     daemon_context.m_page_ref_lock, swap_page_id);
         }
 
-        swapin_addr = daemon_context.GetVirtualAddr(page_metadata->cxl_memory_offset);
+        swapin_addr = daemon_context.GetVirtualAddr(page_meta->cxl_memory_offset);
         swapin_mr = daemon_context.GetMR(reinterpret_cast<void*>(swapin_addr));
         swapin_key = swapin_mr->rkey;
 
@@ -446,7 +424,7 @@ retry:
             // 如果有需要换出的页，则广播有当前要swapout的page的ref的DN，删除其ref，并通知当前rack下所有访问过该page的client删除相应的缓存
             if (need_swap) {
                 // DLOG("swap delPageRefAndCacheBroadcast");
-                delPageRefAndCacheBroadcast(daemon_context, swap_page_id, swap_page_metadata);
+                delPageRefAndCacheBroadcast(daemon_context, swap_page_id, swap_page_meta);
             }
 
             // 2.2 等待latch完成
@@ -480,10 +458,10 @@ retry:
 
         // 迁移完成，更新tlb
         {
-            daemon_context.m_page_table.ApplyPageMemory(page_id, page_metadata);
+            daemon_context.m_page_table.ApplyPageMemory(page_id, page_meta);
             if (is_swap) {
                 // 回收迁移走的页面
-                daemon_context.m_page_table.CancelPageMemory(swap_page_id, swap_page_metadata);
+                daemon_context.m_page_table.CancelPageMemory(swap_page_id, swap_page_meta);
             } else {
                 // TODO: 拒绝swap
             }
@@ -581,7 +559,8 @@ void free(DaemonContext& daemon_context, DaemonToClientConnection& client_connec
 
 void getPageRDMARef(DaemonContext& daemon_context, DaemonToDaemonConnection& daemon_connection,
                     GetPageRDMARefRequest& req, ResponseHandle<GetPageRDMARefReply>& resp_handle) {
-    PageMetadata* page_meta = daemon_context.m_page_table.table[req.page_id];
+    PageMetadata* page_meta = daemon_context.m_page_table.FindPageMeta(req.page_id);
+    DLOG_ASSERT(page_meta != nullptr, "Can't find page %lu", req.page_id);
 
     uintptr_t local_addr = daemon_context.GetVirtualAddr(page_meta->cxl_memory_offset);
     ibv_mr* mr = daemon_context.GetMR(reinterpret_cast<void*>(local_addr));
@@ -626,7 +605,8 @@ void tryMigratePage(DaemonContext& daemon_context, DaemonToDaemonConnection& dae
     UniqueResourceLock<page_id_t, LockResourceManager<page_id_t, CortSharedMutex>> ref_lock(
         daemon_context.m_page_ref_lock, req.page_id);
 
-    PageMetadata* page_meta = daemon_context.m_page_table.table[req.page_id];
+    PageMetadata* page_meta = daemon_context.m_page_table.FindPageMeta(req.page_id);
+    DLOG_ASSERT(page_meta != nullptr, "Can't find page %lu", req.page_id);
     // DLOG("DN: %u recv tryMigratePage for page %lu. swap page = %lu", daemon_context.m_daemon_id,
     //      req.page_id, req.swap_page_id);
 
@@ -734,11 +714,11 @@ void delPageRefAndCacheBroadcast(DaemonContext& daemon_context, page_id_t page_i
         // DLOG("DN %u: delPageCacheBroadcast client_id = %u", daemon_context.m_daemon_id,
         //      client_conn->client_id);
 
-        auto fu = client_conn->msgq_rpc->call<CortPromise>(rpc_client::removePageCache,
-                                                           {
-                                                               .mac_id = daemon_context.m_daemon_id,
-                                                               .page_id = page_id,
-                                                           });
+        auto fu = client_conn->msgq_conn->call<CortPromise>(
+            rpc_client::removePageCache, {
+                                             .mac_id = daemon_context.m_daemon_id,
+                                             .page_id = page_id,
+                                         });
 
         remove_cache_fu_vec.push_back(std::move(fu));
     }

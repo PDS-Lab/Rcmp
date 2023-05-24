@@ -3,9 +3,12 @@
 #include <unistd.h>
 
 #include <atomic>
+#include <functional>
 #include <future>
+#include <queue>
 #include <string>
 #include <thread>
+#include <vector>
 
 #define CACHE_ALIGN __attribute__((aligned(cache_line_size)))
 
@@ -17,6 +20,12 @@
 #else
 #define DEBUGY(cond) if (UNLIKELY(cond))
 #endif  // NDEBUG
+
+template <typename T>
+using MaxHeap = std::priority_queue<T, std::vector<T>, std::less<T>>;
+
+template <typename T>
+using MinHeap = std::priority_queue<T, std::vector<T>, std::greater<T>>;
 
 template <typename D>
 constexpr D div_ceil(D x, uint64_t div) {
@@ -38,8 +47,9 @@ D align_floor(D x, uint64_t aligned) {
     return div_floor(x, aligned) * aligned;
 }
 
+inline uint64_t rdtsc() { return __builtin_ia32_rdtsc(); }
+
 void threadBindCore(int core_id);
-uint64_t rdtsc();
 uint64_t getTimestamp();
 
 class IPv4String {
@@ -52,7 +62,7 @@ class IPv4String {
     IPv4String &operator=(const IPv4String &ip) = default;
     IPv4String &operator=(IPv4String &&ip) = default;
 
-    std::string get_string() const;
+    std::string get_string() const { return std::string(raw.ipstr); }
 
    private:
     struct {
@@ -107,24 +117,22 @@ struct atomic_po_val_t {
         uint64_t raw;
     };
 
-    inline atomic_po_val_t load(std::memory_order __m = std::memory_order_seq_cst) const {
+    atomic_po_val_t load(std::memory_order __m = std::memory_order_seq_cst) const {
         atomic_po_val_t o;
         o.raw = __atomic_load_n(&raw, (int)__m);
         return o;
     }
 
-    inline uint32_t fetch_add_cnt(uint32_t cnt_,
-                                  std::memory_order __m = std::memory_order_seq_cst) {
+    uint32_t fetch_add_cnt(uint32_t cnt_, std::memory_order __m = std::memory_order_seq_cst) {
         return __atomic_fetch_add(&this->cnt, cnt_, (int)__m);
     }
 
-    inline uint32_t fetch_add_pos(uint32_t pos_,
-                                  std::memory_order __m = std::memory_order_seq_cst) {
+    uint32_t fetch_add_pos(uint32_t pos_, std::memory_order __m = std::memory_order_seq_cst) {
         return __atomic_fetch_add(&this->pos, pos_, (int)__m);
     }
 
-    inline atomic_po_val_t fetch_add_both(uint32_t pos, uint32_t cnt,
-                                          std::memory_order __m = std::memory_order_seq_cst) {
+    atomic_po_val_t fetch_add_both(uint32_t pos, uint32_t cnt,
+                                   std::memory_order __m = std::memory_order_seq_cst) {
         atomic_po_val_t o;
         o.cnt = cnt;
         o.pos = pos;
@@ -132,9 +140,9 @@ struct atomic_po_val_t {
         return o;
     }
 
-    inline bool compare_exchange_weak(atomic_po_val_t &expected, atomic_po_val_t desired,
-                                      std::memory_order __s = std::memory_order_seq_cst,
-                                      std::memory_order __f = std::memory_order_seq_cst) {
+    bool compare_exchange_weak(atomic_po_val_t &expected, atomic_po_val_t desired,
+                               std::memory_order __s = std::memory_order_seq_cst,
+                               std::memory_order __f = std::memory_order_seq_cst) {
         return __atomic_compare_exchange_n(&raw, &expected.raw, desired.raw, true, (int)__s,
                                            (int)__f);
     }

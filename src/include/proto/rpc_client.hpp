@@ -10,7 +10,9 @@ struct RemovePageCacheRequest {
     mac_id_t mac_id;
     page_id_t page_id;
 };
-struct RemovePageCacheReply {};
+struct RemovePageCacheReply {
+    bool ret;
+};
 /**
  * @brief 清理page cache
  *

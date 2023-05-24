@@ -12,6 +12,7 @@
 namespace rpc_daemon {
 
 struct JoinRackRequest {
+    mac_id_t mac_id;  // unused
     IPv4String client_ipv4;
     uint16_t client_port;
     rack_id_t rack_id;
@@ -40,7 +41,6 @@ struct CrossRackConnectRequest {
 };
 struct CrossRackConnectReply {
     mac_id_t daemon_mac_id;
-    IPv4String rdma_ipv4;
     uint16_t rdma_port;
 };
 void crossRackConnect(DaemonContext& daemon_context, DaemonToDaemonConnection& daemon_connection,
@@ -48,6 +48,7 @@ void crossRackConnect(DaemonContext& daemon_context, DaemonToDaemonConnection& d
                       ResponseHandle<CrossRackConnectReply>& resp_handle);
 
 struct GetPageCXLRefOrProxyRequest {
+    mac_id_t mac_id;
     enum {
         READ,
         WRITE,
@@ -55,18 +56,18 @@ struct GetPageCXLRefOrProxyRequest {
     } type;
     rchms::GAddr gaddr;
     union {
-        struct {  // type == READ
-            size_t cn_read_size;
-        };
         struct {  // type == WRITE
             size_t cn_write_size;
             void* cn_write_buf;
-        };
+        } write;
+        struct {  // type == READ
+            size_t cn_read_size;
+        } read;
         struct {  // type == WRITE_RAW
             size_t cn_write_raw_size;
             uint8_t cn_write_raw_buf[0];
-        };
-    };
+        } write_raw;
+    } u;
 };
 struct GetPageCXLRefOrProxyReply {
     bool refs;
@@ -114,6 +115,7 @@ void allocPageMemory(DaemonContext& daemon_context, DaemonToMasterConnection& ma
                      ResponseHandle<AllocPageMemoryReply>& resp_handle);
 
 struct AllocRequest {
+    mac_id_t mac_id;
     size_t size;
 };
 struct AllocReply {
@@ -130,6 +132,7 @@ struct AllocReply {
 void alloc(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
            AllocRequest& req, ResponseHandle<AllocReply>& resp_handle);
 struct AllocPageRequest {
+    mac_id_t mac_id;
     size_t count;
 };
 struct AllocPageReply {
@@ -149,6 +152,7 @@ void allocPage(DaemonContext& daemon_context, DaemonToClientConnection& client_c
                AllocPageRequest& req, ResponseHandle<AllocPageReply>& resp_handle);
 
 struct FreePageRequest {
+    mac_id_t mac_id;
     page_id_t start_page_id;
     size_t count;
 };
@@ -166,6 +170,7 @@ void freePage(DaemonContext& daemon_context, DaemonToClientConnection& client_co
               FreePageRequest& req, ResponseHandle<FreePageReply>& resp_handle);
 
 struct FreeRequest {
+    mac_id_t mac_id;
     rchms::GAddr gaddr;
     size_t n;
 };
@@ -249,6 +254,7 @@ void tryMigratePage(DaemonContext& daemon_context, DaemonToDaemonConnection& dae
 /************************* for test ***************************/
 
 struct __TestDataSend1Request {
+    mac_id_t mac_id;
     size_t size;
     int data[64];
 };
@@ -258,6 +264,7 @@ struct __TestDataSend1Reply {
 };
 
 struct __TestDataSend2Request {
+    mac_id_t mac_id;
     size_t size;
     int data[72];
 };
@@ -274,12 +281,16 @@ void __testdataSend2(DaemonContext& daemon_context, DaemonToClientConnection& cl
                      __TestDataSend2Request& req,
                      ResponseHandle<__TestDataSend2Reply>& resp_handle);
 
-struct __notifyPerfRequest {};
+struct __notifyPerfRequest {
+    mac_id_t mac_id;
+};
 struct __notifyPerfReply {};
 void __notifyPerf(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
                   __notifyPerfRequest& req, ResponseHandle<__notifyPerfReply>& resp_handle);
 
-struct __stopPerfRequest {};
+struct __stopPerfRequest {
+    mac_id_t mac_id;
+};
 struct __stopPerfReply {};
 void __stopPerf(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
                 __stopPerfRequest& req, ResponseHandle<__stopPerfReply>& resp_handle);
