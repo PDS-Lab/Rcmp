@@ -4,6 +4,7 @@
 #include <rdma/rdma_cma.h>
 
 #include <atomic>
+#include <boost/fiber/future/future.hpp>
 #include <functional>
 #include <map>
 #include <string>
@@ -11,6 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "lock.hpp"
 #include "log.hpp"
 #include "utils.hpp"
 
@@ -53,23 +55,6 @@ struct RDMABatch {
     void clear() { m_sge_wrs_.clear(); }
 };
 
-template <size_t StrictBound>
-struct RDMABatchFixed {
-    SgeWr m_sge_wrs_[StrictBound];
-    size_t m_size;
-
-    RDMABatchFixed() : m_size(0) {}
-
-    void clear() { m_size = 0; }
-    size_t size() const { return m_size; }
-    SgeWr &back() { return m_sge_wrs_[size() - 1]; }
-    SgeWr *data() { return m_sge_wrs_; }
-    void push_back(SgeWr &&e) {
-        m_size++;
-        back() = std::move(e);
-    }
-};
-
 struct SyncData;
 
 struct RDMAFuture {
@@ -82,7 +67,7 @@ struct RDMAFuture {
      */
     int try_get();
 
-    SyncData *m_sd_;
+    std::shared_ptr<SyncData> m_sd_;
 };
 
 struct RDMAConnection {
@@ -143,21 +128,7 @@ struct RDMAConnection {
      * @warning
      *  * 该操作成功后会清空batch
      */
-    RDMAFuture submit(RDMABatch &b) {
-        RDMAFuture fu = m_submit_impl(b.m_sge_wrs_.data(), b.m_sge_wrs_.size());
-        if (fu.m_sd_) {
-            b.clear();
-        }
-        return fu;
-    }
-    template <size_t StrictBound>
-    RDMAFuture submit(RDMABatchFixed<StrictBound> &b) {
-        RDMAFuture fu = m_submit_impl(b.data(), b.size());
-        if (fu.m_sd_) {
-            b.clear();
-        }
-        return fu;
-    }
+    RDMAFuture submit(RDMABatch &b);
 
     static std::function<void(RDMAConnection *conn, void *param)> m_hook_connect_;
     static std::function<void(RDMAConnection *conn)> m_hook_disconnect_;
@@ -167,20 +138,25 @@ struct RDMAConnection {
         std::function<void(RDMAConnection *conn)> &&hook_disconnect);
 
     enum conn_type_t {
+        INVALID,
         SENDER,
         LISTENER,
     };
-    conn_type_t conn_type;
+    conn_type_t m_conn_type_;
     volatile bool m_stop_ : 1;
     bool m_atomic_support_ : 1;
     bool m_inline_support_ : 1;
-    std::atomic<uint32_t> m_inflight_count_ = {0};  // 与 m_sending_lock_ 间隔 >64B
+    std::atomic<uint32_t> m_inflight_count_;
     ibv_comp_channel *m_comp_chan_;
     rdma_cm_id *m_cm_id_;
     ibv_pd *m_pd_;
     ibv_cq *m_cq_;
 
     std::thread *m_conn_handler_;
+
+    Mutex m_mu;
+    std::shared_ptr<SyncData> m_current_sd_ = {nullptr};
+    std::vector<SgeWr> m_current_sw_;
 
     bool m_rdma_conn_param_valid_();
     int m_init_ibv_connection_();

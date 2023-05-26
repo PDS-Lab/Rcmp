@@ -1,5 +1,7 @@
 #include "rchms.hpp"
 
+#include <boost/fiber/algo/round_robin.hpp>
+#include <boost/fiber/operations.hpp>
 #include <future>
 #include <memory>
 
@@ -24,71 +26,9 @@ PoolContext::PoolContext(ClientOptions options) {
 
     m_impl->m_options = options;
 
-    // 1. 打开cxl设备
-    m_impl->m_cxl_memory_addr =
-        cxl_open_simulate(m_impl->m_options.cxl_devdax_path, m_impl->m_options.cxl_memory_size,
-                          &m_impl->m_cxl_devdax_fd);
-
-    cxl_memory_open(m_impl->m_cxl_format, m_impl->m_cxl_memory_addr);
-
-    // 2. 与daemon建立连接
-    m_impl->m_udp_conn_recver =
-        std::make_unique<UDPServer<msgq::MsgUDPConnPacket>>(m_impl->m_options.client_port, 1000);
-
-    m_impl->m_msgq_nexus =
-        std::make_unique<msgq::MsgQueueNexus>(m_impl->m_cxl_format.msgq_zone_start_addr);
-
-    m_impl->m_msgq_nexus->register_req_func(
-        RPC_TYPE_STRUCT(rpc_client::getCurrentWriteData)::rpc_type,
-        bind_msgq_rpc_func<false>(rpc_client::getCurrentWriteData));
-    m_impl->m_msgq_nexus->register_req_func(
-        RPC_TYPE_STRUCT(rpc_client::getPagePastAccessFreq)::rpc_type,
-        bind_msgq_rpc_func<false>(rpc_client::getPagePastAccessFreq));
-    m_impl->m_msgq_nexus->register_req_func(RPC_TYPE_STRUCT(rpc_client::removePageCache)::rpc_type,
-                                            bind_msgq_rpc_func<false>(rpc_client::removePageCache));
-
-    m_impl->m_local_rack_daemon_connection.rack_id = m_impl->m_options.rack_id;
-    m_impl->m_local_rack_daemon_connection.msgq_conn =
-        std::make_unique<MsgQClient>(msgq::MsgQueueRPC{
-            m_impl->m_msgq_nexus.get(), m_impl->m_msgq_nexus->GetPublicMsgQ(), nullptr, m_impl});
-
-    // 3. 发送join rack rpc
-    auto fu = m_impl->m_local_rack_daemon_connection.msgq_conn->call<SpinPromise>(
-        rpc_daemon::joinRack, {
-                                  .client_ipv4 = m_impl->m_options.client_ip,
-                                  .client_port = m_impl->m_options.client_port,
-                                  .rack_id = m_impl->m_options.rack_id,
-                              });
-
-    // 4. daemon会发送udp消息，告诉recv queue的偏移地址
-    msgq::MsgUDPConnPacket msg;
-    m_impl->m_udp_conn_recver->recv_blocking(msg);
-
-    m_impl->m_msgq_rpc = std::make_unique<msgq::MsgQueueRPC>(
-        m_impl->m_msgq_nexus.get(), m_impl->m_msgq_nexus->GetPublicMsgQ(),
-        reinterpret_cast<msgq::MsgQueue *>(
-            (reinterpret_cast<uintptr_t>(m_impl->m_cxl_format.msgq_zone_start_addr) +
-             msg.recv_q_off)),
-        m_impl);
-
-    // 启动polling worker
-    m_impl->m_msgq_stop = false;
-    m_impl->m_msgq_worker = std::thread([this]() {
-        while (!m_impl->m_msgq_stop) {
-            m_impl->m_msgq_rpc->run_event_loop_once();
-        }
-    });
-
-    // 5. 正式接收rpc消息
-    auto &resp = fu.get();
-
-    m_impl->m_client_id = resp.client_mac_id;
-    m_impl->m_local_rack_daemon_connection.daemon_id = resp.daemon_mac_id;
-    m_impl->m_local_rack_daemon_connection.msgq_conn =
-        std::make_unique<MsgQClient>(*m_impl->m_msgq_rpc);
-
-    DLOG("Connect with rack %d daemon %d success, my id is %d", m_impl->m_options.rack_id,
-         m_impl->m_local_rack_daemon_connection.daemon_id, m_impl->m_client_id);
+    m_impl->InitCXLPool();
+    m_impl->InitRPCNexus();
+    m_impl->ConnectWithDaemon();
 }
 
 PoolContext::~PoolContext() {
@@ -103,8 +43,6 @@ PoolContext *Open(ClientOptions options) {
 }
 
 void Close(PoolContext *pool_ctx) {
-    // TODO: 关闭连接
-
     delete pool_ctx;
 }
 
@@ -115,12 +53,15 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
 
     // TODO: more page
 
+    auto &ptl_cache_lock = PageThreadLocalCache::getInstance(m_impl->m_tcache_mgr).ptl_cache_lock;
+    auto &ptl = PageThreadLocalCache::getInstance(m_impl->m_tcache_mgr).page_table_cache;
+
     SharedResourceLock<page_id_t, LockResourceManager<page_id_t, SharedMutex>> cache_lock(
-        m_impl->m_ptl_cache_lock, page_id);
+        ptl_cache_lock, page_id);
 
     // DLOG("CN %u: Read page %lu lock", m_impl->m_client_id, page_id);
 
-    page_cache = m_impl->m_page_table_cache.FindCache(page_id);
+    page_cache = ptl.FindCache(page_id);
     if (page_cache == nullptr) {
         // m_impl->m_stats.local_miss++;
 
@@ -146,7 +87,7 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
             return Status::OK;
         }
 
-        page_cache = m_impl->m_page_table_cache.AddCache(page_id, resp.offset);
+        page_cache = ptl.AddCache(page_id, resp.offset);
 
         // DLOG("get ref: %ld --- %#lx", page_id, pageCache->offset);
     }
@@ -167,10 +108,13 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
 
     // TODO: more page
 
-    SharedResourceLock<page_id_t, LockResourceManager<page_id_t, SharedMutex>> cache_lock(
-        m_impl->m_ptl_cache_lock, page_id);
+    auto &ptl_cache_lock = PageThreadLocalCache::getInstance(m_impl->m_tcache_mgr).ptl_cache_lock;
+    auto &ptl = PageThreadLocalCache::getInstance(m_impl->m_tcache_mgr).page_table_cache;
 
-    page_cache = m_impl->m_page_table_cache.FindCache(page_id);
+    SharedResourceLock<page_id_t, LockResourceManager<page_id_t, SharedMutex>> cache_lock(
+        ptl_cache_lock, page_id);
+
+    page_cache = ptl.FindCache(page_id);
     if (page_cache == nullptr) {
         // m_impl->m_stats.local_miss++;
         // DLOG("Write can't find page %ld m_page_table_cache.", page_id);
@@ -212,7 +156,7 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
             return Status::OK;
         }
 
-        page_cache = m_impl->m_page_table_cache.AddCache(page_id, resp.offset);
+        page_cache = ptl.AddCache(page_id, resp.offset);
 
         // DLOG("get ref: %ld --- %#lx", page_id, pageCache->offset);
     }
@@ -313,10 +257,84 @@ const ClientOptions &PoolContext::GetOptions() const { return m_impl->m_options;
 
 }  // namespace rchms
 
+void ClientContext::InitCXLPool() {
+    m_cxl_memory_addr =
+        cxl_open_simulate(m_options.cxl_devdax_path, m_options.cxl_memory_size, &m_cxl_devdax_fd);
+
+    cxl_memory_open(m_cxl_format, m_cxl_memory_addr);
+}
+
+void ClientContext::InitRPCNexus() {
+    m_udp_conn_recver =
+        std::make_unique<UDPServer<msgq::MsgUDPConnPacket>>(m_options.client_port, 1000);
+
+    m_msgq_nexus = std::make_unique<msgq::MsgQueueNexus>(m_cxl_format.msgq_zone_start_addr);
+
+    m_msgq_nexus->register_req_func(RPC_TYPE_STRUCT(rpc_client::getCurrentWriteData)::rpc_type,
+                                    bind_msgq_rpc_func<false>(rpc_client::getCurrentWriteData));
+    m_msgq_nexus->register_req_func(RPC_TYPE_STRUCT(rpc_client::getPagePastAccessFreq)::rpc_type,
+                                    bind_msgq_rpc_func<false>(rpc_client::getPagePastAccessFreq));
+    m_msgq_nexus->register_req_func(RPC_TYPE_STRUCT(rpc_client::removePageCache)::rpc_type,
+                                    bind_msgq_rpc_func<false>(rpc_client::removePageCache));
+}
+
+void ClientContext::InitFiberPool() { m_fiber_pool_.AddFiber(m_options.prealloc_fiber_num); }
+
+void ClientContext::ConnectWithDaemon() {
+    m_local_rack_daemon_connection.rack_id = m_options.rack_id;
+    m_local_rack_daemon_connection.msgq_conn = std::make_unique<MsgQClient>(
+        msgq::MsgQueueRPC{m_msgq_nexus.get(), m_msgq_nexus->GetPublicMsgQ(), nullptr, this});
+
+    // 3. 发送join rack rpc
+    auto fu = m_local_rack_daemon_connection.msgq_conn->call<SpinPromise>(
+        rpc_daemon::joinRack, {
+                                  .client_ipv4 = m_options.client_ip,
+                                  .client_port = m_options.client_port,
+                                  .rack_id = m_options.rack_id,
+                              });
+
+    // 4. daemon会发送udp消息，告诉recv queue的偏移地址
+    msgq::MsgUDPConnPacket msg;
+    m_udp_conn_recver->recv_blocking(msg);
+
+    m_msgq_rpc = std::make_unique<msgq::MsgQueueRPC>(
+        m_msgq_nexus.get(), m_msgq_nexus->GetPublicMsgQ(),
+        reinterpret_cast<msgq::MsgQueue *>(
+            (reinterpret_cast<uintptr_t>(m_cxl_format.msgq_zone_start_addr) + msg.recv_q_off)),
+        this);
+
+    InitMsgQPooller();
+
+    // 5. 正式接收rpc消息
+    auto &resp = fu.get();
+
+    m_client_id = resp.client_mac_id;
+    m_local_rack_daemon_connection.daemon_id = resp.daemon_mac_id;
+    m_local_rack_daemon_connection.msgq_conn = std::make_unique<MsgQClient>(*m_msgq_rpc);
+
+    DLOG("Connect with rack %d daemon %d success, my id is %d", m_options.rack_id,
+         m_local_rack_daemon_connection.daemon_id, m_client_id);
+}
+
+void ClientContext::InitMsgQPooller() {
+    // 启动polling worker
+    m_msgq_stop = false;
+    m_msgq_worker = std::thread([this]() {
+        InitFiberPool();
+        boost::fibers::use_scheduling_algorithm<boost::fibers::algo::round_robin>();
+
+        while (!m_msgq_stop) {
+            m_msgq_rpc->run_event_loop_once();
+            boost::this_fiber::yield();
+        }
+
+        m_fiber_pool_.EraseAllFiber();
+    });
+}
+
 /*********************** for test **************************/
 
 namespace rchms {
-
 void PoolContext::__DumpStats() {
     DLOG("local hit: %lu, local miss: %lu", m_impl->m_stats.local_hit, m_impl->m_stats.local_miss);
 }

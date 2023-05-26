@@ -33,15 +33,15 @@ inline void redis_sync(Redis &redis, string sync_key, int NID, int NODES) {
     std::string key = sync_key + to_string(NID);
     std::string value = "ok";
 
-    redis.set(key, value, 30s);
-    for (int i = 0; i < NODES; ++i) {
-        std::string key = sync_key + to_string(i);
-        auto val = redis.get(key);
-        while (val) {
-            val = redis.get(key);
-            this_thread::sleep_for(100ms);
-        }
-    }
+    // redis.set(key, value, 30s);
+    // for (int i = 0; i < NODES; ++i) {
+    //     std::string key = sync_key + to_string(i);
+    //     auto val = redis.get(key);
+    //     while (val) {
+    //         val = redis.get(key);
+    //         this_thread::sleep_for(100ms);
+    //     }
+    // }
 
     DLOG("%s sync done", sync_key.c_str());
 }
@@ -94,7 +94,7 @@ inline void run_bench(BenchParam param) {
 
     vector<uint8_t> raw(param.PAYLOAD);
 
-    if (1) {
+    if (0) {
         vector<thread> ths;
         vector<uint64_t> diff_times(param.TH, 0);
         vector<PerfStatistics> ps(param.TH);
@@ -148,7 +148,7 @@ inline void run_bench(BenchParam param) {
         redis_sync(redis, "rand_write", param.NID, param.NODES);
     }
 
-    if (1) {
+    if (0) {
         vector<thread> ths;
         vector<uint64_t> diff_times(param.TH, 0);
         vector<PerfStatistics> ps(param.TH);
@@ -258,7 +258,7 @@ inline void run_bench(BenchParam param) {
     //          ps.getPercentile(99), ps.getPercentile(99.9), ps.getPercentile(99.99));
     // }
 
-    if (0) {
+    if (1) {
         vector<thread> ths;
         vector<uint64_t> diff_times(param.TH, 0);
         vector<PerfStatistics> ps(param.TH);
@@ -320,7 +320,7 @@ inline void run_bench(BenchParam param) {
         redis_sync(redis, "zipf_write", param.NID, param.NODES);
     }
 
-    if (0) {
+    if (1) {
         vector<thread> ths;
         vector<uint64_t> diff_times(param.TH, 0);
         vector<PerfStatistics> ps(param.TH);

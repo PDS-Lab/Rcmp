@@ -189,33 +189,60 @@ void freePage(MasterContext& master_context, MasterToDaemonConnection& daemon_co
     master_context.m_page_directory.page_id_allocator->Recycle(req.start_page_id);
 
     resp_handle.Init();
-    FreePageReply& reply = resp_handle.Get();
+    auto& reply = resp_handle.Get();
     reply.ret = true;
 }
 
 void latchRemotePage(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
                      LatchRemotePageRequest& req,
                      ResponseHandle<LatchRemotePageReply>& resp_handle) {
+    DLOG_ASSERT(req.page_id != invalid_page_id, "Invalid Page");
+    DLOG_ASSERT(req.page_id != req.page_id_swap, "Can't latch same page %lu", req.page_id);
+
     PageRackMetadata* page_meta = master_context.m_page_directory.FindPage(req.page_id);
 
-    if (!req.isWriteLock) {
-        page_meta->latch.lock_shared();
-    } else if (req.page_id_swap == invalid_page_id) {
-        page_meta->latch.lock();
-    } else {
-        PageRackMetadata* page_swap_meta =
-            master_context.m_page_directory.FindPage(req.page_id_swap);
-        if (req.page_id < req.page_id_swap) {
+    DLOG_ASSERT(page_meta != nullptr, "Can't find page %lu", req.page_id);
+
+    if (req.isWriteLock) {
+        if (req.page_id_swap == invalid_page_id) {
             page_meta->latch.lock();
-            page_swap_meta->latch.lock();
         } else {
-            page_swap_meta->latch.lock();
-            page_meta->latch.lock();
+            PageRackMetadata* page_swap_meta =
+                master_context.m_page_directory.FindPage(req.page_id_swap);
+
+            DLOG_ASSERT(page_swap_meta != nullptr, "Can't find page %lu", req.page_id_swap);
+
+            // id小的优先上锁，避免死锁
+            if (req.page_id < req.page_id_swap) {
+                page_meta->latch.lock();
+                page_swap_meta->latch.lock();
+            } else {
+                page_swap_meta->latch.lock();
+                page_meta->latch.lock();
+            }
+        }
+    } else {
+        if (req.page_id_swap == invalid_page_id) {
+            page_meta->latch.lock_shared();
+        } else {
+            PageRackMetadata* page_swap_meta =
+                master_context.m_page_directory.FindPage(req.page_id_swap);
+
+            DLOG_ASSERT(page_swap_meta != nullptr, "Can't find page %lu", req.page_id_swap);
+
+            // id小的优先上锁，避免死锁
+            if (req.page_id < req.page_id_swap) {
+                page_meta->latch.lock_shared();
+                page_swap_meta->latch.lock_shared();
+            } else {
+                page_swap_meta->latch.lock_shared();
+                page_meta->latch.lock_shared();
+            }
         }
     }
 
     resp_handle.Init();
-    LatchRemotePageReply& reply = resp_handle.Get();
+    auto& reply = resp_handle.Get();
     reply.dest_rack_id = page_meta->rack_id;
     reply.dest_daemon_id = page_meta->daemon_id;
 }

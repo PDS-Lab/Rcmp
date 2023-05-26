@@ -7,8 +7,10 @@ SUDO="echo $passwd | sudo -S"
 
 IP_MN="192.168.200.51"
 PORT_MN=31850
-IP_DNs=("192.168.200.51" "192.168.201.52" "192.168.201.33" "192.168.201.89")
-IP_CNs=(${IP_DNs[0]} ${IP_DNs[1]} ${IP_DNs[2]} ${IP_DNs[3]})
+# IP_DNs=("192.168.200.51" "192.168.201.52" "192.168.201.33" "192.168.201.89")
+# IP_CNs=(${IP_DNs[0]} ${IP_DNs[1]} ${IP_DNs[2]} ${IP_DNs[3]})
+IP_DNs=("192.168.200.51" "192.168.201.52")
+IP_CNs=(${IP_DNs[0]})
 
 kill_all() {
     echo "kill all"
@@ -28,11 +30,11 @@ kill_all() {
 
     sshpass -p $passwd ssh $user@$IP_MN "echo $passwd | sudo -S killall rchms_master" &
 
-    sleep 4
+    sleep 2
 }
 
 test_run() {
-    MN_CMD="echo $passwd | sudo -S $CMD_DIR/rchms_master --master_ip=$IP_MN --master_rdma_ip=$IP_MN --master_port=$PORT_MN"
+    MN_CMD="echo $passwd | sudo -S $CMD_DIR/rchms_master --master_ip=$IP_MN --master_port=$PORT_MN"
 
     echo "[exec] $MN_CMD"
     sshpass -p $passwd ssh $user@$IP_MN "echo $passwd | sudo -S $MN_CMD" &
@@ -43,7 +45,7 @@ test_run() {
     do
         port=$(($PORT_MN+1+$i))
 
-        DN_CMD="echo $passwd | sudo -S numactl -N 0 $CMD_DIR/rchms_daemon --master_ip=$IP_MN --master_port=$PORT_MN --daemon_ip=${IP_DNs[i]} --daemon_port=$port --daemon_rdma_ip=${IP_DNs[i]} --rack_id=$i --cxl_devdax_path=/dev/shm/cxlsim$i --cxl_memory_size=$CXL_MEM_SZ --hot_decay=$HOT_DECAY --hot_swap_watermark=$WATERMARK"
+        DN_CMD="echo $passwd | sudo -S numactl -N 0 $CMD_DIR/rchms_daemon --master_ip=$IP_MN --master_port=$PORT_MN --daemon_ip=${IP_DNs[i]} --daemon_port=$port --rack_id=$i --cxl_devdax_path=/dev/shm/cxlsim$i --cxl_memory_size=$CXL_MEM_SZ --hot_decay=$HOT_DECAY --hot_swap_watermark=$WATERMARK"
 
         echo "[exec] $DN_CMD"
         sshpass -p $passwd ssh $user@${IP_DNs[i]} "echo $passwd | sudo -S $DN_CMD" &

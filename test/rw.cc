@@ -48,17 +48,12 @@ int main(int argc, char *argv[]) {
 
     // pool.ref->__NotifyPerf();
 
-    vector<RCHMSMemPool> th_instances;
+    RCHMSMemPool instance;
     vector<MemPoolBase *> instances;
+    rchms::ClientOptions op = options;
+    instance.ref = rchms::Open(op);
     for (int i = 0; i < cmd.get<int>("thread"); ++i) {
-        RCHMSMemPool _p;
-        rchms::ClientOptions op = options;
-        op.client_port += i;
-        _p.ref = rchms::Open(op);
-        th_instances.push_back(_p);
-    }
-    for (int i = 0; i < th_instances.size(); ++i) {
-        instances.push_back(&th_instances[0]);
+        instances.push_back(&instance);
     }
 
     run_bench({
@@ -74,6 +69,8 @@ int main(int argc, char *argv[]) {
         .ZIPF = 0.99,
         .instances = instances,
     });
+
+    rchms::Close(instance.ref);
 
     // pool.ref->__DumpStats();
 

@@ -4,6 +4,7 @@
 #include <future>
 #include <type_traits>
 
+#include "allocator.hpp"
 #include "eRPC/erpc.h"
 #include "log.hpp"
 #include "msg_queue.hpp"
@@ -16,20 +17,21 @@ struct ResponseHandle {
     virtual ResponseType &Get() = 0;
 };
 
+struct ErpcClient;
+struct MsgQClient;
+
 namespace detail {
 
 template <typename ResponseType>
 struct ErpcResponseHandle : public ResponseHandle<ResponseType> {
     ErpcResponseHandle(erpc::IBRpcWrap &rpc, erpc::ReqHandleWrap req_wrap)
-        : state(false), rpc(rpc), req_wrap(req_wrap), resp_raw(nullptr) {}
+        : state(false), rpc(&rpc), req_wrap(req_wrap), resp_raw(nullptr) {}
 
     virtual void Init(size_t flex_size = 0) override {
         DLOG_ASSERT(state == false, "Double Init");
 
         resp_raw = req_wrap.get_pre_resp_msgbuf();
-        if (flex_size != 0) {
-            rpc.resize_msg_buffer(resp_raw, sizeof(ResponseType) + flex_size);
-        }
+        rpc->resize_msg_buffer(resp_raw, sizeof(ResponseType) + flex_size);
         state = true;
     }
 
@@ -44,9 +46,44 @@ struct ErpcResponseHandle : public ResponseHandle<ResponseType> {
     }
 
     bool state;
-    erpc::IBRpcWrap &rpc;
+    erpc::IBRpcWrap *rpc;
     erpc::ReqHandleWrap req_wrap;
     erpc::MsgBufferWrap resp_raw;
+};
+
+template <typename ResponseType>
+struct RawResponseHandle : public ResponseHandle<ResponseType>, NOCOPYABLE {
+    RawResponseHandle() : state(false), resp_raw(nullptr) {}
+    ~RawResponseHandle() {
+        if (resp_raw) {
+            ::operator delete(resp_raw);
+        }
+    }
+
+    virtual void Init(size_t flex_size = 0) override {
+        DLOG_ASSERT(state == false, "Double Init");
+
+        init_size = sizeof(ResponseType) + flex_size;
+
+        resp_raw = ::operator new(init_size);
+        state = true;
+    }
+
+    virtual ResponseType &Get() override {
+        DLOG_ASSERT(state == true, "Not init yet");
+        return *reinterpret_cast<ResponseType *>(resp_raw);
+    }
+
+    void *GetBuffer() {
+        DLOG_ASSERT(state == true, "Not init yet");
+        return resp_raw;
+    }
+
+    size_t GetSize() const { return init_size; }
+
+    bool state;
+    size_t init_size;
+    void *resp_raw;
 };
 
 template <typename ResponseType>
@@ -79,7 +116,7 @@ template <typename EFW, bool ESTABLISH>
 void erpc_call_target(erpc::ReqHandle *req_handle, void *context) {
     auto self_ctx = reinterpret_cast<typename EFW::SelfContext *>(context);
 
-    boost::fibers::async(boost::fibers::launch::dispatch, [self_ctx, req_handle]() {
+    self_ctx->GetFiberPool().EnqueueTask([self_ctx, req_handle]() {
         auto &rpc = self_ctx->GetErpc();
         erpc::ReqHandleWrap req_wrap(req_handle);
         ErpcResponseHandle<typename EFW::ResponseType> resp_handle(rpc, req_wrap);
@@ -106,7 +143,7 @@ void msgq_call_target(msgq::MsgBuffer &req_raw, void *ctx) {
     auto self_ctx = reinterpret_cast<typename EFW::SelfContext *>(ctx);
 
     // mutable防止引用析构
-    boost::fibers::async(boost::fibers::launch::dispatch, [self_ctx, req_raw]() mutable {
+    self_ctx->GetFiberPool().EnqueueTask([self_ctx, req_raw]() mutable {
         auto req = reinterpret_cast<typename EFW::RequestType *>(req_raw.get_buf());
 
         typename EFW::PeerContext *peer_connection = nullptr;
@@ -115,15 +152,25 @@ void msgq_call_target(msgq::MsgBuffer &req_raw, void *ctx) {
 
         if (ESTABLISH) {
             peer_connection = new typename EFW::PeerContext();
+            RawResponseHandle<typename EFW::ResponseType> resp_handle;
+            EFW::func(*self_ctx, *peer_connection, *req, resp_handle);
+
+            rpc = peer_connection->GetMsgQ();
+            MsgQResponseHandle<typename EFW::ResponseType> resp_handle_(rpc);
+
+            resp_handle_.Init(resp_handle.GetSize());
+            typename EFW::ResponseType &resp = resp_handle_.Get();
+            memcpy(&resp, resp_handle.GetBuffer(), resp_handle.GetSize());
+            rpc->enqueue_response(req_raw, resp_handle_.GetBuffer());
         } else {
             peer_connection =
                 dynamic_cast<typename EFW::PeerContext *>(self_ctx->GetConnection(req->mac_id));
-        }
-        rpc = peer_connection->GetMsgQ();
+            rpc = peer_connection->GetMsgQ();
 
-        MsgQResponseHandle<typename EFW::ResponseType> resp_handle(rpc);
-        EFW::func(*self_ctx, *peer_connection, *req, resp_handle);
-        rpc->enqueue_response(req_raw, resp_handle.GetBuffer());
+            MsgQResponseHandle<typename EFW::ResponseType> resp_handle(rpc);
+            EFW::func(*self_ctx, *peer_connection, *req, resp_handle);
+            rpc->enqueue_response(req_raw, resp_handle.GetBuffer());
+        }
 
         // 发送端的buffer将由接收端释放
         rpc->free_msg_buffer(req_raw);
@@ -179,7 +226,8 @@ struct ErpcFuture {
             rpc->free_msg_buffer(resp_raw);
         }
         if (pro) {
-            delete pro;
+            pro->~PromiseType();
+            ObjectPoolAllocator<PromiseType>().deallocate(pro, 1);
         }
     }
 
@@ -239,19 +287,20 @@ struct ErpcClient {
         using RpcCallerWrapper = ::detail::RpcCallerWrapper<Fn>;
         using RequestType = typename RpcCallerWrapper::RequestType;
         using ResponseType = typename RpcCallerWrapper::ResponseType;
+        using PromiseType = PromiseTType<void>;
 
-        ErpcFuture<ResponseType, PromiseTType<void>> fu;
+        ErpcFuture<ResponseType, PromiseType> fu;
         fu.rpc = &rpc;
-        fu.pro = new PromiseTType<void>();
+        fu.pro = new (ObjectPoolAllocator<PromiseType>().allocate(1)) PromiseType();
 
         fu.req_raw = rpc.alloc_msg_buffer_or_die(req_size);
-        fu.resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(ResponseType));
+        fu.resp_raw = rpc.alloc_msg_buffer_or_die(sizeof(ResponseType) + 64);
 
         auto req_buf = reinterpret_cast<RequestType *>(fu.req_raw.get_buf());
         copy_fn(req_buf, std::move(args...));
 
         rpc.enqueue_request(peer_session, RpcCallerWrapper::rpc_type, fu.req_raw, fu.resp_raw,
-                            erpc_general_promise_cb<PromiseTType<void>>,
+                            erpc_general_promise_cb<PromiseType>,
                             static_cast<void *>(fu.pro));
 
         return fu;
@@ -285,7 +334,8 @@ struct MsgQFuture {
             rpc->free_msg_buffer(resp_raw);
         }
         if (pro) {
-            delete pro;
+            pro->~PromiseType();
+            ObjectPoolAllocator<PromiseType>().deallocate(pro, 1);
         }
     }
 
@@ -340,10 +390,11 @@ struct MsgQClient {
         using RpcCallerWrapper = ::detail::RpcCallerWrapper<Fn>;
         using RequestType = typename RpcCallerWrapper::RequestType;
         using ResponseType = typename RpcCallerWrapper::ResponseType;
+        using PromiseType = PromiseTType<msgq::MsgBuffer>;
 
-        MsgQFuture<ResponseType, PromiseTType<msgq::MsgBuffer>> fu;
+        MsgQFuture<ResponseType, PromiseType> fu;
         fu.rpc = &rpc;
-        fu.pro = new PromiseTType<msgq::MsgBuffer>();
+        fu.pro = new (ObjectPoolAllocator<PromiseType>().allocate(1)) PromiseType();
 
         fu.req_raw = rpc.alloc_msg_buffer(req_size);
 
@@ -351,7 +402,7 @@ struct MsgQClient {
         copy_fn(req_buf, std::move(args)...);
 
         rpc.enqueue_request(RpcCallerWrapper::rpc_type, fu.req_raw,
-                            msgq_general_promise_cb<PromiseTType<msgq::MsgBuffer>>,
+                            msgq_general_promise_cb<PromiseType>,
                             static_cast<void *>(fu.pro));
 
         return fu;

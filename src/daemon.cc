@@ -34,6 +34,10 @@ void DaemonContext::InitCXLPool() {
     // 2. 确认page个数
     m_page_table.total_page_num = m_cxl_format.super_block->page_data_zone_size / page_size;
     m_page_table.max_swap_page_num = m_options.swap_zone_size / page_size;
+
+    DLOG_ASSERT(m_page_table.total_page_num > m_page_table.max_swap_page_num,
+                "The size of swap zone needs smaller than avaliable page zone");
+
     m_page_table.max_data_page_num = m_page_table.total_page_num - m_page_table.max_swap_page_num;
     m_page_table.page_allocator =
         std::make_unique<SingleAllocator<page_size>>(m_cxl_format.super_block->page_data_zone_size);
@@ -232,6 +236,16 @@ void DaemonContext::RegisterCXLMR() {
     }
 }
 
+void DaemonContext::InitFiberPool() { m_fiber_pool_.AddFiber(m_options.prealloc_fiber_num); }
+
+void DaemonContext::RDMARCPoll() {
+    for (auto &conn : m_conn_manager.m_other_daemon_connect_table) {
+        if (conn->rdma_conn != nullptr && conn->rdma_conn->m_inflight_count_ > 0) {
+            conn->rdma_conn->m_poll_conn_sd_wr_();
+        }
+    }
+}
+
 int main(int argc, char *argv[]) {
     cmdline::parser cmd;
     cmd.add<std::string>("master_ip");
@@ -257,7 +271,7 @@ int main(int argc, char *argv[]) {
     options.cxl_memory_size = cmd.get<size_t>("cxl_memory_size");
     options.swap_zone_size = 100ul << 20;
     options.max_client_limit = 32;
-    options.prealloc_cort_num = 8;
+    options.prealloc_fiber_num = 8;
     options.hot_decay_lambda = cmd.get<float>("hot_decay");
     options.hot_swap_watermark = cmd.get<size_t>("hot_swap_watermark");
 
@@ -265,10 +279,11 @@ int main(int argc, char *argv[]) {
     daemon_context.m_options = options;
 
     daemon_context.InitCXLPool();
-    daemon_context.InitRDMARC();
     daemon_context.InitRPCNexus();
-    daemon_context.ConnectWithMaster();
+    daemon_context.InitRDMARC();
     daemon_context.RegisterCXLMR();
+    daemon_context.InitFiberPool();
+    daemon_context.ConnectWithMaster();
 
     std::thread log_worker = std::thread([&daemon_context]() {
         while (true) {
@@ -283,6 +298,8 @@ int main(int argc, char *argv[]) {
     while (true) {
         daemon_context.m_msgq_manager.rpc->run_event_loop_once();
         daemon_context.GetErpc().run_event_loop_once();
+        daemon_context.RDMARCPoll();
+
         boost::this_fiber::yield();
     }
 

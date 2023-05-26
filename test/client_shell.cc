@@ -47,32 +47,6 @@ int main(int argc, char *argv[]) {
             uint64_t n;
             cin >> gaddr >> n;
             pool->Write(gaddr, 8, &n);
-        } else if (cmdstr == "run") {
-            rchms::GAddr gaddr;
-            size_t iteration;
-            cin >> cmdstr >> gaddr >> iteration;
-            uint64_t n;
-            if (cmdstr == "r") {
-                // __DEBUG_START_PERF();
-                pool->__NotifyPerf();
-                for (size_t i = 0; i < iteration; ++i) {
-                    pool->Read(gaddr, 8, &n);
-                }
-                cout << "OK" << endl;
-                pool->__StopPerf();
-                exit(0);
-            } else if (cmdstr == "w") {
-                // __DEBUG_START_PERF();
-                pool->__NotifyPerf();
-                for (size_t i = 0; i < iteration; ++i) {
-                    pool->Write(gaddr, 8, &n);
-                }
-                cout << "OK" << endl;
-                pool->__StopPerf();
-                exit(0);
-            } else {
-                goto ill_err;
-            }
         } else if (cmdstr == "?") {
             cout << "Usage:\n"
                     "\ta \t\t alloc 2MB gaddr\n"

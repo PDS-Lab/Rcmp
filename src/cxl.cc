@@ -35,6 +35,8 @@ void cxl_close_simulate(int fd, CXLMemFormat &format) {
 
 void cxl_memory_init(CXLMemFormat &format, void *cxl_memory_addr, size_t size,
                      size_t msgq_zone_size) {
+    DLOG_ASSERT(size > mem_region_aligned_size, "The size of cxl memory needs larger than 2GB");
+
     CXLSuperBlock *super_block = reinterpret_cast<CXLSuperBlock *>(cxl_memory_addr);
     super_block->total_size = size;
     super_block->msgq_zone_size = msgq_zone_size;

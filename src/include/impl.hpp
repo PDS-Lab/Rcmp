@@ -15,6 +15,7 @@
 #include "config.hpp"
 #include "cxl.hpp"
 #include "eRPC/erpc.h"
+#include "fiber_pool.hpp"
 #include "lock.hpp"
 #include "lockmap.hpp"
 #include "log.hpp"
@@ -74,7 +75,13 @@ struct ClusterManager {
 };
 
 struct PageDirectory {
-    PageRackMetadata *FindPage(page_id_t page_id) { return table[page_id]; }
+    PageRackMetadata *FindPage(page_id_t page_id) {
+        auto it = table.find(page_id);
+        if (it == table.end()) {
+            return nullptr;
+        }
+        return it->second;
+    }
 
     PageRackMetadata *AddPage(RackMacTable *rack_table, page_id_t page_id) {
         PageRackMetadata *page_meta = new PageRackMetadata();
@@ -82,6 +89,8 @@ struct PageDirectory {
         page_meta->daemon_id = rack_table->daemon_connect->daemon_id;
         table.insert(page_id, page_meta);
         rack_table->current_allocated_page_num++;
+
+        DLOG("Add page %lu --> rack %u", page_id, page_meta->rack_id);
 
         return page_meta;
     }
@@ -106,6 +115,8 @@ struct MasterContext : public NOCOPYABLE {
     ClusterManager m_cluster_manager;
     PageDirectory m_page_directory;
 
+    FiberPool m_fiber_pool_;
+
     struct {
         std::unique_ptr<erpc::NexusWrap> nexus;
         std::vector<erpc::IBRpcWrap> rpc_set;
@@ -122,11 +133,6 @@ struct MasterContext : public NOCOPYABLE {
         return master_ctx;
     }
 
-    void initCluster();
-    void initRDMARC();
-    void initRPCNexus();
-    void initCoroutinePool();
-
     mac_id_t GetMacID() const { return m_master_id; }
 
     MasterConnection *GetConnection(mac_id_t mac_id) {
@@ -137,6 +143,13 @@ struct MasterContext : public NOCOPYABLE {
     }
 
     erpc::IBRpcWrap &GetErpc() { return m_erpc_ctx.rpc_set[0]; }
+
+    FiberPool &GetFiberPool() { return m_fiber_pool_; }
+
+    void InitCluster();
+    void InitRDMARC();
+    void InitRPCNexus();
+    void InitFiberPool();
 };
 
 /************************  Daemon   **********************/
@@ -179,6 +192,8 @@ struct DaemonToDaemonConnection : public DaemonConnection {
 
 struct PageMetadata {
     bool TryPin() { return !status.test_and_set(); }
+
+    void UnPin() { status.clear(); }
 
     std::atomic_flag status{false};
     offset_t cxl_memory_offset;  // 相对于format.page_data_start_addr
@@ -241,7 +256,7 @@ struct PageTableManager {
     }
 
     void CancelPageMemory(page_id_t page_id, PageMetadata *page_meta) {
-        page_allocator->deallocate(page_meta->cxl_memory_offset);
+        page_allocator->deallocate(page_meta->cxl_memory_offset, 1);
         current_used_page_num--;
         table.erase(page_id);
         delete page_meta;
@@ -335,6 +350,8 @@ struct DaemonContext : public NOCOPYABLE {
     std::vector<ibv_mr *> m_rdma_page_mr_table;  // 为cxl注册的mr，初始化长度后不可更改
     std::unordered_map<void *, ibv_mr *> m_rdma_mr_table;
 
+    FiberPool m_fiber_pool_;
+
     struct {
         volatile bool running;
         std::unique_ptr<erpc::NexusWrap> nexus;
@@ -361,6 +378,8 @@ struct DaemonContext : public NOCOPYABLE {
         return m_conn_manager.GetConnection(mac_id);
     }
 
+    FiberPool &GetFiberPool() { return m_fiber_pool_; }
+
     ibv_mr *GetMR(void *p) {
         if (p >= m_cxl_format.start_addr && p < m_cxl_format.end_addr) {
             return m_rdma_page_mr_table[(reinterpret_cast<uintptr_t>(p) -
@@ -380,8 +399,10 @@ struct DaemonContext : public NOCOPYABLE {
     void InitCXLPool();
     void InitRPCNexus();
     void InitRDMARC();
+    void InitFiberPool();
     void ConnectWithMaster();
     void RegisterCXLMR();
+    void RDMARCPoll();
 };
 
 /************************  Client   **********************/
@@ -448,6 +469,47 @@ struct PageTableCache {
     ConcurrentHashMap<page_id_t, LocalPageCache *> table;
 };
 
+struct PageThreadLocalCache;
+struct PageThreadCacheManager {
+    void insert(PageThreadLocalCache *tcache) {
+        std::unique_lock<std::shared_mutex> lck(mutex_);
+        tcache_list_.push_back(tcache);
+    }
+
+    void erase(PageThreadLocalCache *tcache) {
+        std::unique_lock<std::shared_mutex> lck(mutex_);
+        auto it = std::find(tcache_list_.begin(), tcache_list_.end(), tcache);
+        tcache_list_.erase(it);
+    }
+
+    template <typename F, typename... Args>
+    void foreach_all(F &&fn, Args &&...args) {
+        std::shared_lock<std::shared_mutex> lck(mutex_);
+        for (auto &tcache : tcache_list_) {
+            fn(*tcache, std::move(args)...);
+        }
+    }
+
+    std::shared_mutex mutex_;
+    std::list<PageThreadLocalCache *> tcache_list_;
+};
+
+class PageThreadLocalCache {
+   public:
+    static PageThreadLocalCache &getInstance(PageThreadCacheManager &mgr) {
+        static thread_local PageThreadLocalCache instance(mgr);
+        return instance;
+    }
+
+    PageTableCache page_table_cache;
+    LockResourceManager<page_id_t, SharedMutex> ptl_cache_lock;
+
+   private:
+    PageThreadCacheManager &mgr;
+    PageThreadLocalCache(PageThreadCacheManager &mgr) : mgr(mgr) { mgr.insert(this); }
+    ~PageThreadLocalCache() { mgr.erase(this); }
+};
+
 struct ClientContext : public NOCOPYABLE {
     rchms::ClientOptions m_options;
 
@@ -461,8 +523,10 @@ struct ClientContext : public NOCOPYABLE {
     std::unique_ptr<msgq::MsgQueueRPC> m_msgq_rpc;
     std::unique_ptr<msgq::MsgQueueNexus> m_msgq_nexus;
     ClientToDaemonConnection m_local_rack_daemon_connection;
-    PageTableCache m_page_table_cache;
-    LockResourceManager<page_id_t, SharedMutex> m_ptl_cache_lock;
+
+    PageThreadCacheManager m_tcache_mgr;
+
+    FiberPool m_fiber_pool_;
 
     volatile bool m_msgq_stop;
     std::thread m_msgq_worker;
@@ -487,11 +551,17 @@ struct ClientContext : public NOCOPYABLE {
         DLOG_FATAL("Can't find mac %d", mac_id);
     }
 
+    FiberPool &GetFiberPool() { return m_fiber_pool_; }
+
     uintptr_t GetVirtualAddr(offset_t offset) const {
         return reinterpret_cast<uintptr_t>(m_cxl_format.page_data_start_addr) + offset;
     }
 
-    erpc::IBRpcWrap &GetErpc() = delete;
+    void InitCXLPool();
+    void InitRPCNexus();
+    void InitFiberPool();
+    void ConnectWithDaemon();
+    void InitMsgQPooller();
 };
 
 struct rchms::PoolContext::PoolContextImpl : public ClientContext {};

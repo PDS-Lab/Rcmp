@@ -181,6 +181,7 @@ void MsgQueue::update_ht(atomic_po_val_t* ht, atomic_po_val_t* ht_) {
 #else
 
 size_t MsgBuffer::size() const { return m_msg.size; }
+
 void* MsgBuffer::get_buf() const {
     return reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(m_q->m_ra.base()) +
                                    m_msg.buf_offset);
@@ -206,7 +207,6 @@ void MsgQueueRPC::enqueue_request(uint8_t rpc_type, MsgBuffer& msg_buf, msgq_cal
 }
 
 void MsgQueueRPC::enqueue_response(MsgBuffer& req_buf, MsgBuffer& resp_buf) {
-    // TODO: set resp complete flag of req header
     resp_buf.m_msg.msg_type = MsgHeader::RESP;
     resp_buf.m_msg.cb = req_buf.m_msg.cb;
     resp_buf.m_msg.arg = req_buf.m_msg.arg;
@@ -243,7 +243,7 @@ uint32_t MsgQueue::dequeue_msg(MsgHeader* hv, size_t max_deq) {
     return msgq_q.TryDequeue(hv, hv + max_deq);
 }
 
-void MsgQueue::free_msg_buffer(MsgBuffer& msg_buf) { m_ra.deallocate(msg_buf.get_buf()); }
+void MsgQueue::free_msg_buffer(MsgBuffer& msg_buf) { m_ra.deallocate(msg_buf.get_buf(), msg_buf.size()); }
 
 #endif  // MSGQ_SINGLE_FIFO_ON
 

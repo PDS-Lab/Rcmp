@@ -12,7 +12,7 @@
 #include "proto/rpc_register.hpp"
 #include "rdma_rc.hpp"
 
-void MasterContext::initCluster() {
+void MasterContext::InitCluster() {
     m_cluster_manager.mac_id_allocator = std::make_unique<IDGenerator>();
     m_cluster_manager.mac_id_allocator->Expand(m_options.max_cluster_mac_num);
     IDGenerator::id_t id = m_cluster_manager.mac_id_allocator->Gen();
@@ -26,7 +26,7 @@ void MasterContext::initCluster() {
     DLOG_ASSERT(id == 0, "Can't init page id");
 }
 
-void MasterContext::initRDMARC() {
+void MasterContext::InitRDMARC() {
     rdma_rc::RDMAEnv::init();
 
     m_listen_conn.register_connect_hook([&](rdma_rc::RDMAConnection *rdma_conn, void *param_) {
@@ -49,7 +49,7 @@ void MasterContext::initRDMARC() {
     m_listen_conn.listen(m_options.master_ip);
 }
 
-void MasterContext::initRPCNexus() {
+void MasterContext::InitRPCNexus() {
     std::string master_uri = erpc::concat_server_uri(m_options.master_ip, m_options.master_port);
     m_erpc_ctx.nexus = std::make_unique<erpc::NexusWrap>(master_uri);
 
@@ -63,9 +63,8 @@ void MasterContext::initRPCNexus() {
                                         bind_erpc_func<false>(rpc_master::latchRemotePage));
     m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_master::unLatchRemotePage)::rpc_type,
                                         bind_erpc_func<false>(rpc_master::unLatchRemotePage));
-    m_erpc_ctx.nexus->register_req_func(
-        RPC_TYPE_STRUCT(rpc_master::unLatchPageAndSwap)::rpc_type,
-        bind_erpc_func<false>(rpc_master::unLatchPageAndSwap));
+    m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_master::unLatchPageAndSwap)::rpc_type,
+                                        bind_erpc_func<false>(rpc_master::unLatchPageAndSwap));
 
     erpc::SMHandlerWrap smhw;
     smhw.set_empty();
@@ -74,6 +73,8 @@ void MasterContext::initRPCNexus() {
     m_erpc_ctx.rpc_set.push_back(std::move(rpc));
     DLOG_ASSERT(m_erpc_ctx.rpc_set.size() == 1);
 }
+
+void MasterContext::InitFiberPool() { m_fiber_pool_.AddFiber(m_options.prealloc_fiber_num); }
 
 int main(int argc, char *argv[]) {
     cmdline::parser cmd;
@@ -85,14 +86,14 @@ int main(int argc, char *argv[]) {
     rchms::MasterOptions options;
     options.master_ip = cmd.get<std::string>("master_ip");
     options.master_port = cmd.get<uint16_t>("master_port");
-    options.max_cluster_mac_num = 100;
 
     MasterContext &master_context = MasterContext::getInstance();
     master_context.m_options = options;
 
-    master_context.initCluster();
-    master_context.initRPCNexus();
-    master_context.initRDMARC();
+    master_context.InitCluster();
+    master_context.InitRPCNexus();
+    master_context.InitRDMARC();
+    master_context.InitFiberPool();
 
     DLOG("START OK");
 

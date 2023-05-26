@@ -22,20 +22,22 @@ void getPagePastAccessFreq(ClientContext& client_context,
     uint64_t last_time = UINT64_MAX;
 
     // m_page中存的是该CN访问过的所有Page的id
-    client_context.m_page_table_cache.table.foreach_all(
-        [&](std::pair<const page_id_t, LocalPageCache*>& p) {
-            auto page_id = p.first;
+    client_context.m_tcache_mgr.foreach_all([&](PageThreadLocalCache& tcache) {
+        tcache.page_table_cache.table.foreach_all(
+            [&](std::pair<const page_id_t, LocalPageCache*>& p) {
+                auto page_id = p.first;
 
-            uint64_t last = p.second->stats.last();
-            if (last_time > last) {
-                last_time = last;  // 越小，越旧
-                oldest_page = page_id;
-            }
-            // DLOG("CN: %u getPagePastAccessFreq: find page %lu's cache.",
-            //      client_context.m_client_id, page_id);
+                uint64_t last = p.second->stats.last();
+                if (last_time > last) {
+                    last_time = last;  // 越小，越旧
+                    oldest_page = page_id;
+                }
+                // DLOG("CN: %u getPagePastAccessFreq: find page %lu's cache.",
+                //      client_context.m_client_id, page_id);
 
-            return true;
-        });
+                return true;
+            });
+    });
 
     // DLOG("CN: %u getPagePastAccessFreq: finished.", client_context.m_client_id);
     resp_handle.Init();
@@ -47,11 +49,12 @@ void getPagePastAccessFreq(ClientContext& client_context,
 void removePageCache(ClientContext& client_context, ClientToDaemonConnection& daemon_connection,
                      RemovePageCacheRequest& req,
                      ResponseHandle<RemovePageCacheReply>& resp_handle) {
-    UniqueResourceLock<page_id_t, LockResourceManager<page_id_t, SharedMutex>> cache_lock(
-        client_context.m_ptl_cache_lock, req.page_id);
+    client_context.m_tcache_mgr.foreach_all([&](PageThreadLocalCache& tcache) {
+        UniqueResourceLock<page_id_t, LockResourceManager<page_id_t, SharedMutex>> cache_lock(
+            tcache.ptl_cache_lock, req.page_id);
 
-    // 清除该page的cache
-    client_context.m_page_table_cache.RemoveCache(req.page_id);
+        tcache.page_table_cache.RemoveCache(req.page_id);
+    });
 
     // DLOG("CN %u: Del page %lu cache.", client_context.m_client_id, req.page_id);
     // DLOG("CN %u: removePageCache page %lu unlock", client_context.m_client_id, req.page_id);

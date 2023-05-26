@@ -1,6 +1,7 @@
 #include "proto/rpc_daemon.hpp"
 
 #include <atomic>
+#include <boost/fiber/operations.hpp>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -64,7 +65,7 @@ void joinRack(DaemonContext& daemon_context, DaemonToClientConnection& client_co
 
     // 3. 通过UDP通知client创建msgq
     msgq::MsgUDPConnPacket pkt;
-    pkt.recv_q_off = reinterpret_cast<uintptr_t>(q) -
+    pkt.recv_q_off = reinterpret_cast<uintptr_t>(client_connection.msgq_conn->rpc.m_send_queue) -
                      reinterpret_cast<uintptr_t>(daemon_context.m_cxl_format.msgq_zone_start_addr);
     UDPClient<msgq::MsgUDPConnPacket> udp_cli;
     udp_cli.send(req.client_ipv4.get_string(), req.client_port, pkt);
@@ -131,7 +132,6 @@ retry:
     }
 
     // 本地未命中
-
     daemon_context.m_stats.page_miss++;
 
     DaemonToDaemonConnection* dest_daemon_conn;
@@ -149,7 +149,7 @@ retry:
                                                      .mac_id = daemon_context.m_daemon_id,
                                                      .isWriteLock = false,
                                                      .page_id = page_id,
-                                                     .page_id_swap = 0,
+                                                     .page_id_swap = invalid_page_id,
                                                  });
 
             auto& latch_resp = latch_fu.get();
@@ -212,11 +212,12 @@ retry:
             case GetPageCXLRefOrProxyRequest::WRITE: {
                 // 5.1 如果是写操作,等待获取CN上的数据
                 wd_fu = client_connection.msgq_conn->call<CortPromise>(
-                    rpc_client::getCurrentWriteData, {
-                                                         .mac_id = daemon_context.m_daemon_id,
-                                                         .dio_write_buf = req.u.write.cn_write_buf,
-                                                         .dio_write_size = req.u.write.cn_write_size,
-                                                     });
+                    rpc_client::getCurrentWriteData,
+                    {
+                        .mac_id = daemon_context.m_daemon_id,
+                        .dio_write_buf = req.u.write.cn_write_buf,
+                        .dio_write_size = req.u.write.cn_write_size,
+                    });
 
                 auto& wd_resp = wd_fu.get();
 
@@ -224,7 +225,7 @@ retry:
 
                 ibv_mr* mr = daemon_context.GetMR(wd_resp.data);
                 my_data_buf = reinterpret_cast<uintptr_t>(wd_resp.data);
-                my_lkey = mr->rkey;
+                my_lkey = mr->lkey;
                 my_size = req.u.write.cn_write_size;
                 break;
             }
@@ -235,7 +236,7 @@ retry:
 
                 ibv_mr* mr = daemon_context.GetMR(reply.read_data);
                 my_data_buf = reinterpret_cast<uintptr_t>(reply.read_data);
-                my_lkey = mr->rkey;
+                my_lkey = mr->lkey;
                 my_size = req.u.read.cn_read_size;
                 break;
             }
@@ -245,7 +246,7 @@ retry:
 
                 ibv_mr* mr = daemon_context.GetMR(req.u.write_raw.cn_write_raw_buf);
                 my_data_buf = reinterpret_cast<uintptr_t>(req.u.write_raw.cn_write_raw_buf);
-                my_lkey = mr->rkey;
+                my_lkey = mr->lkey;
                 my_size = req.u.write_raw.cn_write_raw_size;
                 break;
             }
@@ -278,15 +279,13 @@ retry:
                         rem_page_md_cache->remote_page_rkey, false);
                     // DLOG("write size %u remote addr [%#lx, %u] from local addr [%#lx, %u]",
                     // my_size,
-                    //      rem_page_md_cache->remote_page_addr,
+                    //      rem_page_md_cache->remote_page_addr + page_offset,
                     //      rem_page_md_cache->remote_page_rkey, my_data_buf, my_lkey);
                     break;
             }
             auto fu = dest_daemon_conn->rdma_conn->submit(ba);
 
-            while (fu.try_get() != 0) {
-                boost::this_fiber::yield();
-            }
+            fu.get();
         }
 
         auto& reply = resp_handle.Get();
@@ -312,6 +311,7 @@ retry:
         // 1 为page swap的区域准备内存，并确定是否需要换出页
         dest_daemon_conn = rem_page_md_cache->remote_page_daemon_conn;
 
+        // 交换的情况，需要将自己的一个page交换到对方, 这个读写过程由对方完成
         bool is_swap = false;    // request return
         bool need_swap = false;  // swap_page_id != invalid_page_id
         page_id_t swap_page_id = invalid_page_id;
@@ -323,9 +323,11 @@ retry:
         UniqueResourceLock<page_id_t, LockResourceManager<page_id_t, CortSharedMutex>>
             swapout_page_ref_lock;
 
-        // 交换的情况，需要将自己的一个page交换到对方, 这个读写过程由对方完成
-
         // 首先为即将迁移到本地的page申请内存
+        while (!daemon_context.m_page_table.TestAllocPageMemory(1)) {
+            // 当前swap区已满，等待完成
+            boost::this_fiber::yield();
+        }
 
         page_meta = daemon_context.m_page_table.AllocPageMemory();
         // DLOG("page_metadata->offset = %#lx", page_metadata->cxl_memory_offset);
@@ -387,11 +389,13 @@ retry:
             }
 
             DLOG_ASSERT(need_swap);
-            // DLOG("swap = %ld", swap_page_id);
+
             /* 1.2 注册换出页的地址，并获取rkey */
             swapout_addr = daemon_context.GetVirtualAddr(swap_page_meta->cxl_memory_offset);
             swapout_mr = daemon_context.GetMR(reinterpret_cast<void*>(swapout_addr));
             swapout_key = swapout_mr->rkey;
+
+            // TODO: swap page与page的死锁解决？
 
             // 给即将换出页的page_meta上写锁
             swapout_page_ref_lock =
@@ -458,6 +462,8 @@ retry:
 
         // 迁移完成，更新tlb
         {
+            // 尝试pin住page，防止立即被随机淘汰
+            page_meta->TryPin();
             daemon_context.m_page_table.ApplyPageMemory(page_id, page_meta);
             if (is_swap) {
                 // 回收迁移走的页面
@@ -473,6 +479,7 @@ retry:
 
             // 换近页已迁移完毕，解锁
             page_ref_lock.unlock();
+            page_meta->UnPin();
         }
 
         /* 4. 向mn发送unLatchPageAndSwap，更改page dir，返回RPC*/
@@ -639,6 +646,11 @@ void tryMigratePage(DaemonContext& daemon_context, DaemonToDaemonConnection& dae
     } else {
         is_swap = true;
         // 交换的情况，需要读对方的page到本地
+        while (!daemon_context.m_page_table.TestAllocPageMemory(1)) {
+            // 当前swap区已满，等待完成
+            boost::this_fiber::yield();
+        }
+
         local_page_meta = daemon_context.m_page_table.AllocPageMemory();
 
         uintptr_t swapin_addr = daemon_context.GetVirtualAddr(local_page_meta->cxl_memory_offset);
@@ -650,9 +662,7 @@ void tryMigratePage(DaemonContext& daemon_context, DaemonToDaemonConnection& dae
 
     auto fu = daemon_conn->rdma_conn->submit(ba);
 
-    while (fu.try_get() != 0) {
-        boost::this_fiber::yield();
-    }
+    fu.get();
 
     // DLOG(
     //     "DN %u: rdma write submit. local_addr = %ld, lkey = %u, req.swapin_page_addr = %ld,  "

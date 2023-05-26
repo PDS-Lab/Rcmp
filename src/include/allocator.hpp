@@ -7,6 +7,48 @@
 #include "log.hpp"
 #include "utils.hpp"
 
+template <typename T>
+class ObjectPoolAllocator {
+   public:
+    using value_type = T;
+
+    ObjectPoolAllocator() = default;
+
+    template <typename U>
+    ObjectPoolAllocator(const ObjectPoolAllocator<U> &) {}
+
+    T* allocate(size_t n) {
+        DLOG_ASSERT(n == 1, "Must allocate 1 element");
+
+        if (pool.empty()) {
+            return static_cast<T*>(::operator new(sizeof(T)));
+        } else {
+            T* obj = pool.back();
+            pool.pop_back();
+            return obj;
+        }
+    }
+
+    void deallocate(T* p, size_t n) {
+        pool.push_back(p);
+    }
+
+   private:
+    class raw_ptr_vector : public std::vector<T*> {
+       public:
+        ~raw_ptr_vector() {
+            for (auto* p : *this) {
+                ::operator delete(p);
+            }
+        }
+    };
+
+    static thread_local raw_ptr_vector pool;
+};
+
+template <typename T>
+thread_local typename ObjectPoolAllocator<T>::raw_ptr_vector ObjectPoolAllocator<T>::pool;
+
 class IDGenerator {
    public:
     using id_t = uint64_t;
@@ -56,7 +98,7 @@ class SingleAllocator : private IDGenerator {
         return id * UNIT_SZ;
     }
 
-    void deallocate(uintptr_t ptr) { Recycle(ptr / UNIT_SZ); }
+    void deallocate(uintptr_t ptr, size_t n) { Recycle(ptr / UNIT_SZ); }
 };
 
 template <size_t SZ, size_t BucketNum = 4>
@@ -99,7 +141,7 @@ class RingArena {
         return nullptr;
     }
 
-    void deallocate(void* p) {
+    void deallocate(void* p, size_t n) {
         uint8_t bc = div_floor(reinterpret_cast<uintptr_t>(p) - reinterpret_cast<uintptr_t>(m_bs),
                                sizeof(Block));
         DLOG_ASSERT(bc < BucketNum, "Out Of Memory");

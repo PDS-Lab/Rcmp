@@ -25,7 +25,7 @@ int main() {
                     p = (int*)bb.allocate(s);
                 }
                 *p = -1;
-                bb.deallocate(p);
+                bb.deallocate(p, s);
 
                 if ((++a) % 1000000 == 0) {
                     printf("%d %lu\n", i, a);
