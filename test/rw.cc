@@ -33,6 +33,7 @@ int main(int argc, char *argv[]) {
     cmd.add<uint64_t>("start_addr");
     cmd.add<size_t>("alloc_page_cnt");
     cmd.add<int>("thread");
+    cmd.add<int>("thread_all", 0, "", false, 0);
     cmd.add<int>("node_id");
     cmd.add<int>("no_node");
     bool ret = cmd.parse(argc, argv);
@@ -48,6 +49,7 @@ int main(int argc, char *argv[]) {
 
     // pool.ref->__NotifyPerf();
 
+    int thread = cmd.get<int>("thread");
     RCHMSMemPool instance;
     vector<MemPoolBase *> instances;
     rchms::ClientOptions op = options;
@@ -56,19 +58,21 @@ int main(int argc, char *argv[]) {
         instances.push_back(&instance);
     }
 
-    run_bench({
-        .NID = cmd.get<int>("node_id"),
-        .NODES = cmd.get<int>("no_node"),
-        .IT = cmd.get<size_t>("iteration"),
-        .TH = cmd.get<int>("thread"),
-        .RA = cmd.get<int>("read_ratio"),
-        .PAYLOAD = cmd.get<size_t>("payload_size"),
-        .SA = cmd.get<uint64_t>("start_addr"),
-        .RANGE = cmd.get<uint64_t>("addr_range"),
-        .APC = cmd.get<size_t>("alloc_page_cnt"),
-        .ZIPF = 0.99,
-        .instances = instances,
-    });
+    for (int i = (cmd.get<int>("thread_all") != 0) ? 1 : thread ; i <= thread; i *= 2) {
+        run_bench({
+            .NID = cmd.get<int>("node_id"),
+            .NODES = cmd.get<int>("no_node"),
+            .IT = cmd.get<size_t>("iteration"),
+            .TH = i,
+            .RA = cmd.get<int>("read_ratio"),
+            .PAYLOAD = cmd.get<size_t>("payload_size"),
+            .SA = cmd.get<uint64_t>("start_addr"),
+            .RANGE = cmd.get<uint64_t>("addr_range"),
+            .APC = i == 1 ? cmd.get<size_t>("alloc_page_cnt") : 0,
+            .ZIPF = 0.99,
+            .instances = instances,
+        });
+    }
 
     rchms::Close(instance.ref);
 

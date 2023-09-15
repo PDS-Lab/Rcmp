@@ -9,7 +9,7 @@ IP_MN="192.168.200.51"
 PORT_MN=31850
 # IP_DNs=("192.168.200.51" "192.168.201.52" "192.168.201.33" "192.168.201.89")
 # IP_CNs=(${IP_DNs[0]} ${IP_DNs[1]} ${IP_DNs[2]} ${IP_DNs[3]})
-IP_DNs=("192.168.200.51" "192.168.201.52")
+IP_DNs=("192.168.200.51")
 IP_CNs=(${IP_DNs[0]})
 
 kill_all() {
@@ -63,7 +63,7 @@ test_run() {
         NID=$i
         ALLOC_PAGE_CNT=$(($ADDR_RANGE/2/1024/1024/$NODES))
 
-        CN_CMD="echo $passwd | sudo -S numactl -N 0 $CMD_DIR/test/rw --client_ip=${IP_CNs[i]} --client_port=$port --rack_id=$i --cxl_devdax_path=/dev/shm/cxlsim$i --cxl_memory_size=$CXL_MEM_SZ --iteration=$IT --payload_size=$payload --start_addr=$SA --alloc_page_cnt=$ALLOC_PAGE_CNT --addr_range=$ADDR_RANGE --thread=$THREAD --no_node=$NODES --node_id=$NID --read_ratio=0"
+        CN_CMD="echo $passwd | sudo -S numactl -N 0 $CMD_DIR/test/rw --client_ip=${IP_CNs[i]} --client_port=$port --rack_id=$i --cxl_devdax_path=/dev/shm/cxlsim$i --cxl_memory_size=$CXL_MEM_SZ --iteration=$IT --payload_size=$payload --start_addr=$SA --alloc_page_cnt=$ALLOC_PAGE_CNT --addr_range=$ADDR_RANGE --thread=$THREAD --thread_all=1 --no_node=$NODES --node_id=$NID --read_ratio=0"
 
         echo "[exec] $CN_CMD"
         sshpass -p $passwd ssh $user@${IP_CNs[i]} "echo $passwd | sudo -S $CN_CMD" &
@@ -85,16 +85,17 @@ echo "Start ..."
 
 port=$((14800+0))
 
-ADDR_RANGE=$((9*1024*1024*1024))
+# reserve 2GB, data 8GB(include swap 100MB)
+CXL_MEM_SZ=$((10*1024*1024*1024))
+ADDR_RANGE=$(((8*1024-100)*1024*1024))
 ALLOC_PAGE_CNT=$(($ADDR_RANGE/2/1024/1024))
-CXL_MEM_SZ=$(((5+2)*1024*1024*1024))
 HOT_DECAY=0.04
 WATERMARK=3
 THREAD=8
 IT=1000000
 SA=$((2*1024*1024))
 
-# for payload in 64
-# do
-#     test_run
-# done
+for payload in 64
+do
+    test_run
+done

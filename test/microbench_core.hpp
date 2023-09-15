@@ -1,5 +1,7 @@
-#include <cstdint>
+#include <pthread.h>
 #include <sw/redis++/redis++.h>
+
+#include <cstdint>
 #include <random>
 #include <string>
 #include <thread>
@@ -75,6 +77,99 @@ struct BenchParam {
     vector<MemPoolBase *> instances;
 };
 
+enum TestType : int {
+    RAND = 1,
+    ZIPF = 2,
+    SEQ = 4,
+    WRITE = 8,
+    READ = 16,
+};
+
+inline void run_sample(const string &testname, const BenchParam &param, int type, Redis &redis) {
+    vector<thread> ths;
+    vector<uint64_t> diff_times(param.TH, 0);
+    vector<PerfStatistics> ps(param.TH);
+    pthread_barrier_t b;
+    pthread_barrier_init(&b, nullptr, param.TH);
+    for (int tid = 0; tid < param.TH; ++tid) {
+        ths.emplace_back([&, tid]() {
+            MemPoolBase *pool = param.instances[tid];
+            vector<uint8_t> raw(param.PAYLOAD);
+            vector<size_t> rv(param.IT);
+
+            if (type & TestType::RAND) {
+                for (int i = 0; i < param.IT; ++i) {
+                    rv[i] = rdd(tid, i);
+                }
+            } else if (type & TestType::ZIPF) {
+                zipf_distribution<> zipf_distr(param.RANGE / param.PAYLOAD, param.ZIPF);
+                mt19937_64 eng(tid);
+
+                for (int i = 0; i < param.IT; ++i) {
+                    rv[i] = rdd(tid, zipf_distr(eng));
+                }
+            } else if (type & TestType::SEQ) {
+                int S = rdd(tid, 0);
+                for (int i = 0; i < param.IT; ++i) {
+                    rv[i] = (S + i) * param.PAYLOAD;
+                }
+            }
+
+            pthread_barrier_wait(&b);
+
+            uint64_t start_time = getTimestamp(), end_time;
+
+            uint64_t tv = start_time;
+            for (size_t i = 0; i < param.IT; ++i) {
+                size_t r = rv[i] % param.RANGE;
+                r = align_floor(r, param.PAYLOAD);
+                r += param.SA;
+                if (type & TestType::WRITE) {
+                    pool->Write(r, param.PAYLOAD, raw.data());
+                } else if (type & TestType::READ) {
+                    pool->Read(r, param.PAYLOAD, raw.data());
+                }
+                uint64_t e = getTimestamp();
+                ps[tid].addValue(e - tv);
+                tv = e;
+            }
+
+            end_time = getTimestamp();
+
+            long diff = end_time - start_time;
+
+            diff_times[tid] = diff;
+
+            DLOG("client %d tid %d: %s test done. Use time: %ld us. Avg time: %f us", param.NID,
+                 tid, testname.c_str(), diff, 1.0 * diff / param.IT);
+        });
+    }
+    for (auto &th : ths) {
+        th.join();
+    }
+    pthread_barrier_destroy(&b);
+
+    double total_throughput = 0;
+    for (uint64_t diff : diff_times) {
+        total_throughput += 1.0 * param.IT / diff;
+    }
+    DLOG("%d clients total %s throughput: %f Kops", param.NID, testname.c_str(),
+         total_throughput * 1000);
+
+    PerfStatistics all_ps = ps[0];
+    for (int i = 1; i < ps.size(); ++i) {
+        PerfStatistics ps_tmp = all_ps.merge(ps[i]);
+        all_ps.~PerfStatistics();
+        new (&all_ps) PerfStatistics(ps_tmp);
+    }
+
+    DLOG("%d clients %s latnecy: AVG: %fus, P50: %dus, P99: %dus, P999: %dus, P9999: %dus\n",
+         param.NID, testname.c_str(), all_ps.getAverage(), all_ps.getPercentile(50),
+         all_ps.getPercentile(99), all_ps.getPercentile(99.9), all_ps.getPercentile(99.99));
+
+    redis_sync(redis, testname, param.NID, param.NODES);
+}
+
 inline void run_bench(BenchParam param) {
     DLOG("start runing ...");
 
@@ -92,336 +187,12 @@ inline void run_bench(BenchParam param) {
 
     DLOG("start testing ...");
 
-    vector<uint8_t> raw(param.PAYLOAD);
-
-    if (0) {
-        vector<thread> ths;
-        vector<uint64_t> diff_times(param.TH, 0);
-        vector<PerfStatistics> ps(param.TH);
-        for (int tid = 0; tid < param.TH; ++tid) {
-            ths.emplace_back([&, tid]() {
-                MemPoolBase *pool = param.instances[tid];
-
-                uint64_t start_time = getTimestamp(), end_time;
-
-                uint64_t tv = start_time;
-                for (size_t i = 0; i < param.IT; ++i) {
-                    size_t r = rdd(tid, i) % param.RANGE;
-                    r = align_floor(r, param.PAYLOAD);
-                    r += param.SA;
-                    pool->Write(r, param.PAYLOAD, raw.data());
-                    uint64_t e = getTimestamp();
-                    ps[tid].addValue(e - tv);
-                    tv = e;
-                }
-
-                end_time = getTimestamp();
-
-                long diff = end_time - start_time;
-
-                diff_times[tid] = diff;
-
-                DLOG("client %d tid %d: random write test done. Use time: %ld us. Avg time: %f us",
-                     0, tid, diff, 1.0 * diff / param.IT);
-            });
-        }
-        for (auto &th : ths) {
-            th.join();
-        }
-        double total_throughput = 0;
-        for (uint64_t diff : diff_times) {
-            total_throughput += 1.0 * param.IT / diff;
-        }
-        DLOG("%d clients total random write throughput: %f Kops", 0, total_throughput * 1000);
-
-        PerfStatistics all_ps = ps[0];
-        for (int i = 1; i < ps.size(); ++i) {
-            PerfStatistics ps_tmp = all_ps.merge(ps[i]);
-            all_ps.~PerfStatistics();
-            new (&all_ps) PerfStatistics(ps_tmp);
-        }
-
-        DLOG("AVG: %fus, P50: %dus, P99: %dus, P999: %dus, P9999: %dus\n", all_ps.getAverage(),
-             all_ps.getPercentile(50), all_ps.getPercentile(99), all_ps.getPercentile(99.9),
-             all_ps.getPercentile(99.99));
-
-        redis_sync(redis, "rand_write", param.NID, param.NODES);
-    }
-
-    if (0) {
-        vector<thread> ths;
-        vector<uint64_t> diff_times(param.TH, 0);
-        vector<PerfStatistics> ps(param.TH);
-        for (int tid = 0; tid < param.TH; ++tid) {
-            ths.emplace_back([&, tid]() {
-                MemPoolBase *pool = param.instances[tid];
-
-                uint64_t start_time = getTimestamp(), end_time;
-
-                uint64_t tv = start_time;
-                for (size_t i = 0; i < param.IT; ++i) {
-                    size_t r = rdd(tid, i) % param.RANGE;
-                    r = align_floor(r, param.PAYLOAD);
-                    r += param.SA;
-                    pool->Read(r, param.PAYLOAD, raw.data());
-                    uint64_t e = getTimestamp();
-                    ps[tid].addValue(e - tv);
-                    tv = e;
-                }
-
-                end_time = getTimestamp();
-
-                long diff = end_time - start_time;
-
-                diff_times[tid] = diff;
-
-                DLOG("client %d tid %d: random read test done. Use time: %ld us. Avg time: %f us",
-                     0, tid, diff, 1.0 * diff / param.IT);
-            });
-        }
-        for (auto &th : ths) {
-            th.join();
-        }
-        double total_throughput = 0;
-        for (uint64_t diff : diff_times) {
-            total_throughput += 1.0 * param.IT / diff;
-        }
-        DLOG("%d clients total random read throughput: %f Kops", 0, total_throughput * 1000);
-
-        PerfStatistics all_ps = ps[0];
-        for (int i = 1; i < ps.size(); ++i) {
-            PerfStatistics ps_tmp = all_ps.merge(ps[i]);
-            all_ps.~PerfStatistics();
-            new (&all_ps) PerfStatistics(ps_tmp);
-        }
-
-        DLOG("AVG: %fus, P50: %dus, P99: %dus, P999: %dus, P9999: %dus\n", all_ps.getAverage(),
-             all_ps.getPercentile(50), all_ps.getPercentile(99), all_ps.getPercentile(99.9),
-             all_ps.getPercentile(99.99));
-
-        redis_sync(redis, "rand_read", param.NID, param.NODES);
-    }
-
-    // if (0) {
-    //     uint64_t start_time = getTimestamp(), end_time;
-
-    //     uint64_t tv = start_time;
-    //     for (size_t i = 0; i < param.IT; ++i) {
-    //         size_t r = i * param.PAYLOAD;
-    //         r %= param.RANGE - param.PAYLOAD;
-    //         r += param.SA;
-    //         pool->Write(r, param.PAYLOAD, raw.data());
-    //         uint64_t e = getTimestamp();
-    //         ps.addValue(e - tv);
-    //         tv = e;
-    //     }
-
-    //     end_time = getTimestamp();
-
-    //     long diff = end_time - start_time;
-
-    //     DLOG("cli %d: sequential write test done. Use time: %ld us. Avg time: %f us", 0, diff,
-    //          1.0 * diff / param.IT);
-
-    //     double throughput = 1.0 * (param.IT) / (end_time - start_time);
-    //     DLOG("%d clients total sequential write throughput: %f Kops", 0, throughput * 1000);
-
-    //     DLOG("p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", ps.getPercentile(50),
-    //          ps.getPercentile(99), ps.getPercentile(99.9), ps.getPercentile(99.99));
-    // }
-
-    // if (0) {
-    //     uint64_t start_time = getTimestamp(), end_time;
-
-    //     uint64_t tv = start_time;
-    //     for (size_t i = 0; i < param.IT; ++i) {
-    //         size_t r = i * param.PAYLOAD;
-    //         r %= param.RANGE - param.PAYLOAD;
-    //         r += param.SA;
-    //         pool->Read(r, param.PAYLOAD, raw.data());
-    //         uint64_t e = getTimestamp();
-    //         ps.addValue(e - tv);
-    //         tv = e;
-    //     }
-
-    //     end_time = getTimestamp();
-
-    //     long diff = end_time - start_time;
-
-    //     DLOG("cli %d: sequential read test done. Use time: %ld us. Avg time: %f us", 0, diff,
-    //          1.0 * diff / param.IT);
-
-    //     double throughput = 1.0 * (param.IT) / (end_time - start_time);
-    //     DLOG("%d clients total sequential read throughput: %f Kops", 0, throughput * 1000);
-
-    //     DLOG("p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", ps.getPercentile(50),
-    //          ps.getPercentile(99), ps.getPercentile(99.9), ps.getPercentile(99.99));
-    // }
-
-    if (1) {
-        vector<thread> ths;
-        vector<uint64_t> diff_times(param.TH, 0);
-        vector<PerfStatistics> ps(param.TH);
-        for (int tid = 0; tid < param.TH; ++tid) {
-            ths.emplace_back([&, tid]() {
-                MemPoolBase *pool = param.instances[tid];
-
-                zipf_distribution<> zipf_distr(param.RANGE / param.PAYLOAD, param.ZIPF);
-                mt19937_64 eng(tid);
-
-                vector<size_t> rv(param.IT);
-                for (int i = 0; i < param.IT; ++i) {
-                    rv[i] = rdd(tid, zipf_distr(eng)) * param.PAYLOAD;
-                }
-
-                uint64_t start_time = getTimestamp(), end_time;
-
-                uint64_t tv = start_time;
-                for (size_t i = 0; i < param.IT; ++i) {
-                    size_t r = rv[i] % param.RANGE;
-                    r = align_floor(r, param.PAYLOAD);
-                    r += param.SA;
-                    pool->Write(r, param.PAYLOAD, raw.data());
-                    uint64_t e = getTimestamp();
-                    ps[tid].addValue(e - tv);
-                    tv = e;
-                }
-
-                end_time = getTimestamp();
-
-                long diff = end_time - start_time;
-
-                diff_times[tid] = diff;
-
-                DLOG("client %d tid %d: zipf write test done. Use time: %ld us. Avg time: %f us", 0,
-                     tid, diff, 1.0 * diff / param.IT);
-            });
-        }
-        for (auto &th : ths) {
-            th.join();
-        }
-        double total_throughput = 0;
-        for (uint64_t diff : diff_times) {
-            total_throughput += 1.0 * param.IT / diff;
-        }
-        DLOG("%d clients total zipf write throughput: %f Kops", 0, total_throughput * 1000);
-
-        PerfStatistics all_ps = ps[0];
-        for (int i = 1; i < ps.size(); ++i) {
-            PerfStatistics ps_tmp = all_ps.merge(ps[i]);
-            all_ps.~PerfStatistics();
-            new (&all_ps) PerfStatistics(ps_tmp);
-        }
-
-        DLOG("AVG: %fus, P50: %dus, P99: %dus, P999: %dus, P9999: %dus\n", all_ps.getAverage(),
-             all_ps.getPercentile(50), all_ps.getPercentile(99), all_ps.getPercentile(99.9),
-             all_ps.getPercentile(99.99));
-
-        redis_sync(redis, "zipf_write", param.NID, param.NODES);
-    }
-
-    if (1) {
-        vector<thread> ths;
-        vector<uint64_t> diff_times(param.TH, 0);
-        vector<PerfStatistics> ps(param.TH);
-        for (int tid = 0; tid < param.TH; ++tid) {
-            ths.emplace_back([&, tid]() {
-                MemPoolBase *pool = param.instances[tid];
-
-                zipf_distribution<> zipf_distr(param.RANGE / param.PAYLOAD, param.ZIPF);
-                mt19937_64 eng(tid);
-
-                vector<size_t> rv(param.IT);
-                for (int i = 0; i < param.IT; ++i) {
-                    rv[i] = rdd(tid, zipf_distr(eng)) * param.PAYLOAD;
-                }
-
-                uint64_t start_time = getTimestamp(), end_time;
-
-                uint64_t tv = start_time;
-                for (size_t i = 0; i < param.IT; ++i) {
-                    size_t r = rv[i] % param.RANGE;
-                    r = align_floor(r, param.PAYLOAD);
-                    r += param.SA;
-                    pool->Read(r, param.PAYLOAD, raw.data());
-                    uint64_t e = getTimestamp();
-                    ps[tid].addValue(e - tv);
-                    tv = e;
-                }
-
-                end_time = getTimestamp();
-
-                long diff = end_time - start_time;
-
-                diff_times[tid] = diff;
-
-                DLOG("client %d tid %d: zipf read test done. Use time: %ld us. Avg time: %f us", 0,
-                     tid, diff, 1.0 * diff / param.IT);
-            });
-        }
-        for (auto &th : ths) {
-            th.join();
-        }
-        double total_throughput = 0;
-        for (uint64_t diff : diff_times) {
-            total_throughput += 1.0 * param.IT / diff;
-        }
-        DLOG("%d clients total zipf read throughput: %f Kops", 0, total_throughput * 1000);
-
-        PerfStatistics all_ps = ps[0];
-        for (int i = 1; i < ps.size(); ++i) {
-            PerfStatistics ps_tmp = all_ps.merge(ps[i]);
-            all_ps.~PerfStatistics();
-            new (&all_ps) PerfStatistics(ps_tmp);
-        }
-
-        DLOG("AVG: %fus, P50: %dus, P99: %dus, P999: %dus, P9999: %dus\n", all_ps.getAverage(),
-             all_ps.getPercentile(50), all_ps.getPercentile(99), all_ps.getPercentile(99.9),
-             all_ps.getPercentile(99.99));
-
-        redis_sync(redis, "zipf_read", param.NID, param.NODES);
-    }
-
-    // if (0) {
-    //     uint64_t start_time = getTimestamp(), end_time;
-    //     uint64_t tv = start_time;
-
-    //     for (size_t i = 0; i < param.IT; ++i) {
-    //         uint64_t e;
-    //         size_t r = rdd(0, i);
-    //         if ((r % 100) < param.RA) {
-    //             r %= param.RANGE - param.PAYLOAD;
-    //             r += param.SA;
-    //             pool->Read(r, param.PAYLOAD, raw.data());
-    //             e = getTimestamp();
-    //             hyr.addValue(e - tv);
-    //         } else {
-    //             r %= param.RANGE - param.PAYLOAD;
-    //             r += param.SA;
-    //             pool->Write(r, param.PAYLOAD, raw.data());
-    //             e = getTimestamp();
-    //             hyw.addValue(e - tv);
-    //         }
-    //         tv = e;
-    //     }
-
-    //     end_time = getTimestamp();
-
-    //     long diff = end_time - start_time;
-
-    //     DLOG("cli %d: random op test done. Use time: %ld us. Avg time: %f us", 0, diff,
-    //          1.0 * diff / param.IT);
-
-    //     double throughput = 1.0 * param.IT / (end_time - start_time);
-    //     DLOG("read ratio: %d", param.RA);
-    //     DLOG("%d clients total op throughput: %f Kops", 0, throughput * 1000);
-
-    //     DLOG("p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", hyr.getPercentile(50),
-    //          hyr.getPercentile(99), hyr.getPercentile(99.9), hyr.getPercentile(99.99));
-
-    //     DLOG("p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", hyw.getPercentile(50),
-    //          hyw.getPercentile(99), hyw.getPercentile(99.9), hyw.getPercentile(99.99));
-    // }
+    run_sample("random write", param, TestType::WRITE | TestType::RAND, redis);
+    run_sample("random read", param, TestType::READ | TestType::RAND, redis);
+    run_sample("zipf write", param, TestType::WRITE | TestType::ZIPF, redis);
+    run_sample("zipf read", param, TestType::READ | TestType::ZIPF, redis);
+
+    DLOG("testing end ...");
 
     redis_sync(redis, "test end", param.NID, param.NODES);
 }
