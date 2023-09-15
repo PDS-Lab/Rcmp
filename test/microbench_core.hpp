@@ -115,19 +115,22 @@ inline void run_sample(const string &testname, const BenchParam &param, int type
                 }
             }
 
+            for (auto &r : rv) {
+                r %= param.RANGE;
+                r = align_floor(r, param.PAYLOAD);
+                r += param.SA;
+            }
+
             pthread_barrier_wait(&b);
 
             uint64_t start_time = getTimestamp(), end_time;
 
             uint64_t tv = start_time;
             for (size_t i = 0; i < param.IT; ++i) {
-                size_t r = rv[i] % param.RANGE;
-                r = align_floor(r, param.PAYLOAD);
-                r += param.SA;
                 if (type & TestType::WRITE) {
-                    pool->Write(r, param.PAYLOAD, raw.data());
+                    pool->Write(rv[i], param.PAYLOAD, raw.data());
                 } else if (type & TestType::READ) {
-                    pool->Read(r, param.PAYLOAD, raw.data());
+                    pool->Read(rv[i], param.PAYLOAD, raw.data());
                 }
                 uint64_t e = getTimestamp();
                 ps[tid].addValue(e - tv);
