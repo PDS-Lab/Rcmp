@@ -57,14 +57,14 @@ class LockResourceManager {
         auto it = shard.locks_.find(id);
         it->second->unlock();
 
-        if (it->second->try_lock()) {
-            lock.unlock();
-            std::unique_lock<__ShreadMutex> lock(shard.mutex_, std::try_to_lock);
-            it->second->unlock();
-            if (lock.owns_lock()) {
-                shard.locks_.erase(it);
-            }
-        }
+        // if (it->second->try_lock()) {
+        //     lock.unlock();
+        //     std::unique_lock<__ShreadMutex> lock(shard.mutex_, std::try_to_lock);
+        //     it->second->unlock();
+        //     if (lock.owns_lock()) {
+        //         shard.locks_.erase(it);
+        //     }
+        // }
     }
 
     void lock_shared(ID id) {
@@ -108,14 +108,14 @@ class LockResourceManager {
         auto it = shard.locks_.find(id);
         it->second->unlock_shared();
 
-        if (it->second->try_lock()) {
-            lock.unlock();
-            std::unique_lock<__ShreadMutex> lock(shard.mutex_, std::try_to_lock);
-            it->second->unlock();
-            if (lock.owns_lock()) {
-                shard.locks_.erase(it);
-            }
-        }
+        // if (it->second->try_lock()) {
+        //     lock.unlock();
+        //     std::unique_lock<__ShreadMutex> lock(shard.mutex_, std::try_to_lock);
+        //     it->second->unlock();
+        //     if (lock.owns_lock()) {
+        //         shard.locks_.erase(it);
+        //     }
+        // }
 
         /**
          * ! 当一个线程没有try_lock成功，shared_lock依旧持有，
