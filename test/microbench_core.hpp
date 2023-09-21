@@ -35,17 +35,22 @@ inline void redis_sync(Redis &redis, string sync_key, int NID, int NODES) {
     std::string key = sync_key + to_string(NID);
     std::string value = "ok";
 
-    // redis.set(key, value, 30s);
-    // for (int i = 0; i < NODES; ++i) {
-    //     std::string key = sync_key + to_string(i);
-    //     auto val = redis.get(key);
-    //     while (val) {
-    //         val = redis.get(key);
-    //         this_thread::sleep_for(100ms);
-    //     }
-    // }
+    redis.set(key, value, 30s);
+    for (int i = 0; i < NODES; ++i) {
+        std::string key = sync_key + to_string(i);
+        auto val = redis.get(key);
+        while (!val) {
+            val = redis.get(key);
+            this_thread::sleep_for(100ms);
+        }
+    }
 
     DLOG("%s sync done", sync_key.c_str());
+}
+
+inline void redis_del_sync_key(Redis &redis, string sync_key, int NID, int NODES) {
+    std::string key = sync_key + to_string(NID);
+    redis.del(key);
 }
 
 struct PerfStatistics : public Histogram {
@@ -64,16 +69,17 @@ struct MemPoolBase {
 };
 
 struct BenchParam {
-    int NID;                // node id
-    int NODES;              // node number
-    size_t IT;              // iteration(per thread)
-    int TH;                 // thread count
-    int RA;                 // read ratio
-    size_t PAYLOAD;         // payload size
-    MemPoolBase::GAddr SA;  // start gaddr
-    size_t RANGE;           // gaddr range [SA, SA+RANGE)
-    size_t APC;             // alloc page count
-    float ZIPF;             // zipf α
+    int NID;                 // node id
+    int NODES;               // node number
+    size_t IT;               // iteration(per thread)
+    int TH;                  // thread count
+    int RA;                  // read ratio
+    size_t PAYLOAD;          // payload size
+    MemPoolBase::GAddr SA;   // start gaddr
+    size_t RANGE;            // gaddr range [SA, SA+RANGE)
+    size_t APC;              // alloc page count
+    float ZIPF;              // zipf α
+    string redis_server_ip;  // redis deamon server ip
     vector<MemPoolBase *> instances;
 };
 
@@ -90,7 +96,7 @@ inline void run_sample(const string &testname, const BenchParam &param, int type
     vector<uint64_t> diff_times(param.TH, 0);
     vector<PerfStatistics> ps(param.TH);
     pthread_barrier_t b;
-    pthread_barrier_init(&b, nullptr, param.TH);
+    pthread_barrier_init(&b, nullptr, param.TH + 1);
     for (int tid = 0; tid < param.TH; ++tid) {
         ths.emplace_back([&, tid]() {
             MemPoolBase *pool = param.instances[tid];
@@ -98,15 +104,16 @@ inline void run_sample(const string &testname, const BenchParam &param, int type
             vector<size_t> rv(param.IT);
 
             if (type & TestType::RAND) {
+                mt19937_64 eng(tid);
                 for (int i = 0; i < param.IT; ++i) {
-                    rv[i] = rdd(tid, i);
+                    rv[i] = eng();
                 }
             } else if (type & TestType::ZIPF) {
                 zipf_distribution<> zipf_distr(param.RANGE / param.PAYLOAD, param.ZIPF);
                 mt19937_64 eng(tid);
 
                 for (int i = 0; i < param.IT; ++i) {
-                    rv[i] = rdd(tid, zipf_distr(eng));
+                    rv[i] = zipf_distr(eng) * param.PAYLOAD;
                 }
             } else if (type & TestType::SEQ) {
                 int S = rdd(tid, 0);
@@ -147,6 +154,11 @@ inline void run_sample(const string &testname, const BenchParam &param, int type
                  tid, testname.c_str(), diff, 1.0 * diff / param.IT);
         });
     }
+
+    // redis sync is slow, init thread test context in waiting time.
+    redis_sync(redis, testname, param.NID, param.NODES);
+
+    pthread_barrier_wait(&b);
     for (auto &th : ths) {
         th.join();
     }
@@ -156,8 +168,7 @@ inline void run_sample(const string &testname, const BenchParam &param, int type
     for (uint64_t diff : diff_times) {
         total_throughput += 1.0 * param.IT / diff;
     }
-    DLOG("%d clients total %s throughput: %f Kops", param.NID, testname.c_str(),
-         total_throughput * 1000);
+    DLOG("%d clients total %s throughput: %f Mops", param.NID, testname.c_str(), total_throughput);
 
     PerfStatistics all_ps = ps[0];
     for (int i = 1; i < ps.size(); ++i) {
@@ -169,24 +180,26 @@ inline void run_sample(const string &testname, const BenchParam &param, int type
     DLOG("%d clients %s latnecy: AVG: %fus, P50: %dus, P99: %dus, P999: %dus, P9999: %dus\n",
          param.NID, testname.c_str(), all_ps.getAverage(), all_ps.getPercentile(50),
          all_ps.getPercentile(99), all_ps.getPercentile(99.9), all_ps.getPercentile(99.99));
-
-    redis_sync(redis, testname, param.NID, param.NODES);
 }
 
-inline void run_bench(BenchParam param) {
-    DLOG("start runing ...");
-
-    auto redis = Redis("tcp://192.168.1.52:6379");
-
-    redis_sync(redis, "start", param.NID, param.NODES);
-
+inline void run_init(BenchParam param) {
+    DLOG("start initing ...");
     MemPoolBase *pool = param.instances[0];
     if (param.APC) {
         MemPoolBase::GAddr ga = pool->Alloc(param.APC * (MemPoolBase::alloc_unit));
         DLOG_EXPR(ga, ==, param.SA);
     }
+    DLOG("initing end ...");
+}
 
-    redis_sync(redis, "alloc", param.NID, param.NODES);
+inline void run_bench(BenchParam param) {
+    DLOG("start runing ...");
+
+    auto redis = Redis("tcp://" + param.redis_server_ip);
+
+    redis_sync(redis, "start", param.NID, param.NODES);
+
+    redis_del_sync_key(redis, "test end", param.NID, param.NODES);
 
     DLOG("start testing ...");
 
@@ -197,5 +210,12 @@ inline void run_bench(BenchParam param) {
 
     DLOG("testing end ...");
 
+    redis_del_sync_key(redis, "start", param.NID, param.NODES);
+
     redis_sync(redis, "test end", param.NID, param.NODES);
+
+    redis_del_sync_key(redis, "random write", param.NID, param.NODES);
+    redis_del_sync_key(redis, "random read", param.NID, param.NODES);
+    redis_del_sync_key(redis, "zipf write", param.NID, param.NODES);
+    redis_del_sync_key(redis, "zipf read", param.NID, param.NODES);
 }

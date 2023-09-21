@@ -36,6 +36,7 @@ int main(int argc, char *argv[]) {
     cmd.add<int>("thread_all", 0, "", false, 0);
     cmd.add<int>("node_id");
     cmd.add<int>("no_node");
+    cmd.add<std::string>("redis_server_ip");
     bool ret = cmd.parse(argc, argv);
     DLOG_ASSERT(ret);
 
@@ -58,20 +59,30 @@ int main(int argc, char *argv[]) {
         instances.push_back(&instance);
     }
 
-    for (int i = (cmd.get<int>("thread_all") != 0) ? 1 : thread ; i <= thread; i *= 2) {
-        run_bench({
-            .NID = cmd.get<int>("node_id"),
-            .NODES = cmd.get<int>("no_node"),
-            .IT = cmd.get<size_t>("iteration"),
-            .TH = i,
-            .RA = cmd.get<int>("read_ratio"),
-            .PAYLOAD = cmd.get<size_t>("payload_size"),
-            .SA = cmd.get<uint64_t>("start_addr"),
-            .RANGE = cmd.get<uint64_t>("addr_range"),
-            .APC = i == 1 ? cmd.get<size_t>("alloc_page_cnt") : 0,
-            .ZIPF = 0.99,
-            .instances = instances,
-        });
+    BenchParam param = {
+        .NID = cmd.get<int>("node_id"),
+        .NODES = cmd.get<int>("no_node"),
+        .IT = cmd.get<size_t>("iteration"),
+        // .TH = i,
+        .RA = cmd.get<int>("read_ratio"),
+        // .PAYLOAD = cmd.get<size_t>("payload_size"),
+        // .PAYLOAD = p,
+        .SA = cmd.get<uint64_t>("start_addr"),
+        .RANGE = cmd.get<uint64_t>("addr_range"),
+        .APC = cmd.get<int>("node_id") == 0 ? cmd.get<size_t>("alloc_page_cnt") : 0,
+        .ZIPF = 0.99,
+        .redis_server_ip = cmd.get<string>("redis_server_ip"),
+        .instances = instances,
+    };
+
+    run_init(param);
+
+    for (size_t payload = 64; payload <= 4096; payload *= 2) {
+        for (int th = (cmd.get<int>("thread_all") != 0) ? 1 : thread; th <= thread; th *= 2) {
+            param.TH = th;
+            param.PAYLOAD = payload;
+            run_bench(param);
+        }
     }
 
     rchms::Close(instance.ref);
