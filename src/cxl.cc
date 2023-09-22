@@ -13,17 +13,10 @@
 void *cxl_open_simulate(std::string file, size_t size, int *fd) {
     *fd = open(file.c_str(), O_RDWR | O_CREAT, 0666);
     DLOG_ASSERT(*fd != -1, "Failed to open cxl dev: %s", file.c_str());
-    // 分配2GB对齐内存地址
-    size_t size_aligned = align_ceil(size, mem_region_aligned_size);
 
-    if (size_aligned > size) {
-        DLOG_WARNING("cxl memory aligned from %lu to %lu", size, size_aligned);
-    }
-
-    void *addr = aligned_alloc(mem_region_aligned_size, size_aligned);
+    void *addr = aligned_alloc(mem_region_aligned_size, size);
     free(addr);
-    addr = mmap(addr, size_aligned, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED | MAP_LOCKED,
-                *fd, 0);
+    addr = mmap(addr, size, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED | MAP_LOCKED, *fd, 0);
     DLOG_ASSERT(addr != MAP_FAILED, "Failed to mmap cxl dev: %s", file.c_str());
     return addr;
 }

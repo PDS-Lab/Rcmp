@@ -227,12 +227,20 @@ void DaemonContext::ConnectWithMaster() {
 
 void DaemonContext::RegisterCXLMR() {
     uintptr_t cxl_start_ptr = reinterpret_cast<uintptr_t>(m_cxl_format.start_addr);
-    // ! cxl mmapped is aligned by 2GB
-    while (cxl_start_ptr < reinterpret_cast<uintptr_t>(m_cxl_format.end_addr)) {
+    size_t mr_size = reinterpret_cast<uintptr_t>(m_cxl_format.end_addr) - cxl_start_ptr;
+    size_t aligned_mr_count = mr_size / mem_region_aligned_size;
+    size_t rest_mr_size = mr_size % mem_region_aligned_size;
+
+    for (size_t i = 0; i < aligned_mr_count; ++i, cxl_start_ptr += mem_region_aligned_size) {
         ibv_mr *mr = m_listen_conn.register_memory(reinterpret_cast<void *>(cxl_start_ptr),
                                                    mem_region_aligned_size);
         m_rdma_page_mr_table.push_back(mr);
-        cxl_start_ptr += mem_region_aligned_size;
+    }
+
+    if (rest_mr_size > 0) {
+        ibv_mr *mr =
+            m_listen_conn.register_memory(reinterpret_cast<void *>(cxl_start_ptr), rest_mr_size);
+        m_rdma_page_mr_table.push_back(mr);
     }
 }
 
