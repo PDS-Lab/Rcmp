@@ -50,6 +50,11 @@ void removePageCache(ClientContext& client_context, ClientToDaemonConnection& da
                      RemovePageCacheRequest& req,
                      ResponseHandle<RemovePageCacheReply>& resp_handle) {
     client_context.m_tcache_mgr.foreach_all([&](PageThreadLocalCache& tcache) {
+        auto page_cache = tcache.page_table_cache.FindCache(req.page_id);
+        if (page_cache == nullptr) {
+            return;
+        }
+
         UniqueResourceLock<page_id_t, LockResourceManager<page_id_t, SharedMutex>> cache_lock(
             tcache.ptl_cache_lock, req.page_id);
 

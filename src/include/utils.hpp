@@ -149,7 +149,8 @@ struct atomic_po_val_t {
 };
 
 inline void __DEBUG_START_PERF() {
-    system(("sudo perf record -F 99 -g -p " + std::to_string(getpid()) + " &").c_str());
+    if (system(("sudo perf record -F 99 -g -p " + std::to_string(getpid()) + " &").c_str())) {
+    }
 }
 
 inline void __RANDOM_SLEEP() { usleep(rand() % 10); }

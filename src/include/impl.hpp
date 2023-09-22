@@ -451,6 +451,7 @@ struct PageTableCache {
         LocalPageCache *page_cache = new LocalPageCache(8);
         page_cache->offset = offset;
 
+        // DLOG("add local page %lu cache", page_id);
         table.insert(page_id, page_cache);
 
         return page_cache;
@@ -458,12 +459,23 @@ struct PageTableCache {
 
     void RemoveCache(page_id_t page_id) {
         auto it = table.find(page_id);
-        DLOG_ASSERT(it != table.end(), "Can't find page %lu's cache.", page_id);
+        if (it == table.end()) {
+            return;
+        }
 
         LocalPageCache *page_cache = it->second;
 
         table.erase(it);
         delete page_cache;
+
+        // DLOG("remove local page %lu cache", page_id);
+    }
+
+    ~PageTableCache() {
+        table.foreach_all([](const std::pair<page_id_t, LocalPageCache *> &p) {
+            delete p.second;
+            return true;
+        });
     }
 
     ConcurrentHashMap<page_id_t, LocalPageCache *> table;

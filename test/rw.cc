@@ -30,15 +30,15 @@ int main(int argc, char *argv[]) {
     cmd.add<size_t>("payload_size");
     cmd.add<uint64_t>("addr_range");
     cmd.add<int>("read_ratio");
-    cmd.add<uint64_t>("start_addr");
-    cmd.add<size_t>("alloc_page_cnt");
     cmd.add<int>("thread");
     cmd.add<int>("thread_all", 0, "", false, 0);
     cmd.add<int>("node_id");
     cmd.add<int>("no_node");
     cmd.add<std::string>("redis_server_ip");
     bool ret = cmd.parse(argc, argv);
-    DLOG_ASSERT(ret);
+    if (!ret) {
+        DLOG_FATAL("%s", cmd.error_full().c_str());
+    }
 
     rchms::ClientOptions options;
     options.client_ip = cmd.get<std::string>("client_ip");
