@@ -77,7 +77,6 @@ struct BenchParam {
     size_t PAYLOAD;          // payload size
     MemPoolBase::GAddr SA;   // start gaddr
     size_t RANGE;            // gaddr range [SA, SA+RANGE)
-    size_t APC;              // alloc page count
     float ZIPF;              // zipf α
     string redis_server_ip;  // redis deamon server ip
     vector<MemPoolBase *> instances;
@@ -185,8 +184,8 @@ inline void run_sample(const string &testname, const BenchParam &param, int type
 inline void run_init(BenchParam param) {
     DLOG("start initing ...");
     MemPoolBase *pool = param.instances[0];
-    if (param.APC) {
-        MemPoolBase::GAddr ga = pool->Alloc(param.APC * (MemPoolBase::alloc_unit));
+    if (param.RANGE) {
+        MemPoolBase::GAddr ga = pool->Alloc(param.RANGE);
         DLOG_EXPR(ga, ==, param.SA);
     }
     DLOG("initing end ...");

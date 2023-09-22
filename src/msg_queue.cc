@@ -243,7 +243,9 @@ uint32_t MsgQueue::dequeue_msg(MsgHeader* hv, size_t max_deq) {
     return msgq_q.TryDequeue(hv, hv + max_deq);
 }
 
-void MsgQueue::free_msg_buffer(MsgBuffer& msg_buf) { m_ra.deallocate(msg_buf.get_buf(), msg_buf.size()); }
+void MsgQueue::free_msg_buffer(MsgBuffer& msg_buf) {
+    m_ra.deallocate(msg_buf.get_buf(), msg_buf.size());
+}
 
 #endif  // MSGQ_SINGLE_FIFO_ON
 

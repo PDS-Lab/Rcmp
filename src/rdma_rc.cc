@@ -534,12 +534,6 @@ RDMAFuture RDMAConnection::m_submit_impl(SgeWr *sge_wrs, size_t n) {
     fu.m_sd_->inflight += n;
     m_current_sw_.insert(m_current_sw_.end(), sge_wrs, sge_wrs + n);
 
-    lck.unlock();
-
-    boost::this_fiber::yield();
-
-    lck.lock();
-
     uint64_t wr_id = reinterpret_cast<uint64_t>(m_current_sd_.get());
 
     for (size_t i = 0; i < m_current_sw_.size(); ++i) {
@@ -565,14 +559,15 @@ RDMAFuture RDMAConnection::m_submit_impl(SgeWr *sge_wrs, size_t n) {
             inflight = m_inflight_count_.load(std::memory_order_acquire);
             continue;
         }
-        //   // printf("inflight+: %u\n", inflight);
+        // printf("inflight+: %u\n", inflight);
     } while (!m_inflight_count_.compare_exchange_weak(inflight, inflight + m_current_sd_->inflight,
                                                       std::memory_order_acquire));
 
     if (RDMAConnection::RDMA_TIMEOUT_ENABLE) m_current_sd_->now_ms = getTimestamp();
 
     struct ibv_send_wr *bad_send_wr;
-    if (UNLIKELY(ibv_post_send(m_cm_id_->qp, wr_head, &bad_send_wr) != 0)) {
+    int ret = ibv_post_send(m_cm_id_->qp, wr_head, &bad_send_wr);
+    if (UNLIKELY(ret != 0)) {
         DLOG_ERROR("ibv_post_send fail");
         goto need_retry;
     }
@@ -599,10 +594,6 @@ int RDMAConnection::m_acknowledge_sd_cqe_(int rc, ibv_wc wcs[]) {
 
         // printf("inflight-: %u\n", sd->conn->m_inflight_count_.load());
 
-        if (UNLIKELY(sd->timeout)) {
-            // 其他线程在轮询超时后，已经不能继续轮询，此时需要将sd删除
-            // allocator.deallocate(sd);
-        }
         if (LIKELY(IBV_WC_SUCCESS == wc.status)) {
             // Break out as operation completed successfully
             if (LIKELY(!sd->timeout)) {
@@ -630,7 +621,6 @@ int RDMAFuture::try_get() {
 
     // 轮询resp
     if (m_sd_->wc_finish) {
-        // allocator.deallocate(m_sd_);
         return 0;
     }
 
@@ -660,7 +650,7 @@ int RDMAFuture::get() {
     //     } else if (UNLIKELY(ret == -1)) {
     //         return -1;
     //     }
-    //     std::this_thread::yield();
+    //     boost::this_fiber::yield();
     // }
 }
 
@@ -673,7 +663,8 @@ int RDMAConnection::m_poll_conn_sd_wr_() {
         return -1;
     }
 
-    if (UNLIKELY(RDMAConnection::m_acknowledge_sd_cqe_(rc, wcs) == -1)) {
+    int ret = RDMAConnection::m_acknowledge_sd_cqe_(rc, wcs);
+    if (UNLIKELY(ret == -1)) {
         DLOG_ERROR("acknowledge_cqe fail");
         return -1;
     }

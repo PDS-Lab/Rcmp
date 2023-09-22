@@ -63,7 +63,7 @@ test_run() {
         NID=$i
         ALLOC_PAGE_CNT=$(($ADDR_RANGE/2/1024/1024/$NODES))
 
-        CN_CMD="echo $passwd | sudo -S numactl -N 0 $CMD_DIR/test/rw --client_ip=${IP_CNs[i]} --client_port=$port --rack_id=$i --cxl_devdax_path=/dev/shm/cxlsim$i --cxl_memory_size=$CXL_MEM_SZ --iteration=$IT --payload_size=$payload --start_addr=$SA --alloc_page_cnt=$ALLOC_PAGE_CNT --addr_range=$ADDR_RANGE --thread=$THREAD --thread_all=1 --no_node=$NODES --node_id=$NID --read_ratio=0 --redis_server_ip=192.168.201.52:6379"
+        CN_CMD="echo $passwd | sudo -S numactl -N 0 $CMD_DIR/test/rw --client_ip=${IP_CNs[i]} --client_port=$port --rack_id=$i --cxl_devdax_path=/dev/shm/cxlsim$i --cxl_memory_size=$CXL_MEM_SZ --iteration=$IT --payload_size=$payload --addr_range=$ADDR_RANGE --thread=$THREAD --thread_all=1 --no_node=$NODES --node_id=$NID --read_ratio=0 --redis_server_ip=192.168.201.52:6379"
 
         echo "[exec] $CN_CMD"
         sshpass -p $passwd ssh $user@${IP_CNs[i]} "echo $passwd | sudo -S $CN_CMD" &
