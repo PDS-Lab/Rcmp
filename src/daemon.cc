@@ -47,6 +47,9 @@ void DaemonContext::InitCXLPool() {
     DLOG("total_page_num: %lu", m_page_table.total_page_num);
     DLOG("max_swap_page_num: %lu", m_page_table.max_swap_page_num);
     DLOG("max_data_page_num: %lu", m_page_table.max_data_page_num);
+
+    m_page_table.max_recent_record = 8;
+    m_page_table.hot_decay_lambda = m_options.hot_decay_lambda;
 }
 
 void DaemonContext::InitRPCNexus() {
@@ -109,8 +112,7 @@ void DaemonContext::InitRPCNexus() {
 void DaemonContext::InitRDMARC() {
     rdma_rc::RDMAEnv::init();
 
-    rdma_rc::RDMAConnection::register_connect_hook([this](rdma_rc::RDMAConnection *rdma_conn,
-                                                          void *param_) {
+    rdma_rc::RDMAConnection::register_connect_hook([this](rdma_cm_id *cm_id, void *param_) {
         auto param = reinterpret_cast<RDMARCConnectParam *>(param_);
         auto conn_ = GetConnection(param->mac_id);
         switch (param->role) {
@@ -122,14 +124,24 @@ void DaemonContext::InitRDMARC() {
             case DAEMON:
             case CXL_DAEMON: {
                 DaemonToDaemonConnection *conn = dynamic_cast<DaemonToDaemonConnection *>(conn_);
-                conn->rdma_conn.reset(rdma_conn);
+                if (conn->rdma_conn == nullptr) {
+                    conn->rdma_conn.reset(new rdma_rc::RDMAConnection());
+                    conn->rdma_conn->m_conn_type_ = rdma_rc::RDMAConnection::SENDER;
+                }
+
+                rdma_rc::RDMAConnection *rdma_conn = conn->rdma_conn.get();
+                rdma_conn->m_cm_ids_.push_back(cm_id);
+                cm_id->context = rdma_conn;
+                rdma_rc::RDMAConnection::m_init_last_subconnection_(rdma_conn);
+
+                DLOG("[RDMA_RC] Get New Connect: %s",
+                     conn->rdma_conn->get_peer_addr().first.c_str());
             } break;
         }
-
-        DLOG("[RDMA_RC] Get New Connect: %s", rdma_conn->get_peer_addr().first.c_str());
     });
 
-    rdma_rc::RDMAConnection::register_disconnect_hook([](rdma_rc::RDMAConnection *conn) {
+    rdma_rc::RDMAConnection::register_disconnect_hook([](rdma_cm_id *cm_id) {
+        rdma_rc::RDMAConnection *conn = static_cast<rdma_rc::RDMAConnection *>(cm_id->context);
         DLOG("[RDMA_RC] Disconnect: %s", conn->get_peer_addr().first.c_str());
     });
 
@@ -217,8 +229,9 @@ void DaemonContext::ConnectWithMaster() {
         DLOG("Connect with daemon %d [%s] ...", dd_conn->daemon_id, peer_ip.c_str());
 
         dd_conn->rdma_conn = std::make_unique<rdma_rc::RDMAConnection>();
-        dd_conn->rdma_conn->connect(peer_ip, peer_port, &param, sizeof(param));
-
+        for (int i = 0; i < m_options.cm_qp_num; ++i) {
+            dd_conn->rdma_conn->connect(peer_ip, peer_port, &param, sizeof(param));
+        }
         m_conn_manager.AddConnection(dd_conn->daemon_id, dd_conn);
 
         DLOG("Connection with daemon %d OK", dd_conn->daemon_id);
@@ -244,7 +257,7 @@ void DaemonContext::RegisterCXLMR() {
     }
 }
 
-void DaemonContext::InitFiberPool() { m_fiber_pool_.AddFiber(m_options.prealloc_fiber_num); }
+void DaemonContext::InitFiberPool() { m_fiber_pool.AddFiber(m_options.prealloc_fiber_num); }
 
 void DaemonContext::RDMARCPoll() {
     for (auto &conn : m_conn_manager.m_other_daemon_connect_table) {

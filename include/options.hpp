@@ -37,6 +37,8 @@ class DaemonOptions {
     int prealloc_fiber_num = 16;     // 预分配协程个数
     float hot_decay_lambda = 0.04;  // 热度衰减系数
     size_t hot_swap_watermark = 3;  // 热度阈值
+
+    int cm_qp_num = 8;              // 连接其他daemon的qp数量
 };
 
 class MasterOptions {

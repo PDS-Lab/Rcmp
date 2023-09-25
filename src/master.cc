@@ -29,7 +29,7 @@ void MasterContext::InitCluster() {
 void MasterContext::InitRDMARC() {
     rdma_rc::RDMAEnv::init();
 
-    m_listen_conn.register_connect_hook([&](rdma_rc::RDMAConnection *rdma_conn, void *param_) {
+    rdma_rc::RDMAConnection::register_connect_hook([this](rdma_cm_id *cm_id, void *param_) {
         auto param = reinterpret_cast<RDMARCConnectParam *>(param_);
         auto conn_ = GetConnection(param->mac_id);
         switch (param->role) {
@@ -41,9 +41,25 @@ void MasterContext::InitRDMARC() {
             case DAEMON:
             case CXL_DAEMON: {
                 MasterToDaemonConnection *conn = dynamic_cast<MasterToDaemonConnection *>(conn_);
-                conn->rdma_conn.reset(rdma_conn);
+                if (conn->rdma_conn == nullptr) {
+                    conn->rdma_conn.reset(new rdma_rc::RDMAConnection());
+                    conn->rdma_conn->m_conn_type_ = rdma_rc::RDMAConnection::SENDER;
+                }
+
+                rdma_rc::RDMAConnection *rdma_conn = conn->rdma_conn.get();
+                rdma_conn->m_cm_ids_.push_back(cm_id);
+                cm_id->context = rdma_conn;
+                rdma_rc::RDMAConnection::m_init_last_subconnection_(rdma_conn);
+
+                DLOG("[RDMA_RC] Get New Connect: %s",
+                     conn->rdma_conn->get_peer_addr().first.c_str());
             } break;
         }
+    });
+
+    rdma_rc::RDMAConnection::register_disconnect_hook([](rdma_cm_id *cm_id) {
+        rdma_rc::RDMAConnection *conn = static_cast<rdma_rc::RDMAConnection *>(cm_id->context);
+        DLOG("[RDMA_RC] Disconnect: %s", conn->get_peer_addr().first.c_str());
     });
 
     m_listen_conn.listen(m_options.master_ip);

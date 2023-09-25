@@ -25,17 +25,17 @@ int RDMAConnection::POLL_ENTRY_COUNT = 16;
 bool RDMAConnection::RDMA_TIMEOUT_ENABLE = false;
 uint32_t RDMAConnection::RDMA_TIMEOUT_MS = 2000;
 
-std::function<void(RDMAConnection *conn, void *param)> RDMAConnection::m_hook_connect_;
-std::function<void(RDMAConnection *conn)> RDMAConnection::m_hook_disconnect_;
+std::function<void(rdma_cm_id *cm_id, void *param)> RDMAConnection::m_hook_connect_;
+std::function<void(rdma_cm_id *cm_id)> RDMAConnection::m_hook_disconnect_;
 
 bool RDMAConnection::m_rdma_conn_param_valid_() {
     ibv_device_attr device_attr;
-    if (ibv_query_device(m_cm_id_->verbs, &device_attr) != 0) {
+    if (ibv_query_device(m_cm_ids_.back()->verbs, &device_attr) != 0) {
         DLOG_ERROR("ibv_query_device fail");
         return false;
     }
     m_atomic_support_ = device_attr.atomic_cap != IBV_ATOMIC_NONE;
-    m_inline_support_ = m_cm_id_->verbs->device->transport_type != IBV_TRANSPORT_UNKNOWN;
+    m_inline_support_ = m_cm_ids_.back()->verbs->device->transport_type != IBV_TRANSPORT_UNKNOWN;
     return device_attr.max_cqe >= CQE_NUM && device_attr.max_qp_wr >= MAX_SEND_WR &&
            device_attr.max_sge >= MAX_SEND_SGE &&
            device_attr.max_qp_rd_atom >= RESPONDER_RESOURCES &&
@@ -47,8 +47,13 @@ bool RDMAConnection::m_rdma_conn_param_valid_() {
 int RDMAEnv::init() { return get_instance().__init__(); }
 
 int RDMAEnv::__init__() {
-    m_cm_channel_ = rdma_create_event_channel();
-    if (!m_cm_channel_) {
+    m_cm_client_channel_ = rdma_create_event_channel();
+    if (!m_cm_client_channel_) {
+        DLOG_ERROR("rdma_create_event_channel fail");
+        return -1;
+    }
+    m_cm_server_channel_ = rdma_create_event_channel();
+    if (!m_cm_server_channel_) {
         DLOG_ERROR("rdma_create_event_channel fail");
         return -1;
     }
@@ -65,7 +70,13 @@ int RDMAEnv::__init__() {
             DLOG_ERROR("ibv_alloc_pd fail");
             return -1;
         }
+        ibv_comp_channel *comp_chan = ibv_create_comp_channel(m_ibv_ctxs_[i]);
+        if (!comp_chan) {
+            DLOG_ERROR("ibv_create_comp_channel fail");
+            return -1;
+        }
         m_pd_map_.emplace(m_ibv_ctxs_[i], pd);
+        m_comp_chan_map_.emplace(m_ibv_ctxs_[i], comp_chan);
     }
 
     m_active_ = true;
@@ -77,24 +88,28 @@ RDMAEnv::~RDMAEnv() {
     for (auto &pd : m_pd_map_) {
         ibv_dealloc_pd(pd.second);
     }
+    for (auto &comp_chan : m_comp_chan_map_) {
+        ibv_destroy_comp_channel(comp_chan.second);
+    }
+    for (auto &cq : m_cq_map_) {
+        ibv_destroy_cq(cq.second);
+    }
     rdma_free_devices(m_ibv_ctxs_);
-    rdma_destroy_event_channel(m_cm_channel_);
+    rdma_destroy_event_channel(m_cm_client_channel_);
+    rdma_destroy_event_channel(m_cm_server_channel_);
 }
 
 RDMAConnection::RDMAConnection()
-    : m_stop_(false),
-      m_cm_id_(nullptr),
-      m_pd_(nullptr),
-      m_conn_type_(INVALID),
-      m_inflight_count_(0) {}
+    : m_stop_(false), m_pd_(nullptr), m_conn_type_(INVALID), m_inflight_count_(0) {}
 RDMAConnection::~RDMAConnection() {
     m_stop_ = true;
     switch (m_conn_type_) {
         case SENDER:
-            rdma_disconnect(m_cm_id_);
-            rdma_destroy_qp(m_cm_id_);
-            ibv_destroy_cq(m_cq_);
-            ibv_destroy_comp_channel(m_comp_chan_);
+            for (auto &cm_id : m_cm_ids_) {
+                if (cm_id == nullptr) continue;
+                rdma_disconnect(cm_id);
+                rdma_destroy_qp(cm_id);
+            }
             break;
         case LISTENER:
             m_conn_handler_->join();
@@ -102,10 +117,18 @@ RDMAConnection::~RDMAConnection() {
         case INVALID:
             return;
     }
-    rdma_destroy_id(m_cm_id_);
+    for (auto &cm_id : m_cm_ids_) {
+        if (cm_id == nullptr) continue;
+        rdma_destroy_id(cm_id);
+    }
 }
 
 static ibv_cq *create_cq(ibv_context *verbs, ibv_comp_channel *comp_chan) {
+    auto it = RDMAEnv::get_instance().m_cq_map_.find(verbs);
+    if (it != RDMAEnv::get_instance().m_cq_map_.end()) {
+        return it->second;
+    }
+
     ibv_cq *cq = ibv_create_cq(verbs, RDMAConnection::CQE_NUM, nullptr, comp_chan, 0);
     if (!cq) {
         DLOG_ERROR("ibv_create_cq fail");
@@ -117,28 +140,32 @@ static ibv_cq *create_cq(ibv_context *verbs, ibv_comp_channel *comp_chan) {
         return nullptr;
     }
 
+    RDMAEnv::get_instance().m_cq_map_.emplace(verbs, cq);
+
     return cq;
 }
 
-int RDMAConnection::m_init_ibv_connection_() {
+int RDMAConnection::m_init_last_ibv_subconnection_() {
     if (!m_rdma_conn_param_valid_()) {
         DLOG_ERROR("rdma_conn_param_valid fail");
         return -1;
     }
 
-    m_pd_ = RDMAEnv::get_instance().m_pd_map_[m_cm_id_->verbs];
+    auto cm_id = m_cm_ids_.back();
+
+    m_pd_ = RDMAEnv::get_instance().m_pd_map_[cm_id->verbs];
     if (!m_pd_) {
         DLOG_ERROR("ibv_alloc_pd fail");
         return -1;
     }
 
-    m_comp_chan_ = ibv_create_comp_channel(m_cm_id_->verbs);
+    m_comp_chan_ = RDMAEnv::get_instance().m_comp_chan_map_[cm_id->verbs];
     if (!m_comp_chan_) {
         DLOG_ERROR("ibv_create_comp_channel fail");
         return -1;
     }
 
-    m_cq_ = create_cq(m_cm_id_->verbs, m_comp_chan_);
+    m_cq_ = create_cq(cm_id->verbs, m_comp_chan_);
 
     ibv_qp_init_attr qp_attr = {};
     qp_attr.qp_type = IBV_QPT_RC;
@@ -150,7 +177,7 @@ int RDMAConnection::m_init_ibv_connection_() {
     qp_attr.send_cq = m_cq_;
     qp_attr.recv_cq = m_cq_;
 
-    if (rdma_create_qp(m_cm_id_, m_pd_, &qp_attr)) {
+    if (rdma_create_qp(cm_id, m_pd_, &qp_attr)) {
         DLOG_ERROR("rdma_create_qp fail");
         return -1;
     }
@@ -161,10 +188,14 @@ int RDMAConnection::m_init_ibv_connection_() {
 int RDMAConnection::listen(const std::string &ip) {
     m_conn_type_ = LISTENER;
 
-    if (rdma_create_id(RDMAEnv::get_instance().m_cm_channel_, &m_cm_id_, NULL, RDMA_PS_TCP)) {
+    rdma_cm_id *cm_id = nullptr;
+
+    if (rdma_create_id(RDMAEnv::get_instance().m_cm_server_channel_, &cm_id, NULL, RDMA_PS_TCP)) {
         DLOG_ERROR("rdma_create_id fail");
         return -1;
     }
+
+    m_cm_ids_.push_back(cm_id);
 
     sockaddr_in sin;
     sin.sin_family = AF_INET;
@@ -175,19 +206,19 @@ int RDMAConnection::listen(const std::string &ip) {
         return -1;
     }
 
-    if (rdma_bind_addr(m_cm_id_, (struct sockaddr *)&sin)) {
+    if (rdma_bind_addr(cm_id, (struct sockaddr *)&sin)) {
         DLOG_ERROR("rdma_bind_addr fail");
         return -1;
     }
 
-    if (rdma_listen(m_cm_id_, 1)) {
+    if (rdma_listen(cm_id, 1)) {
         DLOG_ERROR("rdma_listen fail");
         return -1;
     }
 
     DLOG("%s:%d", get_local_addr().first.c_str(), get_local_addr().second);
 
-    m_pd_ = RDMAEnv::get_instance().m_pd_map_[m_cm_id_->verbs];
+    m_pd_ = RDMAEnv::get_instance().m_pd_map_[cm_id->verbs];
     if (!m_pd_) {
         DLOG_ERROR("ibv_alloc_pd fail");
         return -1;
@@ -206,12 +237,16 @@ int RDMAConnection::connect(const std::string &ip, uint16_t port, const void *pa
                             uint8_t param_size) {
     m_conn_type_ = SENDER;
 
-    rdma_event_channel *m_cm_channel_ = RDMAEnv::get_instance().m_cm_channel_;
+    rdma_cm_id *cm_id = nullptr;
 
-    if (rdma_create_id(m_cm_channel_, &m_cm_id_, NULL, RDMA_PS_TCP)) {
+    rdma_event_channel *m_cm_channel_ = RDMAEnv::get_instance().m_cm_client_channel_;
+
+    if (rdma_create_id(m_cm_channel_, &cm_id, NULL, RDMA_PS_TCP)) {
         DLOG_ERROR("rdma_create_id fail");
         return -1;
     }
+
+    m_cm_ids_.push_back(cm_id);
 
     addrinfo *res;
     if (getaddrinfo(ip.c_str(), std::to_string(htons(port)).c_str(), NULL, &res) < 0) {
@@ -221,7 +256,7 @@ int RDMAConnection::connect(const std::string &ip, uint16_t port, const void *pa
 
     addrinfo *addr_tmp = nullptr;
     for (addr_tmp = res; addr_tmp; addr_tmp = addr_tmp->ai_next) {
-        if (!rdma_resolve_addr(m_cm_id_, NULL, addr_tmp->ai_addr, RESOLVE_TIMEOUT_MS)) {
+        if (!rdma_resolve_addr(cm_id, NULL, addr_tmp->ai_addr, RESOLVE_TIMEOUT_MS)) {
             break;
         }
     }
@@ -237,13 +272,13 @@ int RDMAConnection::connect(const std::string &ip, uint16_t port, const void *pa
     }
 
     if (event->event != RDMA_CM_EVENT_ADDR_RESOLVED) {
-        DLOG_ERROR("RDMA_CM_EVENT_ADDR_RESOLVED fail");
+        DLOG_ERROR("RDMA_CM_EVENT_ADDR_RESOLVED fail: %s", rdma_event_str(event->event));
         return -1;
     }
 
     rdma_ack_cm_event(event);
 
-    if (rdma_resolve_route(m_cm_id_, RESOLVE_TIMEOUT_MS)) {
+    if (rdma_resolve_route(cm_id, RESOLVE_TIMEOUT_MS)) {
         DLOG_ERROR("rdma_resolve_route fail");
         return -1;
     }
@@ -260,7 +295,7 @@ int RDMAConnection::connect(const std::string &ip, uint16_t port, const void *pa
 
     rdma_ack_cm_event(event);
 
-    if (m_init_ibv_connection_()) {
+    if (m_init_last_ibv_subconnection_()) {
         return -1;
     }
 
@@ -274,7 +309,7 @@ int RDMAConnection::connect(const std::string &ip, uint16_t port, const void *pa
 
     // TODO: 两个daemon互联容易出现异常无法连接
 
-    if (rdma_connect(m_cm_id_, &conn_param)) {
+    if (rdma_connect(cm_id, &conn_param)) {
         DLOG_ERROR("rdma_connect fail");
         return -1;
     }
@@ -284,15 +319,18 @@ int RDMAConnection::connect(const std::string &ip, uint16_t port, const void *pa
         return -1;
     }
 
+    DLOG("cm_id: %p", cm_id);
+
     if (event->event != RDMA_CM_EVENT_ESTABLISHED) {
-        DLOG_ERROR("RDMA_CM_EVENT_ESTABLISHED fail");
+        DLOG_ERROR("RDMA_CM_EVENT_ESTABLISHED fail: %p %s", event->id,
+                   rdma_event_str(event->event));
         return -1;
     }
 
     rdma_ack_cm_event(event);
 
     // for remote DISCONNECT
-    m_cm_id_->context = this;
+    cm_id->context = this;
 
     return 0;
 }
@@ -301,7 +339,7 @@ void RDMAConnection::m_handle_connection_() {
     struct rdma_cm_event *event;
 
     while (!m_stop_) {
-        if (rdma_get_cm_event(RDMAEnv::get_instance().m_cm_channel_, &event)) {
+        if (rdma_get_cm_event(RDMAEnv::get_instance().m_cm_server_channel_, &event)) {
             DLOG_ERROR("rdma_get_cm_event fail");
             return;
         }
@@ -314,29 +352,20 @@ void RDMAConnection::m_handle_connection_() {
 
             rdma_ack_cm_event(event);
 
-            RDMAConnection *conn = new RDMAConnection();
-            conn->m_conn_type_ = SENDER;
-            conn->m_cm_id_ = cm_id;
-            cm_id->context = conn;
-
-            m_init_connection_(conn);
-
-            if (m_hook_connect_) m_hook_connect_(conn, param_buf);
-
+            m_hook_connect_(cm_id, param_buf);
         } else if (event->event == RDMA_CM_EVENT_ESTABLISHED) {
             rdma_ack_cm_event(event);
         } else {
             struct rdma_cm_id *cm_id = event->id;
             rdma_ack_cm_event(event);
 
-            if (m_hook_disconnect_)
-                m_hook_disconnect_(static_cast<RDMAConnection *>(cm_id->context));
+            if (m_hook_disconnect_) m_hook_disconnect_(cm_id);
         }
     }
 }
 
-void RDMAConnection::m_init_connection_(RDMAConnection *init_conn) {
-    if (init_conn->m_init_ibv_connection_()) {
+void RDMAConnection::m_init_last_subconnection_(RDMAConnection *init_conn) {
+    if (init_conn->m_init_last_ibv_subconnection_()) {
         return;
     }
 
@@ -346,18 +375,18 @@ void RDMAConnection::m_init_connection_(RDMAConnection *init_conn) {
     conn_param.rnr_retry_count = RNR_RETRY_COUNT;
     conn_param.retry_count = RETRY_COUNT;
 
-    if (rdma_accept(init_conn->m_cm_id_, &conn_param)) {
+    if (rdma_accept(init_conn->m_cm_ids_.back(), &conn_param)) {
         DLOG_ERROR("rdma_accept fail");
         return;
     }
 }
 
 std::pair<std::string, in_port_t> RDMAConnection::get_local_addr() {
-    sockaddr_in *sin = (sockaddr_in *)rdma_get_local_addr(m_cm_id_);
+    sockaddr_in *sin = (sockaddr_in *)rdma_get_local_addr(m_cm_ids_.front());
     return std::make_pair(inet_ntoa(sin->sin_addr), (sin->sin_port));
 }
 std::pair<std::string, in_port_t> RDMAConnection::get_peer_addr() {
-    sockaddr_in *sin = (sockaddr_in *)rdma_get_peer_addr(m_cm_id_);
+    sockaddr_in *sin = (sockaddr_in *)rdma_get_peer_addr(m_cm_ids_.front());
     return std::make_pair(inet_ntoa(sin->sin_addr), (sin->sin_port));
 }
 
@@ -391,14 +420,14 @@ void RDMAConnection::deregister_memory(ibv_mr *mr, bool freed) {
 }
 
 void RDMAConnection::register_connect_hook(
-    std::function<void(RDMAConnection *conn, void *param)> &&hook_connect) {
+    std::function<void(rdma_cm_id *cm_id, void *param)> &&hook_connect) {
     m_hook_connect_ =
-        std::forward<std::function<void(RDMAConnection * conn, void *param)>>(hook_connect);
+        std::forward<std::function<void(rdma_cm_id * cm_id, void *param)>>(hook_connect);
 }
 
 void RDMAConnection::register_disconnect_hook(
-    std::function<void(RDMAConnection *conn)> &&hook_disconnect) {
-    m_hook_disconnect_ = std::forward<std::function<void(RDMAConnection * conn)>>(hook_disconnect);
+    std::function<void(rdma_cm_id *cm_id)> &&hook_disconnect) {
+    m_hook_disconnect_ = std::forward<std::function<void(rdma_cm_id * cm_id)>>(hook_disconnect);
 }
 
 struct SyncData {
@@ -411,7 +440,34 @@ struct SyncData {
     boost::fibers::shared_future<void> fu;
 };
 
-int RDMAConnection::prep_write(RDMABatch &b, uint64_t local_addr, uint32_t lkey, uint32_t length,
+int RDMAConnection::prep_write(std::vector<SgeWr> &sge_vec, uint64_t local_addr, uint32_t lkey,
+                               uint32_t length, uint64_t remote_addr, uint32_t rkey,
+                               bool inline_data) {
+    sge_vec.push_back({});
+    return prep_write(&sge_vec.back(), local_addr, lkey, length, remote_addr, rkey, inline_data);
+}
+
+int RDMAConnection::prep_read(std::vector<SgeWr> &sge_vec, uint64_t local_addr, uint32_t lkey,
+                              uint32_t length, uint64_t remote_addr, uint32_t rkey,
+                              bool inline_data) {
+    sge_vec.push_back({});
+    return prep_read(&sge_vec.back(), local_addr, lkey, length, remote_addr, rkey, inline_data);
+}
+
+int RDMAConnection::prep_fetch_add(std::vector<SgeWr> &sge_vec, uint64_t local_addr, uint32_t lkey,
+                                   uint64_t remote_addr, uint32_t rkey, uint64_t n) {
+    sge_vec.push_back({});
+    return prep_fetch_add(&sge_vec.back(), local_addr, lkey, remote_addr, rkey, n);
+}
+
+int RDMAConnection::prep_cas(std::vector<SgeWr> &sge_vec, uint64_t local_addr, uint32_t lkey,
+                             uint64_t remote_addr, uint32_t rkey, uint64_t expected,
+                             uint64_t desired) {
+    sge_vec.push_back({});
+    return prep_cas(&sge_vec.back(), local_addr, lkey, remote_addr, rkey, expected, desired);
+}
+
+int RDMAConnection::prep_write(SgeWr *sge_wr, uint64_t local_addr, uint32_t lkey, uint32_t length,
                                uint64_t remote_addr, uint32_t rkey, bool inline_data) {
     DEBUGY(inline_data && !m_inline_support_) {
         errno = EPERM;
@@ -419,16 +475,15 @@ int RDMAConnection::prep_write(RDMABatch &b, uint64_t local_addr, uint32_t lkey,
         return -1;
     }
 
-    b.m_sge_wrs_.push_back(
-        {ibv_sge{.addr = local_addr, .length = length, .lkey = lkey},
-         ibv_send_wr{.num_sge = 1,
-                     .opcode = IBV_WR_RDMA_WRITE,
-                     .wr = {.rdma = {.remote_addr = remote_addr, .rkey = rkey}}}});
-    if (inline_data) b.m_sge_wrs_.back().wr.send_flags = IBV_SEND_INLINE;
+    *sge_wr = {ibv_sge{.addr = local_addr, .length = length, .lkey = lkey},
+               ibv_send_wr{.num_sge = 1,
+                           .opcode = IBV_WR_RDMA_WRITE,
+                           .wr = {.rdma = {.remote_addr = remote_addr, .rkey = rkey}}}};
+    if (inline_data) sge_wr->wr.send_flags = IBV_SEND_INLINE;
     return 0;
 }
 
-int RDMAConnection::prep_read(RDMABatch &b, uint64_t local_addr, uint32_t lkey, uint32_t length,
+int RDMAConnection::prep_read(SgeWr *sge_wr, uint64_t local_addr, uint32_t lkey, uint32_t length,
                               uint64_t remote_addr, uint32_t rkey, bool inline_data) {
     DEBUGY(inline_data && !m_inline_support_) {
         errno = EPERM;
@@ -436,16 +491,15 @@ int RDMAConnection::prep_read(RDMABatch &b, uint64_t local_addr, uint32_t lkey, 
         return -1;
     }
 
-    b.m_sge_wrs_.push_back(
-        {ibv_sge{.addr = local_addr, .length = length, .lkey = lkey},
-         ibv_send_wr{.num_sge = 1,
-                     .opcode = IBV_WR_RDMA_READ,
-                     .wr = {.rdma = {.remote_addr = remote_addr, .rkey = rkey}}}});
-    if (inline_data) b.m_sge_wrs_.back().wr.send_flags = IBV_SEND_INLINE;
+    *sge_wr = {ibv_sge{.addr = local_addr, .length = length, .lkey = lkey},
+               ibv_send_wr{.num_sge = 1,
+                           .opcode = IBV_WR_RDMA_READ,
+                           .wr = {.rdma = {.remote_addr = remote_addr, .rkey = rkey}}}};
+    if (inline_data) sge_wr->wr.send_flags = IBV_SEND_INLINE;
     return 0;
 }
 
-int RDMAConnection::prep_fetch_add(RDMABatch &b, uint64_t local_addr, uint32_t lkey,
+int RDMAConnection::prep_fetch_add(SgeWr *sge_wr, uint64_t local_addr, uint32_t lkey,
                                    uint64_t remote_addr, uint32_t rkey, uint64_t n) {
     DEBUGY(!m_atomic_support_) {
         errno = EPERM;
@@ -458,23 +512,24 @@ int RDMAConnection::prep_fetch_add(RDMABatch &b, uint64_t local_addr, uint32_t l
         return -1;
     }
 
-    b.m_sge_wrs_.push_back({ibv_sge{.addr = local_addr, .length = 8, .lkey = lkey},
-                            ibv_send_wr{
-                                .num_sge = 1,
-                                .opcode = IBV_WR_ATOMIC_FETCH_AND_ADD,
-                                .wr = {.atomic =
-                                           {
-                                               .remote_addr = remote_addr,
-                                               .compare_add = n,
-                                               .rkey = rkey,
-                                           }},
-                            }});
+    *sge_wr = {ibv_sge{.addr = local_addr, .length = 8, .lkey = lkey},
+               ibv_send_wr{
+                   .num_sge = 1,
+                   .opcode = IBV_WR_ATOMIC_FETCH_AND_ADD,
+                   .wr = {.atomic =
+                              {
+                                  .remote_addr = remote_addr,
+                                  .compare_add = n,
+                                  .rkey = rkey,
+                              }},
+               }};
 
     return 0;
 }
 
-int RDMAConnection::prep_cas(RDMABatch &b, uint64_t local_addr, uint32_t lkey, uint64_t remote_addr,
-                             uint32_t rkey, uint64_t expected, uint64_t desired) {
+int RDMAConnection::prep_cas(SgeWr *sge_wr, uint64_t local_addr, uint32_t lkey,
+                             uint64_t remote_addr, uint32_t rkey, uint64_t expected,
+                             uint64_t desired) {
     DEBUGY(!m_atomic_support_) {
         errno = EPERM;
         DLOG_ERROR("rdma cas: this device don't support atomic operations");
@@ -486,34 +541,37 @@ int RDMAConnection::prep_cas(RDMABatch &b, uint64_t local_addr, uint32_t lkey, u
         return -1;
     }
 
-    b.m_sge_wrs_.push_back({ibv_sge{.addr = local_addr, .length = 8, .lkey = lkey},
-                            ibv_send_wr{
-                                .num_sge = 1,
-                                .opcode = IBV_WR_ATOMIC_CMP_AND_SWP,
-                                .wr = {.atomic =
-                                           {
-                                               .remote_addr = remote_addr,
-                                               .compare_add = expected,
-                                               .swap = desired,
-                                               .rkey = rkey,
-                                           }},
-                            }});
+    *sge_wr = {ibv_sge{.addr = local_addr, .length = 8, .lkey = lkey},
+               ibv_send_wr{
+                   .num_sge = 1,
+                   .opcode = IBV_WR_ATOMIC_CMP_AND_SWP,
+                   .wr = {.atomic =
+                              {
+                                  .remote_addr = remote_addr,
+                                  .compare_add = expected,
+                                  .swap = desired,
+                                  .rkey = rkey,
+                              }},
+               }};
 
     return 0;
 }
 
-RDMAFuture RDMAConnection::submit(RDMABatch &b) {
-    RDMAFuture fu = m_submit_impl(b.m_sge_wrs_.data(), b.m_sge_wrs_.size());
-    if (fu.m_sd_) {
-        b.clear();
-    }
-    return fu;
+RDMAFuture RDMAConnection::submit(std::vector<SgeWr> &sge_vec) {
+    return m_submit_impl(sge_vec.data(), sge_vec.size());
 }
+
+RDMAFuture RDMAConnection::submit(SgeWr *begin, size_t n) { return m_submit_impl(begin, n); }
 
 RDMAFuture RDMAConnection::m_submit_impl(SgeWr *sge_wrs, size_t n) {
     RDMAFuture fu;
 
-    std::unique_lock<Mutex> lck(m_mu);
+    for (size_t i = 0; i < n; ++i) {
+        sge_wrs[i].wr.sg_list = &sge_wrs[i].sge;
+        sge_wrs[i].wr.next = &sge_wrs[i + 1].wr;
+    }
+
+    std::unique_lock<Mutex> lck(m_mu_);
 
     if (m_current_sd_ == nullptr) {
         m_current_sd_ = std::allocate_shared<SyncData>(ObjectPoolAllocator<SyncData>());
@@ -522,37 +580,58 @@ RDMAFuture RDMAConnection::m_submit_impl(SgeWr *sge_wrs, size_t n) {
         m_current_sd_->inflight = 0;
         m_current_sd_->wc_finish = false;
         m_current_sd_->fu = m_current_sd_->pro.get_future();
+
+        m_sw_head_ = sge_wrs;
+        m_sw_tail_ = sge_wrs + n - 1;
     } else {
         fu.m_sd_ = m_current_sd_;
         fu.m_sd_->inflight += n;
-        m_current_sw_.insert(m_current_sw_.end(), sge_wrs, sge_wrs + n);
+
+        DLOG_ASSERT(m_sw_tail_ != nullptr);
+        m_sw_tail_->wr.next = &sge_wrs->wr;
+        m_sw_tail_ = sge_wrs + n - 1;
 
         return fu;
     }
 
     fu.m_sd_ = m_current_sd_;
     fu.m_sd_->inflight += n;
-    m_current_sw_.insert(m_current_sw_.end(), sge_wrs, sge_wrs + n);
 
-    uint64_t wr_id = reinterpret_cast<uint64_t>(m_current_sd_.get());
+    // 等待一段时间积攒wr
+    lck.unlock();
 
-    for (size_t i = 0; i < m_current_sw_.size(); ++i) {
-        m_current_sw_[i].wr.sg_list = &m_current_sw_[i].sge;
-        m_current_sw_[i].wr.next = &m_current_sw_[i + 1].wr;
+    boost::this_fiber::yield();
 
-        // printf("send %#lx to %#lx\n", m_current_sw_[i].sge.addr,
-        //        m_current_sw_[i].wr.wr.rdma.remote_addr);
-    }
+    std::shared_ptr<SyncData> tmp_sd = nullptr;
+    SgeWr *sge_wr_list = nullptr;
+    SgeWr *sge_wr_list_tail = nullptr;
 
-    ibv_send_wr *wr_head = &m_current_sw_.front().wr;
-    m_current_sw_.back().wr.wr_id = wr_id;
-    m_current_sw_.back().wr.next = nullptr;
-    m_current_sw_.back().wr.send_flags |= IBV_SEND_SIGNALED;
+    lck.lock();
+
+    m_current_sd_.swap(tmp_sd);
+    std::swap(sge_wr_list, m_sw_head_);
+    std::swap(sge_wr_list_tail, m_sw_tail_);
+
+    // 选择一个qp传输，需要线程安全
+    auto cm_id = m_cm_ids_.front();
+    m_cm_ids_.pop_front();
+    m_cm_ids_.push_back(cm_id);
+
+    lck.unlock();
+
+    // 现在是线程安全的处理send wr
+
+    uint64_t wr_id = reinterpret_cast<uint64_t>(tmp_sd.get());
+
+    ibv_send_wr *wr_head = &sge_wr_list->wr;
+    sge_wr_list_tail->wr.wr_id = wr_id;
+    sge_wr_list_tail->wr.next = nullptr;
+    sge_wr_list_tail->wr.send_flags |= IBV_SEND_SIGNALED;
 
     // 探察当前正在发送的wr个数
     uint32_t inflight = m_inflight_count_.load(std::memory_order_acquire);
     do {
-        if (UNLIKELY((int)(inflight + m_current_sd_->inflight) > MAX_SEND_WR)) {
+        if (UNLIKELY((int)(inflight + tmp_sd->inflight) > MAX_SEND_WR)) {
             errno = ENOSPC;
             DLOG_ERROR("ibv_post_send too much inflight wr");
             m_poll_conn_sd_wr_();
@@ -560,26 +639,21 @@ RDMAFuture RDMAConnection::m_submit_impl(SgeWr *sge_wrs, size_t n) {
             continue;
         }
         // printf("inflight+: %u\n", inflight);
-    } while (!m_inflight_count_.compare_exchange_weak(inflight, inflight + m_current_sd_->inflight,
+    } while (!m_inflight_count_.compare_exchange_weak(inflight, inflight + tmp_sd->inflight,
                                                       std::memory_order_acquire));
 
-    if (RDMAConnection::RDMA_TIMEOUT_ENABLE) m_current_sd_->now_ms = getTimestamp();
+    if (RDMAConnection::RDMA_TIMEOUT_ENABLE) tmp_sd->now_ms = getTimestamp();
 
     struct ibv_send_wr *bad_send_wr;
-    int ret = ibv_post_send(m_cm_id_->qp, wr_head, &bad_send_wr);
+    int ret = ibv_post_send(cm_id->qp, wr_head, &bad_send_wr);
     if (UNLIKELY(ret != 0)) {
         DLOG_ERROR("ibv_post_send fail");
         goto need_retry;
     }
 
-    m_current_sd_ = nullptr;
-    m_current_sw_.clear();
-
     return fu;
 
 need_retry:
-
-    // allocator.deallocate(sd);
 
     fu.m_sd_ = nullptr;
     return fu;

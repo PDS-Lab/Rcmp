@@ -32,11 +32,14 @@ class RDMAEnv {
     }
 
     bool m_active_;
-    rdma_event_channel *m_cm_channel_;
+    rdma_event_channel *m_cm_client_channel_;
+    rdma_event_channel *m_cm_server_channel_;
     ibv_context **m_ibv_ctxs_;
     int m_nr_dev_;
 
     std::map<ibv_context *, ibv_pd *> m_pd_map_;
+    std::map<ibv_context *, ibv_comp_channel *> m_comp_chan_map_;
+    std::map<ibv_context *, ibv_cq *> m_cq_map_;
 
    private:
     RDMAEnv() : m_active_(false) {}
@@ -47,12 +50,6 @@ class RDMAEnv {
 struct SgeWr {
     ibv_sge sge;
     ibv_send_wr wr;
-};
-
-struct RDMABatch {
-    std::vector<SgeWr> m_sge_wrs_;
-
-    void clear() { m_sge_wrs_.clear(); }
 };
 
 struct SyncData;
@@ -113,29 +110,45 @@ struct RDMAConnection {
 
     // prep 操作对于同一个 batch 均为 thread-unsafety
 
-    int prep_write(RDMABatch &b, uint64_t local_addr, uint32_t lkey, uint32_t length,
+    int prep_write(std::vector<SgeWr> &sge_vec, uint64_t local_addr, uint32_t lkey, uint32_t length,
                    uint64_t remote_addr, uint32_t rkey, bool inline_data);
-    int prep_read(RDMABatch &b, uint64_t local_addr, uint32_t lkey, uint32_t length,
+    int prep_read(std::vector<SgeWr> &sge_vec, uint64_t local_addr, uint32_t lkey, uint32_t length,
                   uint64_t remote_addr, uint32_t rkey, bool inline_data);
-    int prep_fetch_add(RDMABatch &b, uint64_t local_addr, uint32_t lkey, uint64_t remote_addr,
+    int prep_fetch_add(std::vector<SgeWr> &sge_vec, uint64_t local_addr, uint32_t lkey,
+                       uint64_t remote_addr, uint32_t rkey, uint64_t n);
+    int prep_cas(std::vector<SgeWr> &sge_vec, uint64_t local_addr, uint32_t lkey,
+                 uint64_t remote_addr, uint32_t rkey, uint64_t expected, uint64_t desired);
+
+    int prep_write(SgeWr *sge_wr, uint64_t local_addr, uint32_t lkey, uint32_t length,
+                   uint64_t remote_addr, uint32_t rkey, bool inline_data);
+    int prep_read(SgeWr *sge_wr, uint64_t local_addr, uint32_t lkey, uint32_t length,
+                  uint64_t remote_addr, uint32_t rkey, bool inline_data);
+    int prep_fetch_add(SgeWr *sge_wr, uint64_t local_addr, uint32_t lkey, uint64_t remote_addr,
                        uint32_t rkey, uint64_t n);
-    int prep_cas(RDMABatch &b, uint64_t local_addr, uint32_t lkey, uint64_t remote_addr,
+    int prep_cas(SgeWr *sge_wr, uint64_t local_addr, uint32_t lkey, uint64_t remote_addr,
                  uint32_t rkey, uint64_t expected, uint64_t desired);
 
     /**
      * 提交prep队列
-     *
-     * @warning
-     *  * 该操作成功后会清空batch
      */
-    RDMAFuture submit(RDMABatch &b);
+    RDMAFuture submit(std::vector<SgeWr> &sge_vec);
 
-    static std::function<void(RDMAConnection *conn, void *param)> m_hook_connect_;
-    static std::function<void(RDMAConnection *conn)> m_hook_disconnect_;
+    /**
+     * @brief
+     *
+     * @warning sgewr数组必须在future get前保留
+     *
+     * @param begin
+     * @param n
+     * @return RDMAFuture
+     */
+    RDMAFuture submit(SgeWr *begin, size_t n);
+
+    static std::function<void(rdma_cm_id *cm_id, void *param)> m_hook_connect_;
+    static std::function<void(rdma_cm_id *cm_id)> m_hook_disconnect_;
     static void register_connect_hook(
-        std::function<void(RDMAConnection *conn, void *param)> &&hook_connect);
-    static void register_disconnect_hook(
-        std::function<void(RDMAConnection *conn)> &&hook_disconnect);
+        std::function<void(rdma_cm_id *cm_id, void *param)> &&hook_connect);
+    static void register_disconnect_hook(std::function<void(rdma_cm_id *cm_id)> &&hook_disconnect);
 
     enum conn_type_t {
         INVALID,
@@ -148,21 +161,22 @@ struct RDMAConnection {
     bool m_inline_support_ : 1;
     std::atomic<uint32_t> m_inflight_count_;
     ibv_comp_channel *m_comp_chan_;
-    rdma_cm_id *m_cm_id_;
     ibv_pd *m_pd_;
     ibv_cq *m_cq_;
+    std::deque<rdma_cm_id *> m_cm_ids_;
 
     std::thread *m_conn_handler_;
 
-    Mutex m_mu;
+    Mutex m_mu_;
     std::shared_ptr<SyncData> m_current_sd_ = {nullptr};
-    std::vector<SgeWr> m_current_sw_;
+    SgeWr *m_sw_head_ = nullptr;
+    SgeWr *m_sw_tail_ = nullptr;
 
     bool m_rdma_conn_param_valid_();
-    int m_init_ibv_connection_();
+    int m_init_last_ibv_subconnection_();
     void m_handle_connection_();
     int m_poll_conn_sd_wr_();
-    void m_init_connection_(RDMAConnection *init_conn);
+    static void m_init_last_subconnection_(RDMAConnection *init_conn);
     static int m_acknowledge_sd_cqe_(int rc, ibv_wc wcs[]);
     RDMAFuture m_submit_impl(SgeWr *sge_wrs, size_t n);
 };

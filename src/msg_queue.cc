@@ -250,3 +250,15 @@ void MsgQueue::free_msg_buffer(MsgBuffer& msg_buf) {
 #endif  // MSGQ_SINGLE_FIFO_ON
 
 }  // namespace msgq
+
+msgq::MsgQueue* MsgQueueManager::allocQueue() {
+    uintptr_t ring_off = msgq_allocator->allocate(1);
+    DLOG_ASSERT(ring_off != -1, "Can't alloc msg queue");
+    msgq::MsgQueue* r =
+        reinterpret_cast<msgq::MsgQueue*>(reinterpret_cast<uintptr_t>(start_addr) + ring_off);
+    new (r) msgq::MsgQueue();
+    ring_cnt++;
+    return r;
+}
+
+void MsgQueueManager::freeQueue(msgq::MsgQueue* msgq) { DLOG_FATAL("Not Support"); }

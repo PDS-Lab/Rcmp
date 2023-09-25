@@ -54,7 +54,7 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
     // TODO: more page
 
     auto &ptl_cache_lock = PageThreadLocalCache::getInstance(m_impl->m_tcache_mgr).ptl_cache_lock;
-    auto &ptl = PageThreadLocalCache::getInstance(m_impl->m_tcache_mgr).page_table_cache;
+    auto &ptl = PageThreadLocalCache::getInstance(m_impl->m_tcache_mgr).page_cache_table;
 
     SharedResourceLock<page_id_t, LockResourceManager<page_id_t, SharedMutex>> cache_lock(
         ptl_cache_lock, page_id);
@@ -109,7 +109,7 @@ Status PoolContext::Write(GAddr gaddr, size_t size, void *buf) {
     // TODO: more page
 
     auto &ptl_cache_lock = PageThreadLocalCache::getInstance(m_impl->m_tcache_mgr).ptl_cache_lock;
-    auto &ptl = PageThreadLocalCache::getInstance(m_impl->m_tcache_mgr).page_table_cache;
+    auto &ptl = PageThreadLocalCache::getInstance(m_impl->m_tcache_mgr).page_cache_table;
 
     SharedResourceLock<page_id_t, LockResourceManager<page_id_t, SharedMutex>> cache_lock(
         ptl_cache_lock, page_id);

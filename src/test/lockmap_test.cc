@@ -16,30 +16,32 @@ int main() {
     bool f = true;
     vector<thread> ths;
     for (int i = 0; i < 0; ++i) {
-        ths.emplace_back([&](){
+        ths.emplace_back([&]() {
             for (int t = 0; t < 100000; ++t) {
                 int r = rand() % 100;
-                lr.lock(r);
+                auto *lck = lr.get_lock(r);
+                lck->lock();
 
                 int a_ = a[r], b_ = b[r];
                 a[r] = b_ + 1;
                 b[r] = a_ + 1;
 
-                lr.unlock(r);
+                lck->unlock();
             }
         });
     }
     for (int i = 0; i < 2; ++i) {
-        ths.emplace_back([&, i](){
+        ths.emplace_back([&, i]() {
             int t = 0;
 
             while (f) {
                 int r = rand() % 100;
-                lr.lock_shared(r);
+                auto *lck = lr.get_lock(r);
+                lck->lock_shared();
 
                 assert(a[r] == b[r]);
 
-                lr.unlock_shared(r);
+                lck->unlock_shared();
 
                 if ((++t % 10000) == 0) {
                     cout << "t " << i << " " << t << endl;

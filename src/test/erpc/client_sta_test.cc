@@ -45,7 +45,7 @@ void thread_func(Params param, erpc::NexusWrap *nexus, Stat *stat, int thread_id
     size_t resp_s = param.payload;
 #if ONESIDE_EXT == 1
     resp_s = 8;
-    rdma_rc::RDMABatch ba;
+    std::vector<rdma_rc::SgeWr> sge_wrs;
 #endif
 
     erpc::SMHandlerWrap smhw;
@@ -87,8 +87,8 @@ void thread_func(Params param, erpc::NexusWrap *nexus, Stat *stat, int thread_id
         // }
 
 #if ONESIDE_EXT == 1
-        conn.prep_write(ba, mr_addr, mr_lkey, param.payload, server_mr_addr, server_mr_rkey, false);
-        rdma_rc::RDMAFuture fu = conn.submit(ba);
+        conn.prep_write(sge_wrs, mr_addr, mr_lkey, param.payload, server_mr_addr, server_mr_rkey, false);
+        rdma_rc::RDMAFuture fu = conn.submit(sge_wrs);
         fu.get();
 #endif
 

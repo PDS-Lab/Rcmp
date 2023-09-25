@@ -178,3 +178,16 @@ struct MsgQueueRPC {
 };
 
 }  // namespace msgq
+
+struct MsgQueueManager {
+    const static size_t RING_ELEM_SIZE = sizeof(msgq::MsgQueue);
+
+    void *start_addr;
+    uint32_t ring_cnt;
+    std::unique_ptr<SingleAllocator<RING_ELEM_SIZE>> msgq_allocator;
+    std::unique_ptr<msgq::MsgQueueNexus> nexus;
+    std::unique_ptr<msgq::MsgQueueRPC> rpc;
+
+    msgq::MsgQueue *allocQueue();
+    void freeQueue(msgq::MsgQueue *msgq);
+};

@@ -1,7 +1,5 @@
 #include "proto/rpc_client.hpp"
 
-#include "common.hpp"
-#include "lock.hpp"
 
 namespace rpc_client {
 
@@ -23,20 +21,18 @@ void getPagePastAccessFreq(ClientContext& client_context,
 
     // m_page中存的是该CN访问过的所有Page的id
     client_context.m_tcache_mgr.foreach_all([&](PageThreadLocalCache& tcache) {
-        tcache.page_table_cache.table.foreach_all(
-            [&](std::pair<const page_id_t, LocalPageCache*>& p) {
-                auto page_id = p.first;
+        for (auto& p : tcache.page_cache_table.table) {
+            auto page_id = p.first;
 
-                uint64_t last = p.second->stats.last();
-                if (last_time > last) {
-                    last_time = last;  // 越小，越旧
-                    oldest_page = page_id;
-                }
-                // DLOG("CN: %u getPagePastAccessFreq: find page %lu's cache.",
-                //      client_context.m_client_id, page_id);
-
-                return true;
-            });
+            uint64_t last = p.second->stats.last();
+            if (last_time > last) {
+                last_time = last;  // 越小，越旧
+                oldest_page = page_id;
+            }
+            // DLOG("CN: %u getPagePastAccessFreq: find page %lu's cache.",
+            //      client_context.m_client_id, page_id);
+        }
+        return true;
     });
 
     // DLOG("CN: %u getPagePastAccessFreq: finished.", client_context.m_client_id);
@@ -50,7 +46,7 @@ void removePageCache(ClientContext& client_context, ClientToDaemonConnection& da
                      RemovePageCacheRequest& req,
                      ResponseHandle<RemovePageCacheReply>& resp_handle) {
     client_context.m_tcache_mgr.foreach_all([&](PageThreadLocalCache& tcache) {
-        auto page_cache = tcache.page_table_cache.FindCache(req.page_id);
+        auto page_cache = tcache.page_cache_table.FindCache(req.page_id);
         if (page_cache == nullptr) {
             return;
         }
@@ -58,11 +54,10 @@ void removePageCache(ClientContext& client_context, ClientToDaemonConnection& da
         UniqueResourceLock<page_id_t, LockResourceManager<page_id_t, SharedMutex>> cache_lock(
             tcache.ptl_cache_lock, req.page_id);
 
-        tcache.page_table_cache.RemoveCache(req.page_id);
+        tcache.page_cache_table.RemoveCache(req.page_id);
     });
 
     // DLOG("CN %u: Del page %lu cache.", client_context.m_client_id, req.page_id);
-    // DLOG("CN %u: removePageCache page %lu unlock", client_context.m_client_id, req.page_id);
 
     resp_handle.Init();
     auto& reply = resp_handle.Get();
