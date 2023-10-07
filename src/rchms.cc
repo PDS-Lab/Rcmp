@@ -320,15 +320,15 @@ void ClientContext::InitMsgQPooller() {
     // 启动polling worker
     m_msgq_stop = false;
     m_msgq_worker = std::thread([this]() {
+        boost::fibers::use_scheduling_algorithm<priority_scheduler>();
         InitFiberPool();
-        boost::fibers::use_scheduling_algorithm<boost::fibers::algo::round_robin>();
 
         while (!m_msgq_stop) {
             m_msgq_rpc->run_event_loop_once();
             boost::this_fiber::yield();
         }
 
-        m_fiber_pool_.EraseAllFiber();
+        m_fiber_pool_.EraseAll();
     });
 }
 

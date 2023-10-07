@@ -117,6 +117,8 @@ void erpc_call_target(erpc::ReqHandle *req_handle, void *context) {
     auto self_ctx = reinterpret_cast<typename EFW::SelfContext *>(context);
 
     self_ctx->GetFiberPool().EnqueueTask([self_ctx, req_handle]() {
+        uint64_t __start_ns__ = getNsTimestamp();
+
         auto &rpc = self_ctx->GetErpc();
         erpc::ReqHandleWrap req_wrap(req_handle);
         ErpcResponseHandle<typename EFW::ResponseType> resp_handle(rpc, req_wrap);
@@ -126,7 +128,7 @@ void erpc_call_target(erpc::ReqHandle *req_handle, void *context) {
 
         typename EFW::PeerContext *peer_connection = nullptr;
 
-        if (ESTABLISH) {
+        if constexpr (ESTABLISH) {
             peer_connection = new typename EFW::PeerContext();
         } else {
             peer_connection =
@@ -135,6 +137,10 @@ void erpc_call_target(erpc::ReqHandle *req_handle, void *context) {
 
         EFW::func(*self_ctx, *peer_connection, *req, resp_handle);
         rpc.enqueue_response(req_wrap, resp_handle.GetBuffer());
+
+        uint64_t __end_ns__ = getNsTimestamp();
+        self_ctx->m_stats.rpc_opn++;
+        self_ctx->m_stats.rpc_exec_time += __end_ns__ - __start_ns__;
     });
 }
 
@@ -144,13 +150,15 @@ void msgq_call_target(msgq::MsgBuffer &req_raw, void *ctx) {
 
     // mutable防止引用析构
     self_ctx->GetFiberPool().EnqueueTask([self_ctx, req_raw]() mutable {
+        uint64_t __start_ns__ = getNsTimestamp();
+
         auto req = reinterpret_cast<typename EFW::RequestType *>(req_raw.get_buf());
 
         typename EFW::PeerContext *peer_connection = nullptr;
         msgq::MsgQueueRPC *rpc;
         msgq::MsgBuffer resp_raw;
 
-        if (ESTABLISH) {
+        if constexpr (ESTABLISH) {
             peer_connection = new typename EFW::PeerContext();
             RawResponseHandle<typename EFW::ResponseType> resp_handle;
             EFW::func(*self_ctx, *peer_connection, *req, resp_handle);
@@ -174,6 +182,10 @@ void msgq_call_target(msgq::MsgBuffer &req_raw, void *ctx) {
 
         // 发送端的buffer将由接收端释放
         rpc->free_msg_buffer(req_raw);
+
+        uint64_t __end_ns__ = getNsTimestamp();
+        self_ctx->m_stats.rpc_opn++;
+        self_ctx->m_stats.rpc_exec_time += __end_ns__ - __start_ns__;
     });
 }
 
@@ -300,8 +312,7 @@ struct ErpcClient {
         copy_fn(req_buf, std::move(args...));
 
         rpc.enqueue_request(peer_session, RpcCallerWrapper::rpc_type, fu.req_raw, fu.resp_raw,
-                            erpc_general_promise_cb<PromiseType>,
-                            static_cast<void *>(fu.pro));
+                            erpc_general_promise_cb<PromiseType>, static_cast<void *>(fu.pro));
 
         return fu;
     }
@@ -402,8 +413,7 @@ struct MsgQClient {
         copy_fn(req_buf, std::move(args)...);
 
         rpc.enqueue_request(RpcCallerWrapper::rpc_type, fu.req_raw,
-                            msgq_general_promise_cb<PromiseType>,
-                            static_cast<void *>(fu.pro));
+                            msgq_general_promise_cb<PromiseType>, static_cast<void *>(fu.pro));
 
         return fu;
     }

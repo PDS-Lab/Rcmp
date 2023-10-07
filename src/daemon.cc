@@ -257,7 +257,10 @@ void DaemonContext::RegisterCXLMR() {
     }
 }
 
-void DaemonContext::InitFiberPool() { m_fiber_pool.AddFiber(m_options.prealloc_fiber_num); }
+void DaemonContext::InitFiberPool() {
+    boost::fibers::use_scheduling_algorithm<priority_scheduler>();
+    m_fiber_pool.AddFiber(m_options.prealloc_fiber_num);
+}
 
 void DaemonContext::RDMARCPoll() {
     for (auto &conn : m_conn_manager.m_other_daemon_connect_table) {
@@ -306,16 +309,75 @@ int main(int argc, char *argv[]) {
     daemon_context.InitFiberPool();
     daemon_context.ConnectWithMaster();
 
-    std::thread log_worker = std::thread([&daemon_context]() {
+    std::thread stat_worker = std::thread([&daemon_context]() {
+        auto page_hit = daemon_context.m_stats.page_hit;
+        auto page_miss = daemon_context.m_stats.page_miss;
+        auto page_dio = daemon_context.m_stats.page_dio;
+        auto page_swap = daemon_context.m_stats.page_swap;
+        auto rpc_opn = daemon_context.m_stats.rpc_opn;
+        auto rpc_exec_time = daemon_context.m_stats.rpc_exec_time;
+        auto msgq_send_io = daemon_context.m_msgq_manager.nexus->m_stats.send_io;
+        auto msgq_recv_io = daemon_context.m_msgq_manager.nexus->m_stats.recv_io;
+        auto msgq_send_bytes = daemon_context.m_msgq_manager.nexus->m_stats.send_bytes;
+        auto msgq_send_time = daemon_context.m_msgq_manager.nexus->m_stats.send_time;
+        auto msgq_recv_bytes = daemon_context.m_msgq_manager.nexus->m_stats.recv_bytes;
+        auto msgq_recv_time = daemon_context.m_msgq_manager.nexus->m_stats.recv_time;
+
         while (true) {
             std::this_thread::sleep_for(5s);
-            DLOG("page hit: %lu, page miss: %lu, direct io: %lu, swap: %lu",
-                 daemon_context.m_stats.page_hit, daemon_context.m_stats.page_miss,
-                 daemon_context.m_stats.page_dio, daemon_context.m_stats.page_swap);
+
+            auto new_page_hit = daemon_context.m_stats.page_hit;
+            auto new_page_miss = daemon_context.m_stats.page_miss;
+            auto new_page_dio = daemon_context.m_stats.page_dio;
+            auto new_page_swap = daemon_context.m_stats.page_swap;
+            auto new_rpc_opn = daemon_context.m_stats.rpc_opn;
+            auto new_rpc_exec_time = daemon_context.m_stats.rpc_exec_time;
+            auto new_msgq_send_io = daemon_context.m_msgq_manager.nexus->m_stats.send_io;
+            auto new_msgq_recv_io = daemon_context.m_msgq_manager.nexus->m_stats.recv_io;
+            auto new_msgq_send_bytes = daemon_context.m_msgq_manager.nexus->m_stats.send_bytes;
+            auto new_msgq_send_time = daemon_context.m_msgq_manager.nexus->m_stats.send_time;
+            auto new_msgq_recv_bytes = daemon_context.m_msgq_manager.nexus->m_stats.recv_bytes;
+            auto new_msgq_recv_time = daemon_context.m_msgq_manager.nexus->m_stats.recv_time;
+
+            auto diff_page_hit = new_page_hit - page_hit;
+            auto diff_page_miss = new_page_miss - page_miss;
+            auto diff_page_dio = new_page_dio - page_dio;
+            auto diff_page_swap = new_page_swap - page_swap;
+            auto diff_rpc_opn = new_rpc_opn - rpc_opn;
+            auto diff_rpc_exec_time = new_rpc_exec_time - rpc_exec_time;
+            auto diff_msgq_send_io = new_msgq_send_io - msgq_send_io;
+            auto diff_msgq_recv_io = new_msgq_recv_io - msgq_recv_io;
+            auto diff_msgq_send_bytes = new_msgq_send_bytes - msgq_send_bytes;
+            auto diff_msgq_send_time = new_msgq_send_time - msgq_send_time;
+            auto diff_msgq_recv_bytes = new_msgq_recv_bytes - msgq_recv_bytes;
+            auto diff_msgq_recv_time = new_msgq_recv_time - msgq_recv_time;
+
+            page_hit = new_page_hit;
+            page_miss = new_page_miss;
+            page_dio = new_page_dio;
+            page_swap = new_page_swap;
+            rpc_opn = new_rpc_opn;
+            rpc_exec_time = new_rpc_exec_time;
+            msgq_send_io = new_msgq_send_io;
+            msgq_recv_io = new_msgq_recv_io;
+            msgq_send_bytes = new_msgq_send_bytes;
+            msgq_send_time = new_msgq_send_time;
+            msgq_recv_bytes = new_msgq_recv_bytes;
+            msgq_recv_time = new_msgq_recv_time;
+
+            DLOG(
+                "page hit: %lu, page miss: %lu, direct io: %lu, swap: %lu, rpcexec: %f us, msgq "
+                "send lat: %f us, msgq recv lat: %f us, msgq "
+                "send bw: %f MB/s, msgq recv bw: %f MB/s",
+                diff_page_hit, diff_page_miss, diff_page_dio, diff_page_swap,
+                1.0 * diff_rpc_exec_time / (diff_rpc_opn + 1) / 1e3,
+                1.0 * diff_msgq_send_time / (diff_msgq_send_io + 1) / 1e3,
+                1.0 * diff_msgq_recv_time / (diff_msgq_recv_io + 1) / 1e3,
+                1.0 * diff_msgq_send_bytes / (diff_msgq_send_time + 1) / 1024 / 1024 * 1e9,
+                1.0 * diff_msgq_recv_bytes / (diff_msgq_recv_time + 1) / 1024 / 1024 * 1e9);
         }
     });
 
-    boost::fibers::use_scheduling_algorithm<boost::fibers::algo::round_robin>();
     while (true) {
         daemon_context.m_msgq_manager.rpc->run_event_loop_once();
         daemon_context.GetErpc().run_event_loop_once();
@@ -324,7 +386,7 @@ int main(int argc, char *argv[]) {
         boost::this_fiber::yield();
     }
 
-    log_worker.join();
+    stat_worker.join();
 
     return 0;
 }

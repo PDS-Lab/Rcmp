@@ -124,7 +124,7 @@ class ConcurrentHashMap {
         auto& shard = m_shards[index];
         auto& map = shard.m_map;
 
-        iterator iter = find(key);
+        auto iter = find(key);
         if (iter != end()) {
             return {iter, false};
         }
@@ -140,7 +140,7 @@ class ConcurrentHashMap {
     }
 
     void erase(K key) {
-        iterator it = find(key);
+        auto it = find(key);
         erase(it);
     }
 
@@ -183,9 +183,7 @@ class ConcurrentHashMap {
      */
     template <typename Genrator, typename F>
     void random_foreach_all(Genrator g, F&& f) {
-        std::uniform_int_distribution<> dist_(0, BucketNum - 1);
-
-        const size_t i_ = dist_(g);
+        const size_t i_ = g() % BucketNum;
         size_t i = i_;
         do {
             auto& shard = m_shards[i];

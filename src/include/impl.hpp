@@ -8,6 +8,19 @@
 #include "rdma_rc.hpp"
 #include "udp_server.hpp"
 
+struct SysStatistics {
+    uint64_t local_hit = 0;
+    uint64_t local_miss = 0;
+
+    uint64_t page_hit = 0;
+    uint64_t page_miss = 0;
+    uint64_t page_dio = 0;
+    uint64_t page_swap = 0;
+
+    uint64_t rpc_opn = 0;
+    uint64_t rpc_exec_time = 0;
+};
+
 /************************  Master   **********************/
 
 struct MasterConnection {
@@ -54,9 +67,7 @@ struct MasterContext : public NOCOPYABLE {
 
     rdma_rc::RDMAConnection m_listen_conn;
 
-    struct {
-        uint64_t page_swap = 0;
-    } m_stats;
+    SysStatistics m_stats;
 
     static MasterContext &getInstance() {
         static MasterContext master_ctx;
@@ -173,12 +184,7 @@ struct DaemonContext : public NOCOPYABLE {
         std::vector<erpc::IBRpcWrap> rpc_set;
     } m_erpc_ctx;
 
-    struct {
-        uint64_t page_hit = 0;
-        uint64_t page_miss = 0;
-        uint64_t page_dio = 0;
-        uint64_t page_swap = 0;
-    } m_stats;
+    SysStatistics m_stats;
 
     static DaemonContext &getInstance() {
         static DaemonContext daemon_ctx;
@@ -269,10 +275,7 @@ struct ClientContext : public NOCOPYABLE {
     // std::vector<std::tuple<rchms::GAddr, size_t, offset_t>> m_batch_list;
     // std::thread batch_flush_worker;
 
-    struct {
-        uint64_t local_hit = 0;
-        uint64_t local_miss = 0;
-    } m_stats;
+    SysStatistics m_stats;
 
     mac_id_t GetMacID() const { return m_client_id; }
 

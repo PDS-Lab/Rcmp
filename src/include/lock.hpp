@@ -13,17 +13,25 @@ using SharedMutex = std::shared_mutex;
 class SpinMutex {
    public:
     SpinMutex() { pthread_spin_init(&m_spinlock, 0); }
-
     ~SpinMutex() { pthread_spin_destroy(&m_spinlock); }
 
     void lock() { pthread_spin_lock(&m_spinlock); }
-
     bool try_lock() { return pthread_spin_trylock(&m_spinlock) == 0; }
-
     void unlock() { pthread_spin_unlock(&m_spinlock); }
 
    private:
     pthread_spinlock_t m_spinlock;
+};
+
+class Barrier {
+   public:
+    Barrier(uint32_t n) { pthread_barrier_init(&m_b, nullptr, n); }
+    ~Barrier() { pthread_barrier_destroy(&m_b); }
+
+    void wait() { pthread_barrier_wait(&m_b); }
+
+   private:
+    pthread_barrier_t m_b;
 };
 
 using CortMutex = boost::fibers::mutex;

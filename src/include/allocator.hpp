@@ -114,7 +114,9 @@ class RingArena {
 
     void* allocate(size_t s) {
         // thread local
-        uint8_t b_cur = (reinterpret_cast<uintptr_t>(&b_cur) >> 5) % BucketNum, bc = b_cur;
+        thread_local uint8_t b_cur = (reinterpret_cast<uintptr_t>(&b_cur) >> 5) % BucketNum;
+        b_cur++;
+        uint8_t bc = b_cur;
         do {
             Block& b = m_bs[bc];
             atomic_po_val_t opv = b.pv.load(std::memory_order_acquire), npv;

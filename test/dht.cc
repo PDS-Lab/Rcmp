@@ -67,17 +67,17 @@ int main(int argc, char *argv[]) {
     PerfStatistics hyr, hyw;
 
     {
-        uint64_t start_time = getTimestamp(), end_time;
+        uint64_t start_time = getUsTimestamp(), end_time;
 
         uint64_t tv = start_time;
         for (size_t i = 0; i < IT; ++i) {
             h.put(rdd(0, i), rdd(0, i));
-            uint64_t e = getTimestamp();
+            uint64_t e = getUsTimestamp();
             ps.addValue(e - tv);
             tv = e;
         }
 
-        end_time = getTimestamp();
+        end_time = getUsTimestamp();
 
         long diff = end_time - start_time;
 
@@ -100,7 +100,7 @@ int main(int argc, char *argv[]) {
         }
         shuffle(rv, 0);
 
-        uint64_t start_time = getTimestamp(), end_time;
+        uint64_t start_time = getUsTimestamp(), end_time;
         uint64_t tv = start_time;
 
         for (size_t i = 0; i < IT; ++i) {
@@ -108,18 +108,18 @@ int main(int argc, char *argv[]) {
             if ((i % 100) < RA) {
                 size_t ret = h.get(rv[i]);
                 DLOG_EXPR(ret, ==, rv[i]);
-                e = getTimestamp();
+                e = getUsTimestamp();
                 hyr.addValue(e - tv);
             } else {
                 int r = rdd(0, i) * rdd(0, i);
                 h.put(r, r);
-                e = getTimestamp();
+                e = getUsTimestamp();
                 hyw.addValue(e - tv);
             }
             tv = e;
         }
 
-        end_time = getTimestamp();
+        end_time = getUsTimestamp();
 
         long diff = end_time - start_time;
 

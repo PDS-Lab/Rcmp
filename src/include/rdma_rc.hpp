@@ -1,20 +1,12 @@
 #pragma once
 
-#include <infiniband/verbs.h>
 #include <rdma/rdma_cma.h>
 
-#include <atomic>
-#include <boost/fiber/future/future.hpp>
-#include <functional>
-#include <map>
-#include <string>
-#include <thread>
-#include <unordered_map>
-#include <vector>
+#include <array>
 
-#include "lock.hpp"
-#include "log.hpp"
-#include "utils.hpp"
+#include "allocator.hpp"
+#include "fiber_pool.hpp"
+#include "promise.hpp"
 
 namespace rdma_rc {
 
@@ -52,7 +44,25 @@ struct SgeWr {
     ibv_send_wr wr;
 };
 
-struct SyncData;
+struct RDMAConnection;
+
+struct SyncData {
+    uint32_t inflight;
+    uint32_t now_ms;
+    RDMAConnection *conn;
+    volatile bool wc_finish;
+    bool timeout;
+    uint8_t props_size;
+    std::array<priority_props *, 8> props;
+    CortPromise<void> pro;
+    boost::fibers::shared_future<void> fu;
+
+    void *operator new(std::size_t size) { return ObjectPoolAllocator<SyncData>().allocate(1); }
+
+    void operator delete(void *ptr) {
+        ObjectPoolAllocator<SyncData>().deallocate(static_cast<SyncData *>(ptr), 1);
+    }
+};
 
 struct RDMAFuture {
     int get();
@@ -64,7 +74,7 @@ struct RDMAFuture {
      */
     int try_get();
 
-    std::shared_ptr<SyncData> m_sd_;
+    std::unique_ptr<SyncData> m_sd_ = {nullptr};
 };
 
 struct RDMAConnection {
@@ -168,7 +178,7 @@ struct RDMAConnection {
     std::thread *m_conn_handler_;
 
     Mutex m_mu_;
-    std::shared_ptr<SyncData> m_current_sd_ = {nullptr};
+    std::unique_ptr<SyncData> m_current_sd_ = {nullptr};
     SgeWr *m_sw_head_ = nullptr;
     SgeWr *m_sw_tail_ = nullptr;
 

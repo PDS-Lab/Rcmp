@@ -34,11 +34,11 @@ class DaemonOptions {
     size_t max_client_limit = 32;        // 最大client数量限制
     size_t swap_zone_size = 64ul << 20;  // 交换区大小
 
-    int prealloc_fiber_num = 16;     // 预分配协程个数
+    int prealloc_fiber_num = 32;     // 预分配协程个数
     float hot_decay_lambda = 0.04;  // 热度衰减系数
     size_t hot_swap_watermark = 3;  // 热度阈值
 
-    int cm_qp_num = 8;              // 连接其他daemon的qp数量
+    int cm_qp_num = 2;              // 连接其他daemon的qp数量
 };
 
 class MasterOptions {

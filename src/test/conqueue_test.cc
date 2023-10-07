@@ -40,7 +40,7 @@ int main() {
         });
     }
 
-    uint64_t _s = getTimestamp();
+    uint64_t _s = getUsTimestamp();
 
     for (int i = 0; i < PT; ++i) {
         vs[i].join();
@@ -59,7 +59,7 @@ int main() {
 
     assert(S == 1ul * PT * (0 + IT - 1) * IT / 2);
 
-    cout << getTimestamp() - _s << endl;
+    cout << getUsTimestamp() - _s << endl;
 
     return 0;
 }

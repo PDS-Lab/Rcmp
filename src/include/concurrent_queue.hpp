@@ -54,6 +54,95 @@ class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::SP, ConcurrentQueueCon
     std::atomic<uint32_t> m_tail;
 };
 
+template <typename T, size_t SZ>
+class ConcurrentMPSCQueue {
+   public:
+    ConcurrentMPSCQueue() {
+        m_prod_head.raw = 0;
+        m_prod_tail.raw = 0;
+        m_cons_tail = 0;
+    }
+
+    size_t capacity() const { return SZ; }
+
+    void ForceEnqueue(T n) {
+        atomic_po_val_t h, oh, nh;
+
+        oh = m_prod_head.fetch_add_both(1, 1, std::memory_order_acquire);
+        while (UNLIKELY(oh.pos - m_cons_tail.load(std::memory_order_relaxed) >= SZ)) {
+            h = m_prod_tail.load(std::memory_order_acquire);
+            while (h.cnt == oh.cnt &&
+                   !m_prod_tail.compare_exchange_weak(h, oh, std::memory_order_release,
+                                                      std::memory_order_acquire)) {
+            }
+        }
+
+        m_data[oh.pos % SZ] = std::move(n);
+
+        oh = m_prod_tail.load(std::memory_order_acquire);
+        do {
+            h = m_prod_head.load(std::memory_order_relaxed);
+            nh = oh;
+            if ((++nh.cnt) == h.cnt) nh.pos = h.pos;
+        } while (!m_prod_tail.compare_exchange_weak(oh, nh, std::memory_order_release,
+                                                    std::memory_order_acquire));
+    }
+
+    bool TryEnqueue(T n) {
+        atomic_po_val_t h, oh, nh;
+
+        oh = m_prod_head.load(std::memory_order_acquire);
+        do {
+            if (UNLIKELY(oh.pos - m_cons_tail.load(std::memory_order_relaxed) >= SZ)) {
+                return false;
+            }
+            nh.pos = oh.pos + 1;
+            nh.cnt = oh.cnt + 1;
+        } while (!m_prod_head.compare_exchange_weak(oh, nh, std::memory_order_acquire,
+                                                    std::memory_order_acquire));
+
+        m_data[oh.pos % SZ] = std::move(n);
+
+        oh = m_prod_tail.load(std::memory_order_acquire);
+        do {
+            h = m_prod_head.load(std::memory_order_relaxed);
+            nh = oh;
+            if ((++nh.cnt) == h.cnt) nh.pos = h.pos;
+        } while (!m_prod_tail.compare_exchange_weak(oh, nh, std::memory_order_release,
+                                                    std::memory_order_acquire));
+
+        return true;
+    }
+
+    bool TryDequeue(T *n) { return TryDequeue(n, n + 1) == 1; }
+
+    template <typename Iter>
+    uint32_t TryDequeue(Iter first, Iter last) {
+        uint32_t l = 0;
+        uint32_t count = std::distance(first, last);
+        uint32_t ot = m_cons_tail.load(std::memory_order_acquire);
+        l = std::min(count, m_prod_tail.load(std::memory_order_relaxed).pos - ot);
+        if (l == 0) {
+            return 0;
+        }
+
+        for (uint32_t i = 0; i < l; ++i) {
+            *(first++) = std::move(m_data[(ot + i) % SZ]);
+        }
+
+        m_cons_tail.fetch_add(l, std::memory_order_release);
+        return l;
+    }
+
+   private:
+    atomic_po_val_t m_prod_head;
+    atomic_po_val_t m_prod_tail;
+
+    T m_data[SZ];
+
+    std::atomic<uint32_t> m_cons_tail;
+};
+
 /**
  * @brief 多生产者单消费者队列
  *
@@ -74,8 +163,7 @@ class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::MP, ConcurrentQueueCon
     }
 
     bool TryEnqueue(T n) {
-        std::uniform_int_distribution<> dist(0, shard_num - 1);
-        int i_ = dist(m_eng);
+        int i_ = m_eng() % shard_num;
         int i = i_;
         do {
             auto &shard = m_queue_shards[i];
@@ -107,98 +195,10 @@ class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::MP, ConcurrentQueueCon
     }
 
    private:
-    constexpr static size_t shard_num = 16;
-
-    class ConcurrentMPSCQueue {
-       public:
-        ConcurrentMPSCQueue() {
-            m_prod_head.raw = 0;
-            m_prod_tail.raw = 0;
-            m_cons_tail = 0;
-        }
-
-        size_t capacity() const { return (SZ / shard_num); }
-
-        void ForceEnqueue(T n) {
-            atomic_po_val_t h, oh, nh;
-
-            oh = m_prod_head.fetch_add_both(1, 1, std::memory_order_acquire);
-            while (UNLIKELY(oh.pos - m_cons_tail.load(std::memory_order_relaxed) >= (SZ / shard_num))) {
-                h = m_prod_tail.load(std::memory_order_acquire);
-                while (h.cnt == oh.cnt &&
-                       !m_prod_tail.compare_exchange_weak(h, oh, std::memory_order_release,
-                                                          std::memory_order_acquire)) {
-                }
-            }
-
-            m_data[oh.pos % (SZ / shard_num)] = std::move(n);
-
-            oh = m_prod_tail.load(std::memory_order_acquire);
-            do {
-                h = m_prod_head.load(std::memory_order_relaxed);
-                nh = oh;
-                if ((++nh.cnt) == h.cnt) nh.pos = h.pos;
-            } while (!m_prod_tail.compare_exchange_weak(oh, nh, std::memory_order_release,
-                                                        std::memory_order_acquire));
-        }
-
-        bool TryEnqueue(T n) {
-            atomic_po_val_t h, oh, nh;
-
-            oh = m_prod_head.load(std::memory_order_acquire);
-            do {
-                if (UNLIKELY(oh.pos - m_cons_tail.load(std::memory_order_relaxed) >= (SZ / shard_num))) {
-                    return false;
-                }
-                nh.pos = oh.pos + 1;
-                nh.cnt = oh.cnt + 1;
-            } while (!m_prod_head.compare_exchange_weak(oh, nh, std::memory_order_acquire,
-                                                        std::memory_order_acquire));
-
-            m_data[oh.pos % (SZ / shard_num)] = std::move(n);
-
-            oh = m_prod_tail.load(std::memory_order_acquire);
-            do {
-                h = m_prod_head.load(std::memory_order_relaxed);
-                nh = oh;
-                if ((++nh.cnt) == h.cnt) nh.pos = h.pos;
-            } while (!m_prod_tail.compare_exchange_weak(oh, nh, std::memory_order_release,
-                                                        std::memory_order_acquire));
-
-            return true;
-        }
-
-        bool TryDequeue(T *n) { return TryDequeue(n, n + 1) == 1; }
-
-        template <typename Iter>
-        uint32_t TryDequeue(Iter first, Iter last) {
-            uint32_t l = 0;
-            uint32_t count = std::distance(first, last);
-            uint32_t ot = m_cons_tail.load(std::memory_order_acquire);
-            l = std::min(count, m_prod_tail.load(std::memory_order_relaxed).pos - ot);
-            if (l == 0) {
-                return 0;
-            }
-
-            for (uint32_t i = 0; i < l; ++i) {
-                *(first++) = std::move(m_data[(ot + i) % (SZ / shard_num)]);
-            }
-
-            m_cons_tail.fetch_add(l, std::memory_order_release);
-            return l;
-        }
-
-       private:
-        atomic_po_val_t m_prod_head;
-        atomic_po_val_t m_prod_tail;
-
-        T m_data[(SZ / shard_num)];
-
-        std::atomic<uint32_t> m_cons_tail;
-    };
+    constexpr static size_t shard_num = 64;
 
     std::mt19937 m_eng;
-    ConcurrentMPSCQueue m_queue_shards[shard_num];
+    ConcurrentMPSCQueue<T, SZ / shard_num> m_queue_shards[shard_num];
 };
 
 /**

@@ -202,7 +202,7 @@ int main(int argc, char* argv[]) {
                 boost::fibers::async(boost::fibers::launch::dispatch, [&]() {
                     Request req = Greq;
                     req.mac_id = daemon_context.m_daemon_id;
-                    req.data[rand() % sizeof(req.data)] = getTimestamp();
+                    req.data[rand() % sizeof(req.data)] = getUsTimestamp();
 
                     auto fu = daemon_context.m_conn_manager.GetMasterConnection()
                                   .erpc_conn->call<CortPromise>(dummy, std::move(req));

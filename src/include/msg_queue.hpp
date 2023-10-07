@@ -80,6 +80,7 @@ struct MsgHeader final {
     size_t size : 32;     // 实际数据大小
     offset_t buf_offset;  // 根据MsgQueue::m_ring的地址
     msgq_callback_t cb;
+    uint64_t send_ts;
     void *arg;
 
     // static_assert(msgq_ring_buf_len < (1ul << 16), "");
@@ -110,6 +111,15 @@ struct MsgQueue final {
 
 #endif  // MSGQ_SINGLE_FIFO_ON
 
+struct MsgQueueSatistics {
+    uint64_t send_io = 0;
+    uint64_t send_bytes = 0;
+    uint64_t send_time = 0;
+    uint64_t recv_io = 0;
+    uint64_t recv_bytes = 0;
+    uint64_t recv_time = 0;
+};
+
 struct MsgQueueNexus {
     constexpr static size_t max_msgq_handler = (1 << (sizeof(uint8_t) * 8));
 
@@ -125,6 +135,7 @@ struct MsgQueueNexus {
 
     void *m_msgq_zone_start_addr;
     MsgQueue *m_public_msgq;
+    MsgQueueSatistics m_stats;
 };
 
 struct MsgQueueRPC {

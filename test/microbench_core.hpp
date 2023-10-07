@@ -129,7 +129,7 @@ inline void run_sample(const string &testname, const BenchParam &param, int type
 
             pthread_barrier_wait(&b);
 
-            uint64_t start_time = getTimestamp(), end_time;
+            uint64_t start_time = getUsTimestamp(), end_time;
 
             uint64_t tv = start_time;
             for (size_t i = 0; i < param.IT; ++i) {
@@ -138,12 +138,12 @@ inline void run_sample(const string &testname, const BenchParam &param, int type
                 } else if (type & TestType::READ) {
                     pool->Read(rv[i], param.PAYLOAD, raw.data());
                 }
-                uint64_t e = getTimestamp();
+                uint64_t e = getUsTimestamp();
                 ps[tid].addValue(e - tv);
                 tv = e;
             }
 
-            end_time = getTimestamp();
+            end_time = getUsTimestamp();
 
             long diff = end_time - start_time;
 
@@ -204,8 +204,8 @@ inline void run_bench(BenchParam param) {
 
     run_sample("random write", param, TestType::WRITE | TestType::RAND, redis);
     run_sample("random read", param, TestType::READ | TestType::RAND, redis);
-    run_sample("zipf write", param, TestType::WRITE | TestType::ZIPF, redis);
-    run_sample("zipf read", param, TestType::READ | TestType::ZIPF, redis);
+    // run_sample("zipf write", param, TestType::WRITE | TestType::ZIPF, redis);
+    // run_sample("zipf read", param, TestType::READ | TestType::ZIPF, redis);
 
     DLOG("testing end ...");
 

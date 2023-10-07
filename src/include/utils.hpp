@@ -50,7 +50,9 @@ D align_floor(D x, uint64_t aligned) {
 inline uint64_t rdtsc() { return __builtin_ia32_rdtsc(); }
 
 void threadBindCore(int core_id);
-uint64_t getTimestamp();
+uint64_t getMsTimestamp();
+uint64_t getUsTimestamp();
+uint64_t getNsTimestamp();
 
 class IPv4String {
    public:

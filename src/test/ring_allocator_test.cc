@@ -34,12 +34,12 @@ int main() {
         });
     }
 
-    uint64_t _s = getTimestamp();
+    uint64_t _s = getUsTimestamp();
 
     for (auto& th : vs) {
         th.join();
     }
 
-    cout << 1.0 * vs.size() * IT / (getTimestamp() - _s) << " Mops" << endl;
+    cout << 1.0 * vs.size() * IT / (getUsTimestamp() - _s) << " Mops" << endl;
     return 0;
 }

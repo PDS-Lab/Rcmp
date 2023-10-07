@@ -90,7 +90,10 @@ void MasterContext::InitRPCNexus() {
     DLOG_ASSERT(m_erpc_ctx.rpc_set.size() == 1);
 }
 
-void MasterContext::InitFiberPool() { m_fiber_pool_.AddFiber(m_options.prealloc_fiber_num); }
+void MasterContext::InitFiberPool() {
+    boost::fibers::use_scheduling_algorithm<priority_scheduler>();
+    m_fiber_pool_.AddFiber(m_options.prealloc_fiber_num);
+}
 
 int main(int argc, char *argv[]) {
     cmdline::parser cmd;

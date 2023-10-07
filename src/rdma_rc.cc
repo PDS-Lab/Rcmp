@@ -3,13 +3,9 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 
-#include <boost/fiber/future/future.hpp>
 #include <boost/fiber/operations.hpp>
-#include <memory>
 
-#include "allocator.hpp"
 #include "log.hpp"
-#include "promise.hpp"
 
 namespace rdma_rc {
 
@@ -319,8 +315,6 @@ int RDMAConnection::connect(const std::string &ip, uint16_t port, const void *pa
         return -1;
     }
 
-    DLOG("cm_id: %p", cm_id);
-
     if (event->event != RDMA_CM_EVENT_ESTABLISHED) {
         DLOG_ERROR("RDMA_CM_EVENT_ESTABLISHED fail: %p %s", event->id,
                    rdma_event_str(event->event));
@@ -429,16 +423,6 @@ void RDMAConnection::register_disconnect_hook(
     std::function<void(rdma_cm_id *cm_id)> &&hook_disconnect) {
     m_hook_disconnect_ = std::forward<std::function<void(rdma_cm_id * cm_id)>>(hook_disconnect);
 }
-
-struct SyncData {
-    volatile bool wc_finish;
-    bool timeout;
-    uint32_t inflight;
-    uint32_t now_ms;
-    RDMAConnection *conn;
-    CortPromise<void> pro;
-    boost::fibers::shared_future<void> fu;
-};
 
 int RDMAConnection::prep_write(std::vector<SgeWr> &sge_vec, uint64_t local_addr, uint32_t lkey,
                                uint32_t length, uint64_t remote_addr, uint32_t rkey,
@@ -574,41 +558,41 @@ RDMAFuture RDMAConnection::m_submit_impl(SgeWr *sge_wrs, size_t n) {
     std::unique_lock<Mutex> lck(m_mu_);
 
     if (m_current_sd_ == nullptr) {
-        m_current_sd_ = std::allocate_shared<SyncData>(ObjectPoolAllocator<SyncData>());
+        m_current_sd_ = std::make_unique<SyncData>();
         m_current_sd_->conn = this;
         m_current_sd_->timeout = false;
-        m_current_sd_->inflight = 0;
+        m_current_sd_->inflight = n;
         m_current_sd_->wc_finish = false;
         m_current_sd_->fu = m_current_sd_->pro.get_future();
+        m_current_sd_->props_size = 1;
+        m_current_sd_->props[0] = &boost::this_fiber::properties<priority_props>();
 
         m_sw_head_ = sge_wrs;
         m_sw_tail_ = sge_wrs + n - 1;
     } else {
-        fu.m_sd_ = m_current_sd_;
-        fu.m_sd_->inflight += n;
+        DLOG_FATAL("Not Support for multi thread submit");
 
-        DLOG_ASSERT(m_sw_tail_ != nullptr);
-        m_sw_tail_->wr.next = &sge_wrs->wr;
-        m_sw_tail_ = sge_wrs + n - 1;
+        // DLOG_ASSERT(m_current_sd_->props_size <= m_current_sd_->props.size());
 
-        return fu;
+        // fu.m_sd_ = m_current_sd_;
+        // fu.m_sd_->inflight += n;
+        // fu.m_sd_->props[fu.m_sd_->props_size](boost::this_fiber::properties<priority_props>());
+        // fu.m_sd_->props_size++;
+
+        // DLOG_ASSERT(m_sw_tail_ != nullptr);
+        // m_sw_tail_->wr.next = &sge_wrs->wr;
+        // m_sw_tail_ = sge_wrs + n - 1;
+
+        // boost::this_fiber::properties<priority_props>().set_low_priority();
+
+        // return fu;
     }
 
-    fu.m_sd_ = m_current_sd_;
-    fu.m_sd_->inflight += n;
+    fu.m_sd_.swap(m_current_sd_);
 
-    // 等待一段时间积攒wr
-    lck.unlock();
-
-    boost::this_fiber::yield();
-
-    std::shared_ptr<SyncData> tmp_sd = nullptr;
     SgeWr *sge_wr_list = nullptr;
     SgeWr *sge_wr_list_tail = nullptr;
 
-    lck.lock();
-
-    m_current_sd_.swap(tmp_sd);
     std::swap(sge_wr_list, m_sw_head_);
     std::swap(sge_wr_list_tail, m_sw_tail_);
 
@@ -621,7 +605,9 @@ RDMAFuture RDMAConnection::m_submit_impl(SgeWr *sge_wrs, size_t n) {
 
     // 现在是线程安全的处理send wr
 
-    uint64_t wr_id = reinterpret_cast<uint64_t>(tmp_sd.get());
+    boost::this_fiber::properties<priority_props>().set_low_priority();
+
+    uint64_t wr_id = reinterpret_cast<uint64_t>(fu.m_sd_.get());
 
     ibv_send_wr *wr_head = &sge_wr_list->wr;
     sge_wr_list_tail->wr.wr_id = wr_id;
@@ -631,7 +617,7 @@ RDMAFuture RDMAConnection::m_submit_impl(SgeWr *sge_wrs, size_t n) {
     // 探察当前正在发送的wr个数
     uint32_t inflight = m_inflight_count_.load(std::memory_order_acquire);
     do {
-        if (UNLIKELY((int)(inflight + tmp_sd->inflight) > MAX_SEND_WR)) {
+        if (UNLIKELY((int)(inflight + fu.m_sd_->inflight) > MAX_SEND_WR)) {
             errno = ENOSPC;
             DLOG_ERROR("ibv_post_send too much inflight wr");
             m_poll_conn_sd_wr_();
@@ -639,10 +625,10 @@ RDMAFuture RDMAConnection::m_submit_impl(SgeWr *sge_wrs, size_t n) {
             continue;
         }
         // printf("inflight+: %u\n", inflight);
-    } while (!m_inflight_count_.compare_exchange_weak(inflight, inflight + tmp_sd->inflight,
+    } while (!m_inflight_count_.compare_exchange_weak(inflight, inflight + fu.m_sd_->inflight,
                                                       std::memory_order_acquire));
 
-    if (RDMAConnection::RDMA_TIMEOUT_ENABLE) tmp_sd->now_ms = getTimestamp();
+    if (RDMAConnection::RDMA_TIMEOUT_ENABLE) fu.m_sd_->now_ms = getMsTimestamp() / 1e3;
 
     struct ibv_send_wr *bad_send_wr;
     int ret = ibv_post_send(cm_id->qp, wr_head, &bad_send_wr);
@@ -673,6 +659,9 @@ int RDMAConnection::m_acknowledge_sd_cqe_(int rc, ibv_wc wcs[]) {
             if (LIKELY(!sd->timeout)) {
                 sd->wc_finish = true;
                 sd->pro.set_value();
+                for (size_t i = 0; i < sd->props_size; ++i) {
+                    sd->props[i]->set_high_priority();
+                }
             }
         } else {
             fprintf(stderr, "cmd_send status error: %s\n", ibv_wc_status_str(wc.status));
@@ -695,12 +684,13 @@ int RDMAFuture::try_get() {
 
     // 轮询resp
     if (m_sd_->wc_finish) {
+        boost::this_fiber::properties<priority_props>().set_low_priority();
         return 0;
     }
 
     if (RDMAConnection::RDMA_TIMEOUT_ENABLE) {
         // 超时检测
-        uint32_t now = getTimestamp();
+        uint32_t now = getMsTimestamp();
         if (UNLIKELY(now - m_sd_->now_ms > RDMAConnection::RDMA_TIMEOUT_MS)) {
             m_sd_->timeout = true;
             errno = ETIMEDOUT;
@@ -714,6 +704,8 @@ int RDMAFuture::try_get() {
 
 int RDMAFuture::get() {
     m_sd_->fu.get();
+
+    boost::this_fiber::properties<priority_props>().set_low_priority();
 
     return 0;
 
