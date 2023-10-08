@@ -1,6 +1,3 @@
-#include <algorithm>
-
-#include "log.hpp"
 #ifndef _FILE_OFFSET_BITS
 #define _FILE_OFFSET_BITS 64
 #endif
@@ -12,6 +9,7 @@
 #include <fuse.h>
 #include <sys/stat.h>
 
+#include <algorithm>
 #include <cstring>
 #include <iostream>
 #include <list>
@@ -22,6 +20,7 @@
 #include <vector>
 
 #include "config.hpp"
+#include "log.hpp"
 #include "rchms.hpp"
 #include "utils.hpp"
 
@@ -29,11 +28,11 @@ using namespace std;
 
 struct Entry;
 
-using EP = pair<const string, Entry>;
+using EntryPair = pair<const string, Entry>;
 
 struct Entry {
     struct stat st;
-    list<EP*> file_list;
+    list<EntryPair*> subfile_list;
     vector<rchms::GAddr> block_map;
 };
 
@@ -51,13 +50,42 @@ string getname(const string& path) {
     return path.substr(pos + 1);
 }
 
-void dir_add_subfile(UMITER fileit) {
-    string dirpath_sv = fileit->first.substr(0, fileit->first.find_last_of('/'));
-    if (dirpath_sv.empty()) {
-        dirpath_sv = "/";
+string getdirname(const string& path) {
+    string dir = path.substr(0, path.find_last_of('/'));
+    if (dir.empty()) {
+        dir = "/";
     }
+    return dir;
+}
+
+void dir_add_subfile(UMITER fileit) {
+    string dirpath_sv = getdirname(fileit->first);
     auto dirit = file_map.find(dirpath_sv);
-    dirit->second.file_list.push_back(&(*fileit));
+    dirit->second.subfile_list.push_back(&(*fileit));
+}
+
+void dir_remove_subfile(UMITER fileit) {
+    string dirpath_sv = getdirname(fileit->first);
+    auto dirit = file_map.find(dirpath_sv);
+    auto subfile_it = find_if(dirit->second.subfile_list.begin(), dirit->second.subfile_list.end(),
+                              [&](EntryPair* p) { return fileit->first == p->first; });
+    dirit->second.subfile_list.erase(subfile_it);
+}
+
+bool try_reserve(Entry& ent, off_t size) {
+    off_t minsize = align_ceil(size, page_size);
+    size_t reserve_size = ent.block_map.size() * page_size;
+    if (minsize > reserve_size) {
+        // alloc allocsize bytes, aligned to page_size
+        size_t allocsize = minsize - reserve_size;
+        size_t alloc_page_cnt = allocsize / page_size;
+        rchms::GAddr alloc_start_gaddr = pool->AllocPage(alloc_page_cnt);
+        for (size_t i = 0; i < alloc_page_cnt; ++i) {
+            ent.block_map.push_back(alloc_start_gaddr + i * page_size);
+        }
+        return true;
+    }
+    return false;
 }
 
 UMITER createdir(const char* path, mode_t mode) {
@@ -136,7 +164,7 @@ int rchfs_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t off
         auto it = file_map.find(path);
         ent = &it->second;
     }
-    for (auto& p : ent->file_list) {
+    for (auto& p : ent->subfile_list) {
         filler(buf, getname(p->first).c_str(), &ent->st, 0);
     }
     return 0;
@@ -154,7 +182,7 @@ int rchfs_open(const char* path, struct fuse_file_info* fi) {
 }
 
 int rchfs_read(const char* path, char* buf, size_t size, off_t off, struct fuse_file_info* fi) {
-    DLOG("path: %s", path);
+    // DLOG("path: %s, size: %lu", path, size);
 
     Entry* ent = (Entry*)fi->fh;
     if (off > ent->st.st_size) {
@@ -181,24 +209,14 @@ int rchfs_read(const char* path, char* buf, size_t size, off_t off, struct fuse_
 
 int rchfs_write(const char* path, const char* buf, size_t size, off_t off,
                 struct fuse_file_info* fi) {
-    DLOG("path: %s", path);
+    // DLOG("path: %s, size: %lu", path, size);
 
     Entry* ent = (Entry*)fi->fh;
     off_t minsize = off + size;
     if (minsize > ent->st.st_size) {
         ent->st.st_size = minsize;
     }
-    minsize = align_ceil(minsize, page_size);
-    size_t reserve_size = ent->block_map.size() * page_size;
-    if (minsize > ent->block_map.size() * page_size) {
-        // alloc allocsize bytes, aligned to page_size
-        size_t allocsize = minsize - reserve_size;
-        size_t alloc_page_cnt = allocsize / page_size;
-        rchms::GAddr alloc_start_gaddr = pool->AllocPage(alloc_page_cnt);
-        for (size_t i = 0; i < alloc_page_cnt; ++i) {
-            ent->block_map.push_back(alloc_start_gaddr + i * page_size);
-        }
-    }
+    try_reserve(*ent, minsize);
 
     // write off size bytes
     size_t bi = div_floor(off, page_size);
@@ -216,10 +234,41 @@ int rchfs_write(const char* path, const char* buf, size_t size, off_t off,
     return size;
 }
 
+int rchfs_truncate(const char* path, off_t size) {
+    DLOG("path: %s", path);
+
+    auto it = file_map.find(path);
+    Entry& ent = it->second;
+    ent.st.st_size = size;
+    try_reserve(ent, size);
+    return 0;
+}
+
+int rchfs_unlink(const char* path) {
+    DLOG("path: %s", path);
+
+    auto it = file_map.find(path);
+    dir_remove_subfile(it);
+    file_map.erase(it);
+    return 0;
+}
+
+int rchfs_rmdir(const char* path) {
+    DLOG("path: %s", path);
+
+    auto it = file_map.find(path);
+    dir_remove_subfile(it);
+    file_map.erase(it);
+    return 0;
+}
+
 struct fuse_operations rchfs_ops = {
     .getattr = rchfs_getattr,
     .mknod = rchfs_mknod,
     .mkdir = rchfs_mkdir,
+    .unlink = rchfs_unlink,
+    .rmdir = rchfs_rmdir,
+    .truncate = rchfs_truncate,
     .open = rchfs_open,
     .read = rchfs_read,
     .write = rchfs_write,
