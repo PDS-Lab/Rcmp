@@ -628,7 +628,7 @@ RDMAFuture RDMAConnection::m_submit_impl(SgeWr *sge_wrs, size_t n) {
     } while (!m_inflight_count_.compare_exchange_weak(inflight, inflight + fu.m_sd_->inflight,
                                                       std::memory_order_acquire));
 
-    if (RDMAConnection::RDMA_TIMEOUT_ENABLE) fu.m_sd_->now_ms = getMsTimestamp() / 1e3;
+    if (RDMAConnection::RDMA_TIMEOUT_ENABLE) fu.m_sd_->now_ms = getMsTimestamp();
 
     struct ibv_send_wr *bad_send_wr;
     int ret = ibv_post_send(cm_id->qp, wr_head, &bad_send_wr);

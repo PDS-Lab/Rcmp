@@ -18,7 +18,8 @@ class Histogram {
     double getBucketValue(int bucket) const;
     int getBucketCount(int bucket) const;
     int getTotalCount() const;
-    int getPercentile(double percentile) const;
+    int getPercentileBucket(double percentile) const;
+    double getPercentile(double percentile) const;
     double getAverage() const;
 
     Histogram merge(Histogram &other);
@@ -53,7 +54,8 @@ class FreqStats {
     uint64_t m_start_time;
     uint64_t m_restart_interval;
     float m_lambda;
-    std::vector<float> m_exp_decays;
+
+    static std::vector<float> m_exp_decays;
 };
 
 /**

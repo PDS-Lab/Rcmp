@@ -69,7 +69,7 @@ class PoolContext {
      * @param buf
      * @return Status
      */
-    Status Write(GAddr gaddr, size_t size, void *buf);
+    Status Write(GAddr gaddr, size_t size, const void *buf);
     /**
      * @brief 释放内存
      *
@@ -118,6 +118,8 @@ class PoolContext {
     /*********************** for test ***********************/
 
     void __DumpStats();
+
+    void __ClearStats();
 
     /**
      * @brief 测试数据发送

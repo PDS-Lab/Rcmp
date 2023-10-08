@@ -1,8 +1,5 @@
 #pragma once
 
-#include <atomic>
-#include <vector>
-
 #include "lock.hpp"
 #include "log.hpp"
 #include "utils.hpp"
@@ -15,7 +12,7 @@ class ObjectPoolAllocator {
     ObjectPoolAllocator() = default;
 
     template <typename U>
-    ObjectPoolAllocator(const ObjectPoolAllocator<U> &) {}
+    ObjectPoolAllocator(const ObjectPoolAllocator<U>&) {}
 
     T* allocate(size_t n) {
         DLOG_ASSERT(n == 1, "Must allocate 1 element");
@@ -29,9 +26,7 @@ class ObjectPoolAllocator {
         }
     }
 
-    void deallocate(T* p, size_t n) {
-        pool.push_back(p);
-    }
+    void deallocate(T* p, size_t n) { pool.push_back(p); }
 
    private:
     class raw_ptr_vector : public std::vector<T*> {
@@ -115,7 +110,7 @@ class RingArena {
     void* allocate(size_t s) {
         // thread local
         thread_local uint8_t b_cur = (reinterpret_cast<uintptr_t>(&b_cur) >> 5) % BucketNum;
-        b_cur++;
+        b_cur = (b_cur + 1) % BucketNum;
         uint8_t bc = b_cur;
         do {
             Block& b = m_bs[bc];

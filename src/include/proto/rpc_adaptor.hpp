@@ -115,10 +115,9 @@ struct MsgQResponseHandle : public ResponseHandle<ResponseType> {
 template <typename EFW, bool ESTABLISH>
 void erpc_call_target(erpc::ReqHandle *req_handle, void *context) {
     auto self_ctx = reinterpret_cast<typename EFW::SelfContext *>(context);
+    uint64_t __start_ns__ = getNsTimestamp();
 
-    self_ctx->GetFiberPool().EnqueueTask([self_ctx, req_handle]() {
-        uint64_t __start_ns__ = getNsTimestamp();
-
+    self_ctx->GetFiberPool().EnqueueTask([self_ctx, req_handle, __start_ns__]() {
         auto &rpc = self_ctx->GetErpc();
         erpc::ReqHandleWrap req_wrap(req_handle);
         ErpcResponseHandle<typename EFW::ResponseType> resp_handle(rpc, req_wrap);
@@ -147,11 +146,10 @@ void erpc_call_target(erpc::ReqHandle *req_handle, void *context) {
 template <typename EFW, bool ESTABLISH>
 void msgq_call_target(msgq::MsgBuffer &req_raw, void *ctx) {
     auto self_ctx = reinterpret_cast<typename EFW::SelfContext *>(ctx);
+    uint64_t __start_ns__ = getNsTimestamp();
 
     // mutable防止引用析构
-    self_ctx->GetFiberPool().EnqueueTask([self_ctx, req_raw]() mutable {
-        uint64_t __start_ns__ = getNsTimestamp();
-
+    self_ctx->GetFiberPool().EnqueueTask([self_ctx, req_raw, __start_ns__]() mutable {
         auto req = reinterpret_cast<typename EFW::RequestType *>(req_raw.get_buf());
 
         typename EFW::PeerContext *peer_connection = nullptr;

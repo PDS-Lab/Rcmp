@@ -58,7 +58,7 @@ struct GetPageCXLRefOrProxyRequest {
     union {
         struct {  // type == WRITE
             size_t cn_write_size;
-            void* cn_write_buf;
+            const void* cn_write_buf;
         } write;
         struct {  // type == READ
             size_t cn_read_size;

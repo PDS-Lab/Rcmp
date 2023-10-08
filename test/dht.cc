@@ -1,8 +1,9 @@
+#include "dht.hpp"
+
 #include <unordered_set>
 #include <vector>
 
 #include "cmdline.h"
-#include "dht.hpp"
 #include "log.hpp"
 #include "rchms.hpp"
 #include "stats.hpp"
@@ -88,7 +89,7 @@ int main(int argc, char *argv[]) {
         cout << 0 << " clients total add throughput: " << throughput * 1000 << " Kops" << endl;
 
         {
-            printf("p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", ps.getPercentile(50),
+            printf("p50: %fus, p99: %fus, p999: %fus, p9999: %fus\n", ps.getPercentile(50),
                    ps.getPercentile(99), ps.getPercentile(99.9), ps.getPercentile(99.99));
         }
     }
@@ -131,10 +132,10 @@ int main(int argc, char *argv[]) {
         cout << IT << " clients total op throughput: " << throughput * 1000 << " Kops" << endl;
 
         {
-            printf("p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", hyr.getPercentile(50),
+            printf("p50: %fus, p99: %fus, p999: %fus, p9999: %fus\n", hyr.getPercentile(50),
                    hyr.getPercentile(99), hyr.getPercentile(99.9), hyr.getPercentile(99.99));
 
-            printf("p50: %dus, p99: %dus, p999: %dus, p9999: %dus\n", hyw.getPercentile(50),
+            printf("p50: %fus, p99: %fus, p999: %fus, p9999: %fus\n", hyw.getPercentile(50),
                    hyw.getPercentile(99), hyw.getPercentile(99.9), hyw.getPercentile(99.99));
         }
     }

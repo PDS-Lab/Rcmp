@@ -76,12 +76,16 @@ int main(int argc, char *argv[]) {
 
     run_init(param);
 
-    for (size_t payload = 64; payload <= 4096; payload *= 2) {
+    for (size_t payload = 64; payload <= 64; payload *= 2) {
         for (int th = (cmd.get<int>("thread_all") != 0) ? 1 : thread; th <= thread; th *= 2) {
             param.TH = th;
             param.PAYLOAD = payload;
             run_bench(param);
+            instance.ref->__ClearStats();
+            run_bench(param);
         }
+        instance.ref->__DumpStats();
+        instance.ref->__ClearStats();
     }
 
     rchms::Close(instance.ref);

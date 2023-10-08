@@ -53,7 +53,7 @@ struct PageVMMapMetadata {
 };
 
 struct RemotePageRefMeta {
-    uint64_t Update() { return stats.add(getUsTimestamp()); }
+    uint64_t Update() { return stats.add(rdtsc() / 1e3); }
 
     FreqStats stats;
     uintptr_t remote_page_addr;

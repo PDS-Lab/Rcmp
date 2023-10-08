@@ -20,16 +20,16 @@
 #include <cstring>
 #include <ctime>
 
-#define DLOG_STREAM(stream, format, ...)                                               \
-    do {                                                                               \
-        struct timeval tv;                                                             \
-        struct tm tm;                                                                  \
-        char tbuf[28] = {0};                                                           \
-        gettimeofday(&tv, NULL);                                                       \
-        localtime_r(&tv.tv_sec, &tm);                                                  \
-        strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S", &tm);                        \
-        fprintf(stream, "[%s.%06d] [%#lx] %s:%d: " format "\n", tbuf, (int)tv.tv_usec, \
-                pthread_self(), __FILE__, __LINE__, ##__VA_ARGS__);                    \
+#define DLOG_STREAM(stream, format, ...)                                                  \
+    do {                                                                                  \
+        struct timeval tv;                                                                \
+        struct tm tm;                                                                     \
+        char tbuf[28] = {0};                                                              \
+        gettimeofday(&tv, NULL);                                                          \
+        localtime_r(&tv.tv_sec, &tm);                                                     \
+        strftime(tbuf, sizeof(tbuf), "%Y-%m-%d %H:%M:%S", &tm);                           \
+        fprintf(stream, "[%s.%06d] [%d %#lx] %s:%d: " format "\n", tbuf, (int)tv.tv_usec, \
+                getpid(), pthread_self(), __FILE__, __LINE__, ##__VA_ARGS__);             \
     } while (0)
 
 #define DLOG_INFO(format, ...) DLOG_STREAM(stderr, "[INFO] " format, ##__VA_ARGS__)

@@ -1,8 +1,6 @@
 #pragma once
 
-#include <mutex>
 #include <random>
-#include <shared_mutex>
 #include <unordered_map>
 
 #include "config.hpp"
@@ -120,14 +118,14 @@ class ConcurrentHashMap {
      */
     template <typename ConFn>
     std::pair<iterator, bool> find_or_emplace(K key, ConFn&& ctor_fn) {
-        int index = hash(key);
-        auto& shard = m_shards[index];
-        auto& map = shard.m_map;
-
         auto iter = find(key);
         if (iter != end()) {
             return {iter, false};
         }
+
+        int index = hash(key);
+        auto& shard = m_shards[index];
+        auto& map = shard.m_map;
 
         std::unique_lock<__SharedMutex> guard(shard.m_lock);
         auto it = map.find(key);

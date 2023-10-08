@@ -11,6 +11,9 @@
 struct SysStatistics {
     uint64_t local_hit = 0;
     uint64_t local_miss = 0;
+    uint64_t local_cache_search_time = 0;
+    uint64_t local_cache_update_time = 0;
+    uint64_t local_cache_fault_time = 0;
 
     uint64_t page_hit = 0;
     uint64_t page_miss = 0;
@@ -19,6 +22,16 @@ struct SysStatistics {
 
     uint64_t rpc_opn = 0;
     uint64_t rpc_exec_time = 0;
+
+    uint64_t read_io = 0;
+    uint64_t cxl_read_byte = 0;
+    uint64_t cxl_read_time = 0;
+    uint64_t write_io = 0;
+    uint64_t cxl_write_byte = 0;
+    uint64_t cxl_write_time = 0;
+
+    uint64_t read_time = 0;
+    uint64_t write_time = 0;
 };
 
 /************************  Master   **********************/

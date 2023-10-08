@@ -26,7 +26,7 @@ void removePageCache(ClientContext& client_context, ClientToDaemonConnection& da
 
 struct GetCurrentWriteDataRequest {
     mac_id_t mac_id;
-    void* dio_write_buf;
+    const void* dio_write_buf;
     size_t dio_write_size;
 };
 struct GetCurrentWriteDataReply {

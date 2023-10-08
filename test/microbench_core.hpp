@@ -54,7 +54,7 @@ inline void redis_del_sync_key(Redis &redis, string sync_key, int NID, int NODES
 }
 
 struct PerfStatistics : public Histogram {
-    PerfStatistics() : Histogram(1000000, 0, 1000000) {}
+    PerfStatistics() : Histogram(2e7, 0, 2e5) {}
     PerfStatistics(Histogram &&h) : Histogram(h) {}
 };
 
@@ -129,7 +129,7 @@ inline void run_sample(const string &testname, const BenchParam &param, int type
 
             pthread_barrier_wait(&b);
 
-            uint64_t start_time = getUsTimestamp(), end_time;
+            uint64_t start_time = getNsTimestamp(), end_time;
 
             uint64_t tv = start_time;
             for (size_t i = 0; i < param.IT; ++i) {
@@ -138,19 +138,19 @@ inline void run_sample(const string &testname, const BenchParam &param, int type
                 } else if (type & TestType::READ) {
                     pool->Read(rv[i], param.PAYLOAD, raw.data());
                 }
-                uint64_t e = getUsTimestamp();
+                uint64_t e = getNsTimestamp();
                 ps[tid].addValue(e - tv);
                 tv = e;
             }
 
-            end_time = getUsTimestamp();
+            end_time = getNsTimestamp();
 
             long diff = end_time - start_time;
 
             diff_times[tid] = diff;
 
             DLOG("client %d tid %d: %s test done. Use time: %ld us. Avg time: %f us", param.NID,
-                 tid, testname.c_str(), diff, 1.0 * diff / param.IT);
+                 tid, testname.c_str(), diff / 1000, 1.0 * diff / param.IT / 1e3);
         });
     }
 
@@ -167,7 +167,8 @@ inline void run_sample(const string &testname, const BenchParam &param, int type
     for (uint64_t diff : diff_times) {
         total_throughput += 1.0 * param.IT / diff;
     }
-    DLOG("%d clients total %s throughput: %f Mops", param.NID, testname.c_str(), total_throughput);
+    DLOG("%d clients total %s throughput: %f Mops", param.NID, testname.c_str(),
+         total_throughput * 1e3);
 
     PerfStatistics all_ps = ps[0];
     for (int i = 1; i < ps.size(); ++i) {
@@ -176,9 +177,10 @@ inline void run_sample(const string &testname, const BenchParam &param, int type
         new (&all_ps) PerfStatistics(ps_tmp);
     }
 
-    DLOG("%d clients %s latnecy: AVG: %fus, P50: %dus, P99: %dus, P999: %dus, P9999: %dus\n",
-         param.NID, testname.c_str(), all_ps.getAverage(), all_ps.getPercentile(50),
-         all_ps.getPercentile(99), all_ps.getPercentile(99.9), all_ps.getPercentile(99.99));
+    DLOG("%d clients %s latnecy: AVG: %fus, P50: %fus, P99: %fus, P999: %fus, P9999: %fus\n",
+         param.NID, testname.c_str(), all_ps.getAverage() / 1e3, all_ps.getPercentile(50) / 1e3,
+         all_ps.getPercentile(99) / 1e3, all_ps.getPercentile(99.9) / 1e3,
+         all_ps.getPercentile(99.99) / 1e3);
 }
 
 inline void run_init(BenchParam param) {
@@ -202,6 +204,7 @@ inline void run_bench(BenchParam param) {
 
     DLOG("start testing ...");
 
+    // run_sample("random write", param, TestType::WRITE | TestType::RAND, redis);
     run_sample("random write", param, TestType::WRITE | TestType::RAND, redis);
     run_sample("random read", param, TestType::READ | TestType::RAND, redis);
     // run_sample("zipf write", param, TestType::WRITE | TestType::ZIPF, redis);

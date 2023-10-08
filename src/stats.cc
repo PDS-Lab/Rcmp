@@ -49,7 +49,11 @@ int Histogram::getTotalCount() const {
     return totalCount;
 }
 
-int Histogram::getPercentile(double percentile) const {
+double Histogram::getPercentile(double percentile) const {
+    return getBucketValue(getPercentileBucket(percentile));
+}
+
+int Histogram::getPercentileBucket(double percentile) const {
     if (percentile < 0 || percentile > 100) {
         // Invalid percentile value
         return -1;
@@ -90,12 +94,14 @@ Histogram Histogram::merge(Histogram &other) {
     return nh;
 }
 
+std::vector<float> FreqStats::m_exp_decays;
+
 FreqStats::FreqStats(size_t max_recent_record, float lambda, uint64_t restart_interval)
     : m_max_recent_record(max_recent_record),
       m_restart_interval(restart_interval),
       m_cnt(0),
       m_lambda(lambda) {
-    for (int i = 0; i < m_restart_interval; ++i) {
+    for (int i = m_exp_decays.size(); i < m_restart_interval; ++i) {
         m_exp_decays.push_back(exp(-m_lambda * i));
     }
 }
@@ -104,17 +110,19 @@ size_t FreqStats::add(uint64_t t) {
     size_t pre;
     uint64_t delta_t = t - m_last_time;
     if (delta_t >= m_restart_interval) {
-        pre = m_cnt = 1;
+        pre = 1;
+        m_cnt.store(1, std::memory_order::memory_order_relaxed);
         m_start_time = t;
     } else {
-        pre = m_cnt.fetch_add(1) * m_exp_decays[delta_t] + 1;
+        pre =
+            m_cnt.fetch_add(1, std::memory_order::memory_order_relaxed) * m_exp_decays[delta_t] + 1;
     }
     m_last_time = t;
     return pre;
 }
 
 void FreqStats::clear() {
-    m_cnt.store(0);
+    m_cnt.store(0, std::memory_order::memory_order_relaxed);
     m_time_q.clear();
 }
 
@@ -123,13 +131,13 @@ size_t FreqStats::freq(uint64_t t) const {
     if (delta_t >= m_restart_interval) {
         return 0;
     } else {
-        return m_cnt.load() * m_exp_decays[delta_t];
+        return m_cnt.load(std::memory_order::memory_order_relaxed) * m_exp_decays[delta_t];
     }
 }
 uint64_t FreqStats::start() const { return m_start_time; }
 uint64_t FreqStats::last() const { return m_last_time; }
 
 void FreqStats::dump(size_t &cnt, std::vector<uint64_t> &time_v) {
-    cnt = m_cnt.load();
+    cnt = m_cnt.load(std::memory_order::memory_order_relaxed);
     time_v.assign(m_time_q.begin(), m_time_q.end());
 }
