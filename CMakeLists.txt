@@ -59,4 +59,14 @@ target_link_libraries(
     base
 )
 
+add_executable(
+    rchfs
+    fs/rchfs.cc
+)
+target_link_libraries(
+    rchfs
+    rchms
+    fuse
+)
+
 add_subdirectory(test)

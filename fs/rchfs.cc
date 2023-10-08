@@ -1,0 +1,271 @@
+#include <algorithm>
+
+#include "log.hpp"
+#ifndef _FILE_OFFSET_BITS
+#define _FILE_OFFSET_BITS 64
+#endif
+
+#define FUSE_USE_VERSION 26
+
+#include <asm-generic/errno-base.h>
+#include <fcntl.h>
+#include <fuse.h>
+#include <sys/stat.h>
+
+#include <cstring>
+#include <iostream>
+#include <list>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include "config.hpp"
+#include "rchms.hpp"
+#include "utils.hpp"
+
+using namespace std;
+
+struct Entry;
+
+using EP = pair<const string, Entry>;
+
+struct Entry {
+    struct stat st;
+    list<EP*> file_list;
+    vector<rchms::GAddr> block_map;
+};
+
+using UMITER = typename unordered_map<string, Entry>::iterator;
+
+rchms::ClientOptions options;
+unordered_map<string, Entry> file_map;
+rchms::PoolContext* pool;
+
+string getname(const string& path) {
+    size_t pos = path.find_last_of('/');
+    if (pos == path.npos) {
+        return "";
+    }
+    return path.substr(pos + 1);
+}
+
+void dir_add_subfile(UMITER fileit) {
+    string dirpath_sv = fileit->first.substr(0, fileit->first.find_last_of('/'));
+    if (dirpath_sv.empty()) {
+        dirpath_sv = "/";
+    }
+    auto dirit = file_map.find(dirpath_sv);
+    dirit->second.file_list.push_back(&(*fileit));
+}
+
+UMITER createdir(const char* path, mode_t mode) {
+    Entry new_entry = {.st = {
+                           .st_nlink = 2,
+                           .st_mode = S_IFDIR | mode,
+                       }};
+    auto it = file_map.insert({path, new_entry}).first;
+    dir_add_subfile(it);
+    return it;
+}
+
+UMITER createfile(const char* path, mode_t mode, dev_t rdev) {
+    Entry new_entry = {.st = {
+                           .st_nlink = 1,
+                           .st_mode = S_IFREG | mode,
+                       }};
+    auto it = file_map.insert({path, new_entry}).first;
+    dir_add_subfile(it);
+    return it;
+}
+
+void* rchfs_init(struct fuse_conn_info* conn) {
+    DLOG("");
+    pool = rchms::Open(options);
+    file_map.insert({"/", (Entry){.st = {
+                                      .st_nlink = 2,
+                                      .st_mode = 0755 | S_IFDIR,
+                                  }}});
+    return nullptr;
+}
+
+void rchfs_destroy(void* ctx) {
+    DLOG("");
+    rchms::Close(pool);
+}
+
+int rchfs_getattr(const char* path, struct stat* stbuf) {
+    DLOG("path: %s", path);
+    auto it = file_map.find(path);
+    if (it == file_map.end()) {
+        return -ENOENT;
+    }
+    *stbuf = it->second.st;
+    return 0;
+}
+
+int rchfs_mknod(const char* path, mode_t mode, dev_t rdev) {
+    DLOG("path: %s", path);
+
+    auto it = file_map.find(path);
+    if (it != file_map.end()) {
+        return -EEXIST;
+    }
+    createfile(path, mode, rdev);
+    return 0;
+}
+
+int rchfs_mkdir(const char* path, mode_t mode) {
+    DLOG("path: %s", path);
+
+    auto it = file_map.find(path);
+    if (it != file_map.end()) {
+        return -EEXIST;
+    }
+    createdir(path, mode);
+    return 0;
+}
+
+int rchfs_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset,
+                  struct fuse_file_info* fi) {
+    DLOG("path: %s", path);
+
+    Entry* ent = (Entry*)fi->fh;
+    if (ent == nullptr) {
+        auto it = file_map.find(path);
+        ent = &it->second;
+    }
+    for (auto& p : ent->file_list) {
+        filler(buf, getname(p->first).c_str(), &ent->st, 0);
+    }
+    return 0;
+}
+
+int rchfs_open(const char* path, struct fuse_file_info* fi) {
+    DLOG("path: %s", path);
+
+    auto it = file_map.find(path);
+    if (it == file_map.end()) {
+        it = createfile(path, 0664, 0);
+    }
+    fi->fh = (uint64_t)&it->second;
+    return 0;
+}
+
+int rchfs_read(const char* path, char* buf, size_t size, off_t off, struct fuse_file_info* fi) {
+    DLOG("path: %s", path);
+
+    Entry* ent = (Entry*)fi->fh;
+    if (off > ent->st.st_size) {
+        return 0;
+    }
+    size_t avail = ent->st.st_size - off;
+    size_t rsize = (size < avail) ? size : avail;
+    size = rsize;
+
+    // read off rsize bytes
+    size_t bi = div_floor(off, page_size);
+    while (rsize > 0) {
+        rchms::GAddr read_addr = ent->block_map[bi];
+        size_t s = min(rsize, align_ceil((size_t)(off + 1), page_size) - off);
+        pool->Read(read_addr + off - align_floor(off, page_size), s, buf);
+
+        off += s;
+        rsize -= s;
+        buf += s;
+        ++bi;
+    }
+    return size;
+}
+
+int rchfs_write(const char* path, const char* buf, size_t size, off_t off,
+                struct fuse_file_info* fi) {
+    DLOG("path: %s", path);
+
+    Entry* ent = (Entry*)fi->fh;
+    off_t minsize = off + size;
+    if (minsize > ent->st.st_size) {
+        ent->st.st_size = minsize;
+    }
+    minsize = align_ceil(minsize, page_size);
+    size_t reserve_size = ent->block_map.size() * page_size;
+    if (minsize > ent->block_map.size() * page_size) {
+        // alloc allocsize bytes, aligned to page_size
+        size_t allocsize = minsize - reserve_size;
+        size_t alloc_page_cnt = allocsize / page_size;
+        rchms::GAddr alloc_start_gaddr = pool->AllocPage(alloc_page_cnt);
+        for (size_t i = 0; i < alloc_page_cnt; ++i) {
+            ent->block_map.push_back(alloc_start_gaddr + i * page_size);
+        }
+    }
+
+    // write off size bytes
+    size_t bi = div_floor(off, page_size);
+    size_t rsize = size;
+    while (rsize > 0) {
+        rchms::GAddr write_addr = ent->block_map[bi];
+        size_t s = min(rsize, align_ceil((size_t)(off + 1), page_size) - off);
+        pool->Write(write_addr + off - align_floor(off, page_size), s, buf);
+
+        off += s;
+        rsize -= s;
+        buf += s;
+        ++bi;
+    }
+    return size;
+}
+
+struct fuse_operations rchfs_ops = {
+    .getattr = rchfs_getattr,
+    .mknod = rchfs_mknod,
+    .mkdir = rchfs_mkdir,
+    .open = rchfs_open,
+    .read = rchfs_read,
+    .write = rchfs_write,
+    .readdir = rchfs_readdir,
+    .init = rchfs_init,
+    .destroy = rchfs_destroy,
+};
+
+struct option {
+    char* client_ip;
+    uint16_t client_port;
+
+    uint32_t rack_id;
+
+    bool with_cxl = true;        // 是否注册为CXL客户端
+    char* cxl_devdax_path;       // CXL设备路径
+    size_t cxl_memory_size;      // CXL设备大小
+    int prealloc_fiber_num = 2;  // 预分配协程个数
+};
+
+#define OPTION(t, p) \
+    { t, offsetof(option, p), 1 }
+
+const fuse_opt option_spec[] = {OPTION("--client_ip=%s", client_ip),
+                                OPTION("--client_port=%hu", client_port),
+                                OPTION("--cxl_devdax_path=%s", cxl_devdax_path),
+                                OPTION("--cxl_memory_size=%lu", cxl_memory_size),
+                                OPTION("--rack_id=%u", rack_id),
+                                FUSE_OPT_END};
+
+int main(int argc, char* argv[]) {
+    int ret;
+    option opts;
+    fuse_args args = FUSE_ARGS_INIT(argc, argv);
+
+    if (fuse_opt_parse(&args, &opts, option_spec, NULL) == -1) return 1;
+
+    options.client_ip = opts.client_ip;
+    options.client_port = opts.client_port;
+    options.rack_id = opts.rack_id;
+    options.with_cxl = opts.with_cxl;
+    options.cxl_devdax_path = opts.cxl_devdax_path;
+    options.cxl_memory_size = opts.cxl_memory_size;
+    options.prealloc_fiber_num = opts.prealloc_fiber_num;
+
+    ret = fuse_main(args.argc, args.argv, &rchfs_ops, NULL);
+    fuse_opt_free_args(&args);
+    return ret;
+}
