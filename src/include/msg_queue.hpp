@@ -118,6 +118,32 @@ struct MsgQueueSatistics {
     uint64_t recv_io = 0;
     uint64_t recv_bytes = 0;
     uint64_t recv_time = 0;
+
+    void start_sample(uint64_t &timer) {
+#if (RCHMS_PERF_ON != 0)
+        timer = getNsTimestamp();
+#endif  // RCHMS_PERF_ON
+    }
+
+    void send_sample(size_t bytes, uint64_t &timer) {
+#if (RCHMS_PERF_ON != 0)
+        uint64_t tmp = getNsTimestamp();
+        send_io++;
+        send_bytes += bytes;
+        send_time += tmp - timer;
+        timer = tmp;
+#endif  // RCHMS_PERF_ON
+    }
+
+    void recv_sample(size_t bytes, uint64_t &timer) {
+#if (RCHMS_PERF_ON != 0)
+        uint64_t tmp = getNsTimestamp();
+        recv_io++;
+        recv_bytes += bytes;
+        recv_time += tmp - timer;
+        timer = tmp;
+#endif  // RCHMS_PERF_ON
+    }
 };
 
 struct MsgQueueNexus {
@@ -125,9 +151,9 @@ struct MsgQueueNexus {
 
     MsgQueueNexus(void *msgq_zone_start_addr);
 
-    MsgQueue * GetPublicMsgQ() const { return m_public_msgq; }
+    MsgQueue *GetPublicMsgQ() const { return m_public_msgq; }
 
-    void* GetMsgQZoneStartAddr() const { return m_msgq_zone_start_addr; }
+    void *GetMsgQZoneStartAddr() const { return m_msgq_zone_start_addr; }
 
     void register_req_func(uint8_t rpc_type, msgq_handler_t handler);
 

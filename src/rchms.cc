@@ -32,7 +32,9 @@ PoolContext *Open(ClientOptions options) {
 void Close(PoolContext *pool_ctx) { delete pool_ctx; }
 
 Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
-    uint64_t perf_stat_time = getNsTimestamp(), perf_stat_time_, perf_read_time = perf_stat_time;
+    uint64_t perf_stat_timer, perf_stat_timer_;
+    m_impl->m_stats.start_sample(perf_stat_timer);
+    perf_stat_timer_ = perf_stat_timer;
 
     page_id_t page_id = GetPageID(gaddr);
     offset_t in_page_offset = GetPageOffset(gaddr);
@@ -50,12 +52,10 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
 
     page_cache = ptl.FindCache(page_id);
 
-    perf_stat_time_ = getNsTimestamp();
-    m_impl->m_stats.local_cache_search_time += perf_stat_time_ - perf_stat_time;
-    perf_stat_time = perf_stat_time_;
+    m_impl->m_stats.page_cache_search_sample(perf_stat_timer);
 
     if (page_cache == nullptr) {
-        m_impl->m_stats.local_miss++;
+        m_impl->m_stats.local_page_miss_sample();
 
         auto fu = m_impl->m_local_rack_daemon_connection.msgq_conn->call<SpinPromise>(
             rpc_daemon::getPageCXLRefOrProxy,
@@ -81,36 +81,32 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
 
         page_cache = ptl.AddCache(page_id, resp.offset);
 
-        perf_stat_time_ = getNsTimestamp();
-        m_impl->m_stats.local_cache_fault_time += perf_stat_time_ - perf_stat_time;
-        perf_stat_time = perf_stat_time_;
+        m_impl->m_stats.page_cache_fault_sample(perf_stat_timer);
 
         // DLOG("get ref: %ld --- %#lx", page_id, pageCache->offset);
     } else {
-        m_impl->m_stats.local_hit++;
+        m_impl->m_stats.local_page_hit_sample();
     }
 
     page_cache->Update();
 
-    perf_stat_time_ = getNsTimestamp();
-    m_impl->m_stats.local_cache_update_time += perf_stat_time_ - perf_stat_time;
-    perf_stat_time = perf_stat_time_;
+    m_impl->m_stats.page_cache_update_sample(perf_stat_timer);
 
     memcpy(
         buf,
         reinterpret_cast<const void *>(m_impl->GetVirtualAddr(page_cache->offset + in_page_offset)),
         size);
 
-    perf_stat_time_ = getNsTimestamp();
-    m_impl->m_stats.cxl_read_time += perf_stat_time_ - perf_stat_time;
-    m_impl->m_stats.read_io++;
-    m_impl->m_stats.cxl_read_byte += size;
-    m_impl->m_stats.read_time += perf_stat_time_ - perf_read_time;
+    m_impl->m_stats.cxl_read_sample(size, perf_stat_timer);
+
+    m_impl->m_stats.read_sample(perf_stat_timer_);
     return Status::OK;
 }
 
 Status PoolContext::Write(GAddr gaddr, size_t size, const void *buf) {
-    uint64_t perf_stat_time = getNsTimestamp(), perf_stat_time_, perf_write_time = perf_stat_time;
+    uint64_t perf_stat_timer, perf_stat_timer_;
+    m_impl->m_stats.start_sample(perf_stat_timer);
+    perf_stat_timer_ = perf_stat_timer;
 
     page_id_t page_id = GetPageID(gaddr);
     offset_t in_page_offset = GetPageOffset(gaddr);
@@ -126,15 +122,13 @@ Status PoolContext::Write(GAddr gaddr, size_t size, const void *buf) {
 
     page_cache = ptl.FindCache(page_id);
 
-    perf_stat_time_ = getNsTimestamp();
-    m_impl->m_stats.local_cache_search_time += perf_stat_time_ - perf_stat_time;
-    perf_stat_time = perf_stat_time_;
+    m_impl->m_stats.page_cache_search_sample(perf_stat_timer);
 
     if (page_cache == nullptr) {
-        m_impl->m_stats.local_miss++;
+        m_impl->m_stats.local_page_miss_sample();
         // DLOG("Write can't find page %ld m_page_table_cache.", page_id);
 
-        decltype(((MsgQClient *)0)->call<SpinPromise>(rpc_daemon::getPageCXLRefOrProxy, {})) fu;
+        MsgQFuture<rpc_daemon::GetPageCXLRefOrProxyReply, SpinPromise<msgq::MsgBuffer>> fu;
 
         if (size <= get_page_cxl_ref_or_proxy_write_raw_max_size) {
             fu = m_impl->m_local_rack_daemon_connection.msgq_conn->call<SpinPromise>(
@@ -173,29 +167,23 @@ Status PoolContext::Write(GAddr gaddr, size_t size, const void *buf) {
 
         page_cache = ptl.AddCache(page_id, resp.offset);
 
-        perf_stat_time_ = getNsTimestamp();
-        m_impl->m_stats.local_cache_fault_time += perf_stat_time_ - perf_stat_time;
-        perf_stat_time = perf_stat_time_;
+        m_impl->m_stats.page_cache_fault_sample(perf_stat_timer);
 
         // DLOG("get ref: %ld --- %#lx", page_id, pageCache->offset);
     } else {
-        m_impl->m_stats.local_hit++;
+        m_impl->m_stats.local_page_hit_sample();
     }
 
     page_cache->Update();
 
-    perf_stat_time_ = getNsTimestamp();
-    m_impl->m_stats.local_cache_update_time += perf_stat_time_ - perf_stat_time;
-    perf_stat_time = perf_stat_time_;
+    m_impl->m_stats.page_cache_update_sample(perf_stat_timer);
 
     memcpy(reinterpret_cast<void *>(m_impl->GetVirtualAddr(page_cache->offset + in_page_offset)),
            buf, size);
 
-    perf_stat_time_ = getNsTimestamp();
-    m_impl->m_stats.cxl_write_time += perf_stat_time_ - perf_stat_time;
-    m_impl->m_stats.write_io++;
-    m_impl->m_stats.cxl_write_byte += size;
-    m_impl->m_stats.write_time += perf_stat_time_ - perf_write_time;
+    m_impl->m_stats.cxl_write_sample(size, perf_stat_timer);
+
+    m_impl->m_stats.write_sample(perf_stat_timer_);
     return Status::OK;
 }
 
@@ -375,9 +363,10 @@ void PoolContext::__DumpStats() {
         "write lat: %fns, read lat: %fns, local hit: %lu, local miss: %lu, cxl write lat: %fns, "
         "cxl read lat: %fns, page table lat: "
         "%fns, page fault lat: %fns, page sync lat: %fns, msgq send lat: %fns, msgq recv lat: %fns",
-        1.0 * stats.write_time / (stats.write_io + 1), 1.0 * stats.read_time / (stats.read_io + 1),
-        stats.local_hit, stats.local_miss, 1.0 * stats.cxl_write_time / (stats.write_io + 1),
-        1.0 * stats.cxl_read_time / (stats.read_io + 1),
+        1.0 * stats.write_time / (stats.cxl_write_io + 1),
+        1.0 * stats.read_time / (stats.cxl_read_io + 1), stats.local_hit, stats.local_miss,
+        1.0 * stats.cxl_write_time / (stats.cxl_write_io + 1),
+        1.0 * stats.cxl_read_time / (stats.cxl_read_io + 1),
         1.0 * stats.local_cache_search_time / (total_local_cnt + 1),
         1.0 * stats.local_cache_fault_time / (stats.local_miss + 1),
         1.0 * stats.local_cache_update_time / (total_local_cnt + 1),

@@ -276,8 +276,6 @@ void unLatchPageAndSwap(MasterContext& master_context, MasterToDaemonConnection&
         //      daemon_connection.daemon_id);
     }
 
-    master_context.m_stats.page_swap++;
-
     resp_handle.Init();
     auto& reply = resp_handle.Get();
     reply.ret = true;

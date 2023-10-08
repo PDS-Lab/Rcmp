@@ -2,6 +2,8 @@
 
 #include <string>
 
+#define RCHMS_PERF_ON 0
+
 namespace rchms {
 
 class ClientOptions {

@@ -23,15 +23,121 @@ struct SysStatistics {
     uint64_t rpc_opn = 0;
     uint64_t rpc_exec_time = 0;
 
-    uint64_t read_io = 0;
+    uint64_t cxl_read_io = 0;
     uint64_t cxl_read_byte = 0;
     uint64_t cxl_read_time = 0;
-    uint64_t write_io = 0;
+    uint64_t cxl_write_io = 0;
     uint64_t cxl_write_byte = 0;
     uint64_t cxl_write_time = 0;
 
     uint64_t read_time = 0;
     uint64_t write_time = 0;
+
+    void local_page_miss_sample() {
+#if (RCHMS_PERF_ON != 0)
+        local_miss++;
+#endif  // RCHMS_PERF_ON
+    }
+    void local_page_hit_sample() {
+#if (RCHMS_PERF_ON != 0)
+        local_hit++;
+#endif  // RCHMS_PERF_ON
+    }
+    void page_miss_sample() {
+#if (RCHMS_PERF_ON != 0)
+        page_miss++;
+#endif  // RCHMS_PERF_ON
+    }
+    void page_hit_sample() {
+#if (RCHMS_PERF_ON != 0)
+        page_hit++;
+#endif  // RCHMS_PERF_ON
+    }
+    void page_dio_sample() {
+#if (RCHMS_PERF_ON != 0)
+        page_dio++;
+#endif  // RCHMS_PERF_ON
+    }
+    void page_swap_sample() {
+#if (RCHMS_PERF_ON != 0)
+        page_swap++;
+#endif  // RCHMS_PERF_ON
+    }
+
+    void start_sample(uint64_t &timer) {
+#if (RCHMS_PERF_ON != 0)
+        timer = getNsTimestamp();
+#endif  // RCHMS_PERF_ON
+    }
+
+    void page_cache_search_sample(uint64_t &timer) {
+#if (RCHMS_PERF_ON != 0)
+        uint64_t tmp = getNsTimestamp();
+        local_cache_search_time += tmp - timer;
+        timer = tmp;
+#endif  // RCHMS_PERF_ON
+    }
+
+    void page_cache_fault_sample(uint64_t &timer) {
+#if (RCHMS_PERF_ON != 0)
+        uint64_t tmp = getNsTimestamp();
+        local_cache_fault_time += tmp - timer;
+        timer = tmp;
+#endif  // RCHMS_PERF_ON
+    }
+
+    void page_cache_update_sample(uint64_t &timer) {
+#if (RCHMS_PERF_ON != 0)
+        uint64_t tmp = getNsTimestamp();
+        local_cache_update_time += tmp - timer;
+        timer = tmp;
+#endif  // RCHMS_PERF_ON
+    }
+
+    void cxl_read_sample(size_t bytes, uint64_t &timer) {
+#if (RCHMS_PERF_ON != 0)
+        uint64_t tmp = getNsTimestamp();
+        cxl_read_io++;
+        cxl_read_byte += bytes;
+        cxl_read_time += tmp - timer;
+        timer = tmp;
+#endif  // RCHMS_PERF_ON
+    }
+
+    void cxl_write_sample(size_t bytes, uint64_t &timer) {
+#if (RCHMS_PERF_ON != 0)
+        uint64_t tmp = getNsTimestamp();
+        cxl_write_io++;
+        cxl_write_byte += bytes;
+        cxl_write_time += tmp - timer;
+        timer = tmp;
+#endif  // RCHMS_PERF_ON
+    }
+
+    void write_sample(uint64_t &timer) {
+#if (RCHMS_PERF_ON != 0)
+        uint64_t tmp = getNsTimestamp();
+        write_time += tmp - timer;
+        timer = tmp;
+#endif  // RCHMS_PERF_ON
+    }
+
+    void read_sample(uint64_t &timer) {
+#if (RCHMS_PERF_ON != 0)
+        uint64_t tmp = getNsTimestamp();
+        read_time += tmp - timer;
+        timer = tmp;
+#endif  // RCHMS_PERF_ON
+    }
+
+    void rpc_exec_sample(uint64_t &timer) {
+#if (RCHMS_PERF_ON != 0)
+        uint64_t tmp = getNsTimestamp();
+        rpc_opn++;
+        rpc_exec_time += tmp - timer;
+        timer = tmp;
+#endif  // RCHMS_PERF_ON
+    }
 };
 
 /************************  Master   **********************/
@@ -283,8 +389,8 @@ struct ClientContext : public NOCOPYABLE {
     volatile bool m_msgq_stop;
     std::thread m_msgq_worker;
 
-    // char *m_batch_buffer = new char[write_batch_buffer_size + write_batch_buffer_overflow_size];
-    // size_t m_batch_cur = 0;
+    // char *m_batch_buffer = new char[write_batch_buffer_size +
+    // write_batch_buffer_overflow_size]; size_t m_batch_cur = 0;
     // std::vector<std::tuple<rchms::GAddr, size_t, offset_t>> m_batch_list;
     // std::thread batch_flush_worker;
 

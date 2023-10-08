@@ -104,7 +104,7 @@ retry:
     /* 1. 本地获取访问page */
     PageVMMapMetadata* page_vm_meta = page_meta->vm_meta;
     if (page_vm_meta != nullptr) {
-        daemon_context.m_stats.page_hit++;
+        daemon_context.m_stats.page_hit_sample();
 
         // DLOG("insert ref_client for page %lu", page_id);
         page_vm_meta->ref_client.insert(&client_connection);
@@ -122,7 +122,7 @@ retry:
      *                   PAGE MISS
      * ---------------------------------------------
      */
-    daemon_context.m_stats.page_miss++;
+    daemon_context.m_stats.page_miss_sample();
 
     DaemonToDaemonConnection* dest_daemon_conn;
     RemotePageRefMeta* remote_page_ref_meta =
@@ -186,7 +186,7 @@ retry:
      * ---------------------------------------------
      */
     {
-        daemon_context.m_stats.page_dio++;
+        daemon_context.m_stats.page_dio_sample();
 
         // 启动DirectIO流程
         dest_daemon_conn = remote_page_ref_meta->remote_page_daemon_conn;
@@ -301,7 +301,7 @@ retry:
             goto retry;
         }
 
-        daemon_context.m_stats.page_swap++;
+        daemon_context.m_stats.page_swap_sample();
 
         /* 1. 为page swap的区域准备内存，并确定是否需要换出页 */
         dest_daemon_conn = remote_page_ref_meta->remote_page_daemon_conn;
@@ -341,9 +341,8 @@ retry:
 
                 // 向所有client发起获取最旧page的请求
                 {
-                    std::vector<decltype(((MsgQClient*)0)
-                                             ->call<CortPromise>(rpc_client::getPagePastAccessFreq,
-                                                                 {}))>
+                    std::vector<MsgQFuture<rpc_client::GetPagePastAccessFreqReply,
+                                           CortPromise<msgq::MsgBuffer>>>
                         fu_vec;
 
                     for (auto& client_conn : daemon_context.m_conn_manager.m_client_connect_table) {
@@ -613,7 +612,7 @@ void delPageRDMARef(DaemonContext& daemon_context, DaemonToDaemonConnection& dae
 
 void tryMigratePage(DaemonContext& daemon_context, DaemonToDaemonConnection& daemon_connection,
                     TryMigratePageRequest& req, ResponseHandle<TryMigratePageReply>& resp_handle) {
-    daemon_context.m_stats.page_swap++;
+    daemon_context.m_stats.page_swap_sample();
 
     PageMetadata* page_meta = daemon_context.m_page_table.FindOrCreatePageMeta(req.page_id);
 
@@ -710,9 +709,8 @@ void delPageRefAndCacheBroadcast(DaemonContext& daemon_context, page_id_t page_i
                                  PageMetadata* page_meta, mac_id_t unless_daemon) {
     // DLOG("DN %u: delPageRefBroadcast page %lu", daemon_context.m_daemon_id, page_id);
 
-    std::vector<decltype(((ErpcClient*)0)->call<CortPromise>(rpc_daemon::delPageRDMARef, {}))>
-        del_ref_fu_vec;
-    std::vector<decltype(((MsgQClient*)0)->call<CortPromise>(rpc_client::removePageCache, {}))>
+    std::vector<ErpcFuture<rpc_daemon::DelPageRDMARefReply, CortPromise<void>>> del_ref_fu_vec;
+    std::vector<MsgQFuture<rpc_client::RemovePageCacheReply, CortPromise<msgq::MsgBuffer>>>
         remove_cache_fu_vec;
 
     for (auto daemon_conn : page_meta->vm_meta->ref_daemon) {
