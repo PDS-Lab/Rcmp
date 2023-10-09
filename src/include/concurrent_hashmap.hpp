@@ -5,13 +5,19 @@
 
 #include "config.hpp"
 #include "lock.hpp"
+#include "robin_hood.h"
 #include "utils.hpp"
 
-template <typename K, typename V, typename __SharedMutex = SharedMutex>
+template <typename K, typename V, typename __SharedMutex = SharedMutex, size_t BUCKET_NUM = 32,
+          typename _Hash = std::hash<K>>
 class ConcurrentHashMap {
-    constexpr static const size_t BucketNum = 32;
+    constexpr static const size_t BucketNum = BUCKET_NUM;
 
-    using HashTable = std::unordered_map<K, V>;
+    struct SliceHash {
+        size_t operator()(K key) const { return _Hash()(key) / BUCKET_NUM; }
+    };
+
+    using HashTable = std::unordered_map<K, V, SliceHash>;
 
    public:
     /**

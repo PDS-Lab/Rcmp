@@ -1,6 +1,7 @@
 #include "rchms.hpp"
 
 #include "impl.hpp"
+#include "lock.hpp"
 #include "proto/rpc_register.hpp"
 
 using namespace std::chrono_literals;
@@ -39,18 +40,19 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
     page_id_t page_id = GetPageID(gaddr);
     offset_t in_page_offset = GetPageOffset(gaddr);
     LocalPageCache *page_cache;
+    LocalPageCacheMeta *page_cache_meta;
 
     // TODO: more page
 
-    auto &ptl_cache_lock = PageThreadLocalCache::getInstance(m_impl->m_tcache_mgr).ptl_cache_lock;
     auto &ptl = PageThreadLocalCache::getInstance(m_impl->m_tcache_mgr).page_cache_table;
 
-    SharedResourceLock<page_id_t, LockResourceManager<page_id_t, SharedMutex>> cache_lock(
-        ptl_cache_lock, page_id);
+    page_cache_meta = ptl.FindOrCreateCacheMeta(page_id);
+
+    std::unique_lock<Mutex> cache_lock(page_cache_meta->ref_lock);
 
     // DLOG("CN %u: Read page %lu lock", m_impl->m_client_id, page_id);
 
-    page_cache = ptl.FindCache(page_id);
+    page_cache = ptl.FindCache(page_cache_meta);
 
     m_impl->m_stats.page_cache_search_sample(perf_stat_timer);
 
@@ -79,7 +81,7 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
             return Status::OK;
         }
 
-        page_cache = ptl.AddCache(page_id, resp.offset);
+        page_cache = ptl.AddCache(page_cache_meta, resp.offset);
 
         m_impl->m_stats.page_cache_fault_sample(perf_stat_timer);
 
@@ -111,16 +113,17 @@ Status PoolContext::Write(GAddr gaddr, size_t size, const void *buf) {
     page_id_t page_id = GetPageID(gaddr);
     offset_t in_page_offset = GetPageOffset(gaddr);
     LocalPageCache *page_cache;
+    LocalPageCacheMeta *page_cache_meta;
 
     // TODO: more page
 
-    auto &ptl_cache_lock = PageThreadLocalCache::getInstance(m_impl->m_tcache_mgr).ptl_cache_lock;
     auto &ptl = PageThreadLocalCache::getInstance(m_impl->m_tcache_mgr).page_cache_table;
 
-    SharedResourceLock<page_id_t, LockResourceManager<page_id_t, SharedMutex>> cache_lock(
-        ptl_cache_lock, page_id);
+    page_cache_meta = ptl.FindOrCreateCacheMeta(page_id);
 
-    page_cache = ptl.FindCache(page_id);
+    std::unique_lock<Mutex> cache_lock(page_cache_meta->ref_lock);
+
+    page_cache = ptl.FindCache(page_cache_meta);
 
     m_impl->m_stats.page_cache_search_sample(perf_stat_timer);
 
@@ -165,7 +168,7 @@ Status PoolContext::Write(GAddr gaddr, size_t size, const void *buf) {
             return Status::OK;
         }
 
-        page_cache = ptl.AddCache(page_id, resp.offset);
+        page_cache = ptl.AddCache(page_cache_meta, resp.offset);
 
         m_impl->m_stats.page_cache_fault_sample(perf_stat_timer);
 

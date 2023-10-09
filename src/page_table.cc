@@ -80,40 +80,37 @@ void PageTableManager::RandomPickUnvisitVMPage(bool force, bool &ret, page_id_t 
 
 PageCacheTable::~PageCacheTable() {
     for (auto &p : table) {
+        if (p.second->cache != nullptr) {
+            delete p.second->cache;
+        }
         delete p.second;
     }
 }
 
-LocalPageCache *PageCacheTable::FindCache(page_id_t page_id) {
+LocalPageCacheMeta *PageCacheTable::FindOrCreateCacheMeta(page_id_t page_id) {
+    // std::shared_lock<SharedMutex> lck(table_lock);
     auto it = table.find(page_id);
     if (it == table.end()) {
-        return nullptr;
+        // lck.unlock();
+        // std::unique_lock<SharedMutex> lck;
+        it = table.insert({page_id, new LocalPageCacheMeta()}).first;
     }
     return it->second;
 }
 
-LocalPageCache *PageCacheTable::AddCache(page_id_t page_id, offset_t offset) {
-    LocalPageCache *page_cache = new LocalPageCache(8);
-    page_cache->offset = offset;
-
-    // DLOG("add local page %lu cache", page_id);
-    table.emplace(page_id, page_cache);
-
-    return page_cache;
+LocalPageCache *PageCacheTable::FindCache(LocalPageCacheMeta *cache_meta) const {
+    return cache_meta->cache;
 }
 
-void PageCacheTable::RemoveCache(page_id_t page_id) {
-    auto it = table.find(page_id);
-    if (it == table.end()) {
-        return;
-    }
+LocalPageCache *PageCacheTable::AddCache(LocalPageCacheMeta *cache_meta, offset_t offset) {
+    cache_meta->cache = new LocalPageCache(8);
+    cache_meta->cache->offset = offset;
+    return cache_meta->cache;
+}
 
-    LocalPageCache *page_cache = it->second;
-
-    table.erase(it);
-    delete page_cache;
-
-    // DLOG("remove local page %lu cache", page_id);
+void PageCacheTable::RemoveCache(LocalPageCacheMeta *cache_meta) {
+    delete cache_meta->cache;
+    cache_meta->cache = nullptr;
 }
 
 void PageThreadCacheManager::insert(PageThreadLocalCache *tcache) {

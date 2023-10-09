@@ -6,6 +6,7 @@
 #include <deque>
 #include <random>
 #include <vector>
+#include "lock.hpp"
 
 class Histogram {
    public:
@@ -47,7 +48,8 @@ class FreqStats {
     void dump(size_t &cnt, std::vector<uint64_t> &time_v);
 
    private:
-    std::atomic<size_t> m_cnt;
+    // std::atomic<size_t> m_cnt;
+    size_t m_cnt;
     size_t m_max_recent_record;
     std::deque<uint64_t> m_time_q;
     uint64_t m_last_time;
@@ -55,6 +57,7 @@ class FreqStats {
     uint64_t m_restart_interval;
     float m_lambda;
 
+    static Mutex m_exp_decays_lck;
     static std::vector<float> m_exp_decays;
 };
 

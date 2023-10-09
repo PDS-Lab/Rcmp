@@ -81,8 +81,6 @@ int main(int argc, char *argv[]) {
             param.TH = th;
             param.PAYLOAD = payload;
             run_bench(param);
-            instance.ref->__ClearStats();
-            run_bench(param);
         }
         instance.ref->__DumpStats();
         instance.ref->__ClearStats();

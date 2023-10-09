@@ -1,5 +1,7 @@
 #include "proto/rpc_client.hpp"
 
+#include <mutex>
+#include "lock.hpp"
 
 namespace rpc_client {
 
@@ -22,9 +24,13 @@ void getPagePastAccessFreq(ClientContext& client_context,
     // m_page中存的是该CN访问过的所有Page的id
     client_context.m_tcache_mgr.foreach_all([&](PageThreadLocalCache& tcache) {
         for (auto& p : tcache.page_cache_table.table) {
+            auto page_cache = tcache.page_cache_table.FindCache(p.second);
+            if (page_cache == nullptr) {
+                continue;
+            }
             auto page_id = p.first;
 
-            uint64_t last = p.second->stats.last();
+            uint64_t last = page_cache->stats.last();
             if (last_time > last) {
                 last_time = last;  // 越小，越旧
                 oldest_page = page_id;
@@ -46,15 +52,15 @@ void removePageCache(ClientContext& client_context, ClientToDaemonConnection& da
                      RemovePageCacheRequest& req,
                      ResponseHandle<RemovePageCacheReply>& resp_handle) {
     client_context.m_tcache_mgr.foreach_all([&](PageThreadLocalCache& tcache) {
-        auto page_cache = tcache.page_cache_table.FindCache(req.page_id);
+        auto page_cache_meta = tcache.page_cache_table.FindOrCreateCacheMeta(req.page_id);
+        auto page_cache = tcache.page_cache_table.FindCache(page_cache_meta);
         if (page_cache == nullptr) {
             return;
         }
 
-        UniqueResourceLock<page_id_t, LockResourceManager<page_id_t, SharedMutex>> cache_lock(
-            tcache.ptl_cache_lock, req.page_id);
+        std::unique_lock<Mutex> cache_lock(page_cache_meta->ref_lock);
 
-        tcache.page_cache_table.RemoveCache(req.page_id);
+        tcache.page_cache_table.RemoveCache(page_cache_meta);
     });
 
     // DLOG("CN %u: Del page %lu cache.", client_context.m_client_id, req.page_id);

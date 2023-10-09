@@ -211,7 +211,7 @@ void MsgQueueRPC::enqueue_response(MsgBuffer& req_buf, MsgBuffer& resp_buf) {
     resp_buf.m_msg.msg_type = MsgHeader::RESP;
     resp_buf.m_msg.cb = req_buf.m_msg.cb;
     resp_buf.m_msg.arg = req_buf.m_msg.arg;
-    m_nexus->m_stats.start_sample(req_buf.m_msg.send_ts);
+    m_nexus->m_stats.start_sample(resp_buf.m_msg.send_ts);
     resp_buf.m_q->enqueue_msg(resp_buf);
 }
 
@@ -223,8 +223,6 @@ void MsgQueueRPC::run_event_loop_once() {
         MsgBuffer buf;
         buf.m_q = m_recv_queue;
         buf.m_msg = h;
-
-        uint64_t recv_ts = getNsTimestamp();
 
         if (h.msg_type == MsgHeader::REQ) {
             m_nexus->m_stats.send_sample(h.size, h.send_ts);

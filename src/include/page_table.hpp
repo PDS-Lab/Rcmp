@@ -1,14 +1,16 @@
 #pragma once
 
 #include <list>
+#include <mutex>
 #include <set>
+
 #include "allocator.hpp"
 #include "common.hpp"
 #include "concurrent_hashmap.hpp"
 #include "lock.hpp"
 #include "lockmap.hpp"
+#include "robin_hood.h"
 #include "stats.hpp"
-
 
 struct MasterToDaemonConnection;
 struct MasterToClientConnection;
@@ -144,7 +146,7 @@ struct PageTableManager {
 };
 
 struct LocalPageCache {
-    uint64_t Update() { return stats.add(getUsTimestamp()); }
+    uint64_t Update() { return stats.add(rdtsc() / 1000); }
 
     FreqStats stats;
     offset_t offset;
@@ -153,14 +155,22 @@ struct LocalPageCache {
         : stats(max_recent_record, 0, hot_stat_freq_timeout_interval) {}
 };
 
+struct LocalPageCacheMeta {
+    Mutex ref_lock;
+    LocalPageCache *cache = nullptr;
+};
+
 struct PageCacheTable {
     ~PageCacheTable();
 
-    LocalPageCache *FindCache(page_id_t page_id);
-    LocalPageCache *AddCache(page_id_t page_id, offset_t offset);
-    void RemoveCache(page_id_t page_id);
+    LocalPageCacheMeta *FindOrCreateCacheMeta(page_id_t page_id);
+    LocalPageCache *FindCache(LocalPageCacheMeta *cache_meta) const;
+    LocalPageCache *AddCache(LocalPageCacheMeta *cache_meta, offset_t offset);
+    void RemoveCache(LocalPageCacheMeta *cache_meta);
 
-    std::unordered_map<page_id_t, LocalPageCache *> table;
+    SharedMutex table_lock;
+
+    robin_hood::unordered_flat_map<page_id_t, LocalPageCacheMeta *, std::hash<page_id_t>> table;
 };
 
 struct PageThreadLocalCache;
@@ -189,7 +199,6 @@ class PageThreadLocalCache {
     }
 
     PageCacheTable page_cache_table;
-    LockResourceManager<page_id_t, SharedMutex> ptl_cache_lock;
 
    private:
     PageThreadCacheManager &mgr;

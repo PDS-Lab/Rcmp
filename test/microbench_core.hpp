@@ -204,11 +204,10 @@ inline void run_bench(BenchParam param) {
 
     DLOG("start testing ...");
 
-    // run_sample("random write", param, TestType::WRITE | TestType::RAND, redis);
     run_sample("random write", param, TestType::WRITE | TestType::RAND, redis);
     run_sample("random read", param, TestType::READ | TestType::RAND, redis);
-    // run_sample("zipf write", param, TestType::WRITE | TestType::ZIPF, redis);
-    // run_sample("zipf read", param, TestType::READ | TestType::ZIPF, redis);
+    run_sample("zipf write", param, TestType::WRITE | TestType::ZIPF, redis);
+    run_sample("zipf read", param, TestType::READ | TestType::ZIPF, redis);
 
     DLOG("testing end ...");
 
