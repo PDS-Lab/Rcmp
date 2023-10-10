@@ -21,7 +21,7 @@
 
 #include "config.hpp"
 #include "log.hpp"
-#include "rchms.hpp"
+#include "rcmp.hpp"
 #include "utils.hpp"
 
 using namespace std;
@@ -33,14 +33,14 @@ using EntryPair = pair<const string, Entry>;
 struct Entry {
     struct stat st;
     list<EntryPair*> subfile_list;
-    vector<rchms::GAddr> block_map;
+    vector<rcmp::GAddr> block_map;
 };
 
 using UMITER = typename unordered_map<string, Entry>::iterator;
 
-rchms::ClientOptions options;
+rcmp::ClientOptions options;
 unordered_map<string, Entry> file_map;
-rchms::PoolContext* pool;
+rcmp::PoolContext* pool;
 
 string getname(const string& path) {
     size_t pos = path.find_last_of('/');
@@ -79,7 +79,7 @@ bool try_reserve(Entry& ent, off_t size) {
         // alloc allocsize bytes, aligned to page_size
         size_t allocsize = minsize - reserve_size;
         size_t alloc_page_cnt = allocsize / page_size;
-        rchms::GAddr alloc_start_gaddr = pool->AllocPage(alloc_page_cnt);
+        rcmp::GAddr alloc_start_gaddr = pool->AllocPage(alloc_page_cnt);
         for (size_t i = 0; i < alloc_page_cnt; ++i) {
             ent.block_map.push_back(alloc_start_gaddr + i * page_size);
         }
@@ -110,7 +110,7 @@ UMITER createfile(const char* path, mode_t mode, dev_t rdev) {
 
 void* rchfs_init(struct fuse_conn_info* conn) {
     DLOG("");
-    pool = rchms::Open(options);
+    pool = rcmp::Open(options);
     file_map.insert({"/", (Entry){.st = {
                                       .st_nlink = 2,
                                       .st_mode = 0775 | S_IFDIR,
@@ -120,7 +120,7 @@ void* rchfs_init(struct fuse_conn_info* conn) {
 
 void rchfs_destroy(void* ctx) {
     DLOG("");
-    rchms::Close(pool);
+    rcmp::Close(pool);
 }
 
 int rchfs_getattr(const char* path, struct stat* stbuf) {
@@ -195,7 +195,7 @@ int rchfs_read(const char* path, char* buf, size_t size, off_t off, struct fuse_
     // read off rsize bytes
     size_t bi = div_floor(off, page_size);
     while (rsize > 0) {
-        rchms::GAddr read_addr = ent->block_map[bi];
+        rcmp::GAddr read_addr = ent->block_map[bi];
         size_t s = min(rsize, align_ceil((size_t)(off + 1), page_size) - off);
         pool->Read(read_addr + off - align_floor(off, page_size), s, buf);
 
@@ -222,7 +222,7 @@ int rchfs_write(const char* path, const char* buf, size_t size, off_t off,
     size_t bi = div_floor(off, page_size);
     size_t rsize = size;
     while (rsize > 0) {
-        rchms::GAddr write_addr = ent->block_map[bi];
+        rcmp::GAddr write_addr = ent->block_map[bi];
         size_t s = min(rsize, align_ceil((size_t)(off + 1), page_size) - off);
         pool->Write(write_addr + off - align_floor(off, page_size), s, buf);
 
@@ -283,10 +283,10 @@ struct option {
 
     uint32_t rack_id;
 
-    bool with_cxl = true;        // 是否注册为CXL客户端
-    char* cxl_devdax_path;       // CXL设备路径
-    size_t cxl_memory_size;      // CXL设备大小
-    int prealloc_fiber_num = 2;  // 预分配协程个数
+    bool with_cxl = true;
+    char* cxl_devdax_path;
+    size_t cxl_memory_size;
+    int prealloc_fiber_num = 2;
 };
 
 #define OPTION(t, p) \

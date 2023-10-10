@@ -6,7 +6,7 @@
 #include "impl.hpp"
 #include "log.hpp"
 #include "proto/rpc_adaptor.hpp"
-#include "rchms.hpp"
+#include "rcmp.hpp"
 #include "utils.hpp"
 
 namespace rpc_daemon {
@@ -22,12 +22,13 @@ struct JoinRackReply {
     mac_id_t daemon_mac_id;
 };
 /**
- * @brief 将client加入到机柜中。在建立连接时调用。
+ * @brief Adds client to the rack. Called when the connection is established.
  *
  * @param daemon_context
- * @param client_connection 需要解引用于从heap申请的对象，此后将由MasterContext维护其生命周期。
- * @return true 加入成功
- * @return false 加入失败
+ * @param client_connection It needs to be dereferenced to the object requested from the heap, after
+ * which its lifecycle will be maintained by the MasterContext.
+ * @param req
+ * @param resp_handle
  */
 void joinRack(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
               JoinRackRequest& req, ResponseHandle<JoinRackReply>& resp_handle);
@@ -54,7 +55,7 @@ struct GetPageCXLRefOrProxyRequest {
         WRITE,
         WRITE_RAW,
     } type;
-    rchms::GAddr gaddr;
+    rcmp::GAddr gaddr;
     union {
         struct {  // type == WRITE
             size_t cn_write_size;
@@ -81,13 +82,13 @@ struct GetPageCXLRefOrProxyReply {
     };
 };
 /**
- * @brief 获取page的引用。如果本地Page Table没有该page
- * id，则会触发远程调用。
+ * @brief Get a reference to the page. If the local Page Table does not have that page id, a remote
+ * io is triggered.
  *
  * @param daemon_context
  * @param client_connection
  * @param req
- * @return GetPageRefOrProxyReply
+ * @param resp_handle
  */
 void getPageCXLRefOrProxy(DaemonContext& daemon_context,
                           DaemonToClientConnection& client_connection,
@@ -103,12 +104,12 @@ struct AllocPageMemoryReply {
     bool ret;
 };
 /**
- * @brief 申请一个page物理地址空间
+ * @brief Allocate a page physical address space
  *
  * @param daemon_context
  * @param master_connection
  * @param req
- * @return AllocPageMemoryReply
+ * @param resp_handle
  */
 void allocPageMemory(DaemonContext& daemon_context, DaemonToMasterConnection& master_connection,
                      AllocPageMemoryRequest& req,
@@ -119,16 +120,8 @@ struct AllocRequest {
     size_t size;
 };
 struct AllocReply {
-    rchms::GAddr gaddr;
+    rcmp::GAddr gaddr;
 };
-/**
- * @brief 申请一个内存地址。如果本地缺少有效的page，则向master发送`allocPage()`请求获取新page
- *
- * @param daemon_context
- * @param client_connection
- * @param req
- * @return AllocReply
- */
 void alloc(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
            AllocRequest& req, ResponseHandle<AllocReply>& resp_handle);
 struct AllocPageRequest {
@@ -136,17 +129,16 @@ struct AllocPageRequest {
     size_t count;
 };
 struct AllocPageReply {
-    page_id_t start_page_id;  // 分配的起始页id
-    size_t start_count;       // 实际在请求方rack分配的个数
+    page_id_t start_page_id;  // Allocated start page id
+    size_t start_count;       // Number actually allocated in the requesting rack
 };
 /**
- * @brief
- * 申请一个page
+ * @brief Allocate for a page
  *
  * @param daemon_context
  * @param client_connection
  * @param req
- * @return AllocPageReply
+ * @param resp_handle
  */
 void allocPage(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
                AllocPageRequest& req, ResponseHandle<AllocPageReply>& resp_handle);
@@ -160,31 +152,24 @@ struct FreePageReply {
     bool ret;
 };
 /**
- * @brief 释放page。
+ * @brief Free a page
  *
  * @param master_context
  * @param daemon_connection
  * @param req
+ * @param resp_handle
  */
 void freePage(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
               FreePageRequest& req, ResponseHandle<FreePageReply>& resp_handle);
 
 struct FreeRequest {
     mac_id_t mac_id;
-    rchms::GAddr gaddr;
+    rcmp::GAddr gaddr;
     size_t n;
 };
 struct FreeReply {
     bool ret;
 };
-/**
- * @brief 释放一个内存地址。
- *
- * @param daemon_context
- * @param client_connection
- * @param req
- * @return FreeReply
- */
 void free(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
           FreeRequest& req, ResponseHandle<FreeReply>& resp_handle);
 
@@ -197,32 +182,31 @@ struct GetPageRDMARefReply {
     uint32_t rkey;
 };
 /**
- * @brief 获取page的引用。如果本地Page Table没有该page
- * id，则会触发远程调用。
+ * @brief Get a reference to the page. If the local Page Table does not have that page id, a remote
+ * io is triggered.
  *
  * @param daemon_context
  * @param daemon_connection
  * @param req
- * @return GetPageRDMARefReply
+ * @param resp_handle
  */
 void getPageRDMARef(DaemonContext& daemon_context, DaemonToDaemonConnection& daemon_connection,
                     GetPageRDMARefRequest& req, ResponseHandle<GetPageRDMARefReply>& resp_handle);
 
 struct DelPageRDMARefRequest {
     mac_id_t mac_id;
-    page_id_t page_id;
+    page_id_t page_id;  // Preparing to delete the page id of the ref
 };
 struct DelPageRDMARefReply {
     bool ret;
 };
 /**
- * @brief 删除page的引用。如果本地Page Table没有该page
- * id，则会触发远程调用。
+ * @brief Removes a reference to a page.
  *
  * @param daemon_context
  * @param daemon_connection
  * @param req
- * @return DelPageRDMARefReply
+ * @param resp_handle
  */
 void delPageRDMARef(DaemonContext& daemon_context, DaemonToDaemonConnection& daemon_connection,
                     DelPageRDMARefRequest& req, ResponseHandle<DelPageRDMARefReply>& resp_handle);
@@ -232,7 +216,8 @@ struct TryMigratePageRequest {
     page_id_t page_id;
     page_id_t swap_page_id;
     uint64_t hot_score;
-    uintptr_t swapout_page_addr;  // 当swapout_page_addr == 0且swapout_page_rkey == 0时代表不换出页
+    uintptr_t swapout_page_addr;  // When `swapout_page_addr == 0` and `swapout_page_rkey == 0`, it
+                                  // means no swapout.
     uintptr_t swapin_page_addr;
     uint32_t swapout_page_rkey;
     uint32_t swapin_page_rkey;
@@ -246,7 +231,7 @@ struct TryMigratePageReply {
  * @param daemon_context
  * @param daemon_connection
  * @param req
- * @return TryMigratePageReply
+ * @param resp_handle
  */
 void tryMigratePage(DaemonContext& daemon_context, DaemonToDaemonConnection& daemon_connection,
                     TryMigratePageRequest& req, ResponseHandle<TryMigratePageReply>& resp_handle);

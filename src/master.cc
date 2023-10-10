@@ -22,7 +22,7 @@ void MasterContext::InitCluster() {
     m_page_directory.page_id_allocator = std::make_unique<IDGenerator>();
     m_page_directory.page_id_allocator->Expand(1);
     id = m_page_directory.page_id_allocator->Gen();
-    // 保证page id不为0，这就保证了分配的GAddr是非null
+    // Ensures that the page id is not 0, which ensures that the allocated GAddr is non-null
     DLOG_ASSERT(id == 0, "Can't init page id");
 }
 
@@ -102,7 +102,7 @@ int main(int argc, char *argv[]) {
     bool ret = cmd.parse(argc, argv);
     DLOG_ASSERT(ret);
 
-    rchms::MasterOptions options;
+    rcmp::MasterOptions options;
     options.master_ip = cmd.get<std::string>("master_ip");
     options.master_port = cmd.get<uint16_t>("master_port");
 

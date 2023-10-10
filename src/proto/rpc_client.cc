@@ -21,7 +21,7 @@ void getPagePastAccessFreq(ClientContext& client_context,
     page_id_t oldest_page = invalid_page_id;
     uint64_t last_time = UINT64_MAX;
 
-    // m_page中存的是该CN访问过的所有Page的id
+    // m_page contains the ids of all the pages visited by the CN.
     client_context.m_tcache_mgr.foreach_all([&](PageThreadLocalCache& tcache) {
         for (auto& p : tcache.page_cache_table.table) {
             auto page_cache = tcache.page_cache_table.FindCache(p.second);
@@ -32,7 +32,7 @@ void getPagePastAccessFreq(ClientContext& client_context,
 
             uint64_t last = page_cache->stats.last();
             if (last_time > last) {
-                last_time = last;  // 越小，越旧
+                last_time = last;  // The smaller, the older
                 oldest_page = page_id;
             }
             // DLOG("CN: %u getPagePastAccessFreq: find page %lu's cache.",

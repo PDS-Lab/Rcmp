@@ -35,7 +35,7 @@ struct MsgHeader final {
     bool invalid_flag : 1;
     enum : uint8_t { REQ, RESP } msg_type : 1;
     uint8_t rpc_type;
-    size_t size : 32;  // 实际数据大小
+    size_t size : 32;  // Actual data size
     msgq_callback_t cb;
     void *arg;
 
@@ -47,8 +47,8 @@ struct MsgBuffer {
     void *get_buf() const;
 
     MsgQueue *m_q;
-    MsgHeader *m_msg;  // 指向MsgHeader的地址
-    size_t m_size;     // 实际数据大小
+    MsgHeader *m_msg;  // Address pointing to the MsgHeader
+    size_t m_size;     // Actual data size
 };
 
 struct MsgQueue final {
@@ -77,8 +77,8 @@ struct MsgQueue final {
 struct MsgHeader final {
     enum : uint8_t { REQ, RESP } msg_type : 1;
     uint8_t rpc_type;
-    size_t size : 32;     // 实际数据大小
-    offset_t buf_offset;  // 根据MsgQueue::m_ring的地址
+    size_t size : 32;     // Actual data size
+    offset_t buf_offset;  // Based on the address of MsgQueue::m_ring
     msgq_callback_t cb;
     uint64_t send_ts;
     void *arg;
@@ -120,29 +120,29 @@ struct MsgQueueSatistics {
     uint64_t recv_time = 0;
 
     void start_sample(uint64_t &timer) {
-#if (RCHMS_PERF_ON != 0)
+#if (RCMP_PERF_ON != 0)
         timer = getNsTimestamp();
-#endif  // RCHMS_PERF_ON
+#endif  // RCMP_PERF_ON
     }
 
     void send_sample(size_t bytes, uint64_t &timer) {
-#if (RCHMS_PERF_ON != 0)
+#if (RCMP_PERF_ON != 0)
         uint64_t tmp = getNsTimestamp();
         send_io++;
         send_bytes += bytes;
         send_time += tmp - timer;
         timer = tmp;
-#endif  // RCHMS_PERF_ON
+#endif  // RCMP_PERF_ON
     }
 
     void recv_sample(size_t bytes, uint64_t &timer) {
-#if (RCHMS_PERF_ON != 0)
+#if (RCMP_PERF_ON != 0)
         uint64_t tmp = getNsTimestamp();
         recv_io++;
         recv_bytes += bytes;
         recv_time += tmp - timer;
         timer = tmp;
-#endif  // RCHMS_PERF_ON
+#endif  // RCMP_PERF_ON
     }
 };
 
@@ -168,9 +168,9 @@ struct MsgQueueRPC {
     MsgQueueRPC(MsgQueueNexus *nexus, MsgQueue *send_queue, MsgQueue *recv_queue, void *ctx);
 
     /**
-     * @brief 申请发送buffer
+     * @brief Allocate msg buffer
      *
-     * @warning 该操作是阻塞式调用
+     * @warning The operation is a blocking call
      *
      * @param size
      * @return MsgBuffer
@@ -178,7 +178,7 @@ struct MsgQueueRPC {
     MsgBuffer alloc_msg_buffer(size_t size);
 
     /**
-     * @brief 入队请求
+     * @brief Enqueue a request message
      *
      * @param rpc_type
      * @param msg_buf
@@ -188,7 +188,7 @@ struct MsgQueueRPC {
     void enqueue_request(uint8_t rpc_type, MsgBuffer &msg_buf, msgq_callback_t cb, void *arg);
 
     /**
-     * @brief 入队回复
+     * @brief Enqueue a response message
      *
      * @param req_buf
      * @param resp_buf
@@ -196,13 +196,13 @@ struct MsgQueueRPC {
     void enqueue_response(MsgBuffer &req_buf, MsgBuffer &resp_buf);
 
     /**
-     * @brief rpc队列轮询
+     * @brief rpc queue polling once
      *
      */
     void run_event_loop_once();
 
     /**
-     * @brief 释放buffer
+     * @brief free msg buffer
      *
      * @param msg_buf
      */

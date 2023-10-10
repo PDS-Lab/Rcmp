@@ -2,9 +2,9 @@
 
 #include <string>
 
-#define RCHMS_PERF_ON 1
+#define RCMP_PERF_ON 1
 
-namespace rchms {
+namespace rcmp {
 
 class ClientOptions {
    public:
@@ -13,43 +13,46 @@ class ClientOptions {
 
     uint32_t rack_id;
 
-    bool with_cxl = true;         // 是否注册为CXL客户端
-    std::string cxl_devdax_path;  // CXL设备路径
-    size_t cxl_memory_size;       // CXL设备大小
-    int prealloc_fiber_num = 2;   // 预分配协程个数
+    // Whether to register as a CXL client (currently only `true` is supported)
+    bool with_cxl = true;
+    std::string cxl_devdax_path;
+    size_t cxl_memory_size;
+    int prealloc_fiber_num = 2;  // Number of pre-allocated boost coroutine
 };
 
 class DaemonOptions {
    public:
-    std::string master_ip;         // MN的IP
-    uint16_t master_port = 31850;  // MN的端口
+    std::string master_ip;
+    uint16_t master_port = 31850;
 
     std::string daemon_ip;
     uint16_t daemon_port;
 
     uint32_t rack_id;
 
-    bool with_cxl = true;         // 是否注册为CXL客户端
-    std::string cxl_devdax_path;  // CXL设备路径
-    size_t cxl_memory_size;       // CXL设备大小
+    // Whether to register as a CXL client (currently only `true` is supported)
+    bool with_cxl = true;
+    std::string cxl_devdax_path;
+    size_t cxl_memory_size;
 
-    size_t max_client_limit = 32;        // 最大client数量限制
-    size_t swap_zone_size = 64ul << 20;  // 交换区大小
+    // Maximum number of clients limit (limited by msgq communication area of shared memory)
+    size_t max_client_limit = 32;
+    size_t swap_zone_size = 64ul << 20;
 
-    int prealloc_fiber_num = 32;     // 预分配协程个数
-    float hot_decay_lambda = 0.04;  // 热度衰减系数
-    size_t hot_swap_watermark = 3;  // 热度阈值
+    int prealloc_fiber_num = 32;    // Number of pre-allocated boost coroutine
+    float hot_decay_lambda = 0.04;  // Page Heat decay coefficient
+    size_t hot_swap_watermark = 3;  // Page Swap heat threshold
 
-    int cm_qp_num = 2;              // 连接其他daemon的qp数量
+    int cm_qp_num = 2;  // Number of QPs connected to other daemons
 };
 
 class MasterOptions {
    public:
-    std::string master_ip;         // MN的IP
-    uint16_t master_port = 31850;  // MN的端口
+    std::string master_ip;
+    uint16_t master_port = 31850;
 
-    size_t max_cluster_mac_num = 1000;  // 集群中最多连接个数
-    int prealloc_fiber_num = 16;         // 预分配协程个数
+    size_t max_cluster_mac_num = 1000;  // Maximum number of connected nodes in the cluster
+    int prealloc_fiber_num = 16;        // Number of pre-allocated boost coroutine
 };
 
-}  // namespace rchms
+}  // namespace rcmp

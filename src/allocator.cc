@@ -59,7 +59,7 @@ IDGenerator::id_t IDGenerator::MultiGen(size_t count) {
             c = 0;
         }
 
-        // 防止回环
+        // Preventing Loopback
         if (m_gen_cur == 0) {
             c = 0;
         }

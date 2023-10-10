@@ -2,7 +2,7 @@
 
 user=$1
 passwd=$2
-CMD_DIR="/home/$user/RCHMS/build"
+CMD_DIR="/home/$user/Rcmp/build"
 SUDO="echo $passwd | sudo -S"
 
 IP_MN="192.168.200.51"
@@ -24,17 +24,17 @@ kill_all() {
 
     for ((i=0; i<${#IP_DNs[@]}; i++))
     do
-        sshpass -p $passwd ssh $user@${IP_DNs[i]} "echo $passwd | sudo -S killall rchms_daemon" &
+        sshpass -p $passwd ssh $user@${IP_DNs[i]} "echo $passwd | sudo -S killall rcmp_daemon" &
         sleep 2
     done
 
-    sshpass -p $passwd ssh $user@$IP_MN "echo $passwd | sudo -S killall rchms_master" &
+    sshpass -p $passwd ssh $user@$IP_MN "echo $passwd | sudo -S killall rcmp_master" &
 
     sleep 2
 }
 
 test_run() {
-    MN_CMD="echo $passwd | sudo -S $CMD_DIR/rchms_master --master_ip=$IP_MN --master_port=$PORT_MN"
+    MN_CMD="echo $passwd | sudo -S $CMD_DIR/rcmp_master --master_ip=$IP_MN --master_port=$PORT_MN"
 
     echo "[exec] $MN_CMD"
     sshpass -p $passwd ssh $user@$IP_MN "echo $passwd | sudo -S $MN_CMD" &
@@ -45,7 +45,7 @@ test_run() {
     do
         port=$(($PORT_MN+1+$i))
 
-        DN_CMD="echo $passwd | sudo -S numactl -N 0 $CMD_DIR/rchms_daemon --master_ip=$IP_MN --master_port=$PORT_MN --daemon_ip=${IP_DNs[i]} --daemon_port=$port --rack_id=$i --cxl_devdax_path=/dev/shm/cxlsim$i --cxl_memory_size=$CXL_MEM_SZ --hot_decay=$HOT_DECAY --hot_swap_watermark=$WATERMARK"
+        DN_CMD="echo $passwd | sudo -S numactl -N 0 $CMD_DIR/rcmp_daemon --master_ip=$IP_MN --master_port=$PORT_MN --daemon_ip=${IP_DNs[i]} --daemon_port=$port --rack_id=$i --cxl_devdax_path=/dev/shm/cxlsim$i --cxl_memory_size=$CXL_MEM_SZ --hot_decay=$HOT_DECAY --hot_swap_watermark=$WATERMARK"
 
         echo "[exec] $DN_CMD"
         sshpass -p $passwd ssh $user@${IP_DNs[i]} "echo $passwd | sudo -S $DN_CMD" &
@@ -61,9 +61,8 @@ test_run() {
 
         NODES=${#IP_CNs[@]}
         NID=$i
-        ALLOC_PAGE_CNT=$(($ADDR_RANGE/2/1024/1024/$NODES))
 
-        CN_CMD="echo $passwd | sudo -S numactl -N 0 $CMD_DIR/test/rw --client_ip=${IP_CNs[i]} --client_port=$port --rack_id=$i --cxl_devdax_path=/dev/shm/cxlsim$i --cxl_memory_size=$CXL_MEM_SZ --iteration=$IT --payload_size=$payload --addr_range=$ADDR_RANGE --thread=$THREAD --thread_all=1 --no_node=$NODES --node_id=$NID --read_ratio=0 --redis_server_ip=192.168.201.52:6379"
+        CN_CMD="echo $passwd | sudo -S numactl -N 0 $CMD_DIR/test/rw --client_ip=${IP_CNs[i]} --client_port=$port --rack_id=$i --cxl_devdax_path=/dev/shm/cxlsim0 --cxl_memory_size=$CXL_MEM_SZ --iteration=$IT --payload_size=$payload --addr_range=$ADDR_RANGE --thread=$THREAD --thread_all=1 --no_node=$NODES --node_id=$NID --read_ratio=0 --redis_server_ip=192.168.201.52:6379"
 
         echo "[exec] $CN_CMD"
         sshpass -p $passwd ssh $user@${IP_CNs[i]} "echo $passwd | sudo -S $CN_CMD" &
@@ -88,7 +87,6 @@ port=$((14800+0))
 # reserve 2GB, data 8GB(include swap 100MB)
 CXL_MEM_SZ=$((10*1024*1024*1024))
 ADDR_RANGE=$(((8*1024-100)*1024*1024))
-ALLOC_PAGE_CNT=$(($ADDR_RANGE/2/1024/1024))
 HOT_DECAY=0.04
 WATERMARK=3
 THREAD=8

@@ -8,7 +8,6 @@
 #include "common.hpp"
 #include "concurrent_hashmap.hpp"
 #include "lock.hpp"
-#include "lockmap.hpp"
 #include "robin_hood.h"
 #include "stats.hpp"
 
@@ -49,7 +48,7 @@ struct PageVMMapMetadata {
     void UnPin() { pinned.clear(); }
 
     std::atomic_flag pinned{false};
-    offset_t cxl_memory_offset;  // 相对于format.page_data_start_addr
+    offset_t cxl_memory_offset;  // Relative to `format.page_data_start_addr`
     std::set<DaemonToClientConnection *> ref_client;
     std::set<DaemonToDaemonConnection *> ref_daemon;
 };
@@ -135,11 +134,11 @@ struct PageTableManager {
     size_t max_recent_record;
     float hot_decay_lambda;
 
-    size_t total_page_num;     // 所有page的个数
-    size_t max_swap_page_num;  // swap区的page个数
-    size_t max_data_page_num;  // 所有可用数据页个数
+    size_t total_page_num;     // Number of all pages
+    size_t max_swap_page_num;  // Number of pages in swap area
+    size_t max_data_page_num;  // Number of all available data pages
 
-    std::atomic<size_t> current_used_page_num;  // 当前使用的数据页个数
+    std::atomic<size_t> current_used_page_num;  // Number of data pages currently in use
 
     ConcurrentHashMap<page_id_t, PageMetadata *, CortSharedMutex> table;
     std::unique_ptr<SingleAllocator<page_size>> page_allocator;

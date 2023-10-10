@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace rchms {
+namespace rcmp {
 
 enum Status {
     ERROR = 0,
@@ -20,4 +20,4 @@ inline static std::string GetStatusString(Status s) {
     }
 }
 
-}  // namespace rchms
+}  // namespace rcmp

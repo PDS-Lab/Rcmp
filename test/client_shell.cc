@@ -4,7 +4,7 @@
 
 #include "cmdline.h"
 #include "log.hpp"
-#include "rchms.hpp"
+#include "rcmp.hpp"
 #include "utils.hpp"
 
 using namespace std;
@@ -19,7 +19,7 @@ int main(int argc, char *argv[]) {
     bool ret = cmd.parse(argc, argv);
     DLOG_ASSERT(ret);
 
-    rchms::ClientOptions options;
+    rcmp::ClientOptions options;
     options.client_ip = cmd.get<std::string>("client_ip");
     options.client_port = cmd.get<uint16_t>("client_port");
     options.cxl_devdax_path = cmd.get<std::string>("cxl_devdax_path");
@@ -27,23 +27,23 @@ int main(int argc, char *argv[]) {
     options.rack_id = cmd.get<uint32_t>("rack_id");
     options.with_cxl = true;
 
-    rchms::PoolContext *pool = rchms::Open(options);
+    rcmp::PoolContext *pool = rcmp::Open(options);
 
     while (1) {
         std::string cmdstr;
         cout << "> ";
         cin >> cmdstr;
         if (cmdstr == "a") {
-            rchms::GAddr gaddr = pool->AllocPage(1);
+            rcmp::GAddr gaddr = pool->AllocPage(1);
             cout << gaddr << endl;
         } else if (cmdstr == "r") {
-            rchms::GAddr gaddr;
+            rcmp::GAddr gaddr;
             cin >> gaddr;
             uint64_t n;
             pool->Read(gaddr, 8, &n);
             cout << n << endl;
         } else if (cmdstr == "w") {
-            rchms::GAddr gaddr;
+            rcmp::GAddr gaddr;
             uint64_t n;
             cin >> gaddr >> n;
             pool->Write(gaddr, 8, &n);

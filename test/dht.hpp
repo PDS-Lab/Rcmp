@@ -3,7 +3,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "rchms.hpp"
+#include "rcmp.hpp"
 
 using namespace std;
 
@@ -38,8 +38,8 @@ struct HashTableRep {
     };
 
     // <segment_table>
-    rchms::GAddr st;
-    rchms::PoolContext *pool;
+    rcmp::GAddr st;
+    rcmp::PoolContext *pool;
 
     void init() {
         bool f = false;
@@ -51,7 +51,7 @@ struct HashTableRep {
             for (size_t j = 0; j < seg_num_second_level; ++j) {
                 for (size_t k = 0; k < bkt_per_seg_num; ++k) {
                     pool->Write(
-                        st + (rchms::GAddr) &
+                        st + (rcmp::GAddr) &
                             (((segment_table *)0)->seg2[i].seg[j].buckets[k].valid),
                         sizeof(f), &f);
                 }
@@ -62,9 +62,9 @@ struct HashTableRep {
     }
 
     void put(int key, int val) {
-        auto fn = [&](size_t sh, rchms::GAddr &entry_addr, entry &res) {
+        auto fn = [&](size_t sh, rcmp::GAddr &entry_addr, entry &res) {
             segment seg;
-            pool->Read(st + (rchms::GAddr) & (((segment_table *)0)
+            pool->Read(st + (rcmp::GAddr) & (((segment_table *)0)
                                                   ->seg2[sh % seg_num]
                                                   .seg[sh % seg_num_second_level]),
                        sizeof(seg), &seg);
@@ -73,7 +73,7 @@ struct HashTableRep {
             do {
                 if (seg.buckets[i].valid && seg.buckets[i].key == key) {
                     res = seg.buckets[i];
-                    entry_addr = st + (rchms::GAddr) & (((segment_table *)0)
+                    entry_addr = st + (rcmp::GAddr) & (((segment_table *)0)
                                                             ->seg2[sh % seg_num]
                                                             .seg[sh % seg_num_second_level]
                                                             .buckets[i]);
@@ -81,7 +81,7 @@ struct HashTableRep {
                     return true;
                 } else if (!seg.buckets[i].valid) {
                     res = seg.buckets[i];
-                    entry_addr = st + (rchms::GAddr) & (((segment_table *)0)
+                    entry_addr = st + (rcmp::GAddr) & (((segment_table *)0)
                                                             ->seg2[sh % seg_num]
                                                             .seg[sh % seg_num_second_level]
                                                             .buckets[i]);
@@ -99,7 +99,7 @@ struct HashTableRep {
         size_t sh = key;
         size_t sh_end;
         unordered_set<size_t> find_shed;
-        rchms::GAddr entry_addr;
+        rcmp::GAddr entry_addr;
         entry res_buf;
         // 重hash RETRY_CNT次
         for (int retry_hash = RETRY_CNT; retry_hash != 0; --retry_hash) {
@@ -130,7 +130,7 @@ struct HashTableRep {
 
         auto fn = [&](size_t sh) {
             segment seg;
-            pool->Read(st + (rchms::GAddr) & (((segment_table *)0)
+            pool->Read(st + (rcmp::GAddr) & (((segment_table *)0)
                                                   ->seg2[sh % seg_num]
                                                   .seg[sh % seg_num_second_level]),
                        sizeof(seg), &seg);
@@ -152,7 +152,7 @@ struct HashTableRep {
         size_t sh = key;
         size_t sh_end;
         unordered_set<size_t> find_shed;
-        // 重hash RETRY_CNT次
+        // Rehash RETRY_CNT times
         for (int retry_hash = RETRY_CNT; retry_hash != 0; --retry_hash) {
             sh = rdd(0, sh);
             if (fn(sh) != 2) {
@@ -161,7 +161,7 @@ struct HashTableRep {
             find_shed.insert(sh);
         }
 
-        // 线性探测segment
+        // Linear detection segment
         sh_end = sh;
         for (sh = (sh + 1) % seg_num; sh != sh_end; sh = (sh + 1) % seg_num) {
             if (find_shed.find(sh) != find_shed.end()) {

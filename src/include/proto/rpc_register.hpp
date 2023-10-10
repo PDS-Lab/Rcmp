@@ -5,7 +5,7 @@
 #include "rpc_daemon.hpp"
 #include "rpc_master.hpp"
 
-/******************* 绑定RPC函数 **********************/
+/******************* Binding RPC Functions **********************/
 
 BIND_RPC_TYPE_STRUCT(rpc_master::joinDaemon);
 BIND_RPC_TYPE_STRUCT(rpc_master::joinClient);

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(rchms)
+project(rcmp)
 
 set(CMAKE_CXX_STANDARD 17)
 
@@ -29,11 +29,11 @@ add_subdirectory(src)
 #                         库
 # ##################################################
 
-add_library(rchms SHARED
-    src/rchms.cc
+add_library(rcmp SHARED
+    src/rcmp.cc
 )
 target_link_libraries(
-    rchms
+    rcmp
     base
 )
 
@@ -42,20 +42,20 @@ target_link_libraries(
 # ##################################################
 
 add_executable(
-    rchms_master
+    rcmp_master
     src/master.cc
 )
 target_link_libraries(
-    rchms_master
+    rcmp_master
     base
 )
 
 add_executable(
-    rchms_daemon
+    rcmp_daemon
     src/daemon.cc
 )
 target_link_libraries(
-    rchms_daemon
+    rcmp_daemon
     base
 )
 
@@ -65,7 +65,7 @@ add_executable(
 )
 target_link_libraries(
     rchfs
-    rchms
+    rcmp
     fuse
 )
 

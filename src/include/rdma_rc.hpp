@@ -95,18 +95,19 @@ struct RDMAConnection {
     ~RDMAConnection();
 
     /**
-     * @brief 监听RDMA网卡IP与端口0
+     * @brief Listening on RDMA card IP and port 0
      *
-     * 通过get_local_addr()获取监听ip与端口
-     *
+     * @param ip
      * @return int
      */
     int listen(const std::string &ip);
     /**
-     * @brief 连接RDMA网卡IP和对方端口
+     * @brief Connecting the RDMA card IP and the other port
      *
      * @param ip
      * @param port
+     * @param param
+     * @param param_size
      * @return int
      */
     int connect(const std::string &ip, uint16_t port, const void *param, uint8_t param_size);
@@ -118,7 +119,7 @@ struct RDMAConnection {
     ibv_mr *register_memory(size_t size);
     void deregister_memory(ibv_mr *mr, bool freed = true);
 
-    // prep 操作对于同一个 batch 均为 thread-unsafety
+    // prep operations are thread-unsafety for the same `sge_vec`.
 
     int prep_write(std::vector<SgeWr> &sge_vec, uint64_t local_addr, uint32_t lkey, uint32_t length,
                    uint64_t remote_addr, uint32_t rkey, bool inline_data);
@@ -139,14 +140,14 @@ struct RDMAConnection {
                  uint32_t rkey, uint64_t expected, uint64_t desired);
 
     /**
-     * 提交prep队列
+     * @brief submit prep sge_vec
      */
     RDMAFuture submit(std::vector<SgeWr> &sge_vec);
 
     /**
-     * @brief
+     * @brief submit prep sgewr
      *
-     * @warning sgewr数组必须在future get前保留
+     * @warning The sge wr array must be reserved before future get
      *
      * @param begin
      * @param n

@@ -10,7 +10,8 @@ struct RpcCallerWrapperHelper {
     using SelfContext = typename std::remove_reference<typename FT::template args_type<0>>::type;
     using PeerContext = typename std::remove_reference<typename FT::template args_type<1>>::type;
     using RequestType = typename std::remove_reference<typename FT::template args_type<2>>::type;
-    using ResponseHandleType = typename std::remove_reference<typename FT::template args_type<3>>::type;
+    using ResponseHandleType =
+        typename std::remove_reference<typename FT::template args_type<3>>::type;
 
     using ResponseType = typename container_traits<ResponseHandleType>::type;
 };
@@ -41,9 +42,9 @@ template <typename RpcFunc>
 RpcFunc MsgqRpcFuncWrapper<RpcFunc>::func;
 
 /**
- * @brief 使用BIND_RPC_TYPE_STRUCT()宏绑定RPC
+ * @brief Binding RPCs with the BIND_RPC_TYPE_STRUCT() macro
  *
- * @warning 调用时必须位于同一文件内的不同行
+ * @warning The call must be on a different line in the same file.
  */
 #define BIND_RPC_TYPE_STRUCT(rpc_func)                                \
     template <>                                                       \
@@ -54,8 +55,7 @@ RpcFunc MsgqRpcFuncWrapper<RpcFunc>::func;
     };
 
 /**
- * @brief 获取rpc绑定的的结构体
- *
+ * @brief Get the structure to which the rpc is bound.
  */
 #define RPC_TYPE_STRUCT(rpc_func) ::detail::RpcCallerWrapper<decltype(rpc_func)>
 

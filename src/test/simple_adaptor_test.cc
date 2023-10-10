@@ -150,7 +150,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (cmd.get<bool>("is_master")) {
-        rchms::MasterOptions options;
+        rcmp::MasterOptions options;
         options.master_ip = cmd.get<std::string>("master_ip");
         options.master_port = 31850;
 
@@ -169,7 +169,7 @@ int main(int argc, char* argv[]) {
     }
 
     else {
-        rchms::DaemonOptions options;
+        rcmp::DaemonOptions options;
         options.master_ip = cmd.get<std::string>("master_ip");
         options.master_port = 31850;
         options.daemon_ip = cmd.get<std::string>("daemon_ip");

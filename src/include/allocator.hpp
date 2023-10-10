@@ -75,10 +75,6 @@ class IDGenerator {
     Mutex m_lck;
 };
 
-/**
- * @brief 利用bitset实现的allocator
- *
- */
 template <size_t UNIT_SZ>
 class SingleAllocator : private IDGenerator {
    public:
@@ -108,7 +104,6 @@ class RingArena {
     const void* base() const { return m_bs; }
 
     void* allocate(size_t s) {
-        // thread local
         thread_local uint8_t b_cur = (reinterpret_cast<uintptr_t>(&b_cur) >> 5) % BucketNum;
         b_cur = (b_cur + 1) % BucketNum;
         uint8_t bc = b_cur;

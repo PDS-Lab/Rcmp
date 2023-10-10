@@ -32,12 +32,13 @@ struct JoinDaemonReply {
     RackInfo other_rack_infos[0];
 };
 /**
- * @brief 将daemon加入到集群中。在建立连接时调用。
+ * @brief Adds the daemon to the cluster. Called when a connection is established.
  *
  * @param master_context
- * @param daemon_connection 需要解引用于从heap申请的对象，此后将由MasterContext维护其生命周期。
+ * @param daemon_connection It needs to be dereferenced to the object requested from the heap, after
+ * which its lifecycle will be maintained by the MasterContext.
  * @param req
- * @return JoinDaemonReply
+ * @param resp_handle
  */
 void joinDaemon(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
                 JoinDaemonRequest& req, ResponseHandle<JoinDaemonReply>& resp_handle);
@@ -50,12 +51,13 @@ struct JoinClientReply {
     mac_id_t mac_id;
 };
 /**
- * @brief 将client加入到集群中。在建立连接时调用。
+ * @brief Adds the client to the cluster. Called when a connection is established.
  *
  * @param master_context
- * @param client_connection 需要解引用于从heap申请的对象，此后将由MasterContext维护其生命周期。
+ * @param client_connection It needs to be dereferenced to the object requested from the heap, after
+ * which its lifecycle will be maintained by the MasterContext.
  * @param req
- * @return JoinClientReply
+ * @param resp_handle
  */
 void joinClient(MasterContext& master_context, MasterToClientConnection& client_connection,
                 JoinClientRequest& req, ResponseHandle<JoinClientReply>& resp_handle);
@@ -65,18 +67,19 @@ struct AllocPageRequest {
     size_t count;
 };
 struct AllocPageReply {
-    page_id_t start_page_id;  // 分配的起始页id
-    size_t start_count;       // 实际在请求方rack分配的个数
+    page_id_t start_page_id;  // Allocated start page id
+    size_t start_count;       // Number actually allocated in the requesting rack
 };
 /**
  * @brief
- * 申请一个page。该操作会希望在daemon端调用`allocPageMemory()`进行分配CXL物理地址。
- * 如果该daemon已满，本操作会随机向其他daemon发送该函数进行分配。
+ * Allocate a page. this operation will expect a call to `allocPageMemory()` on the daemon side to
+ * allocate the CXL physical address. If the daemon is full, this operation will randomly send this
+ * function to other daemons for allocation.
  *
  * @param master_context
  * @param daemon_connection
  * @param req
- * @return AllocPageReply
+ * @param resp_handle
  */
 void allocPage(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
                AllocPageRequest& req, ResponseHandle<AllocPageReply>& resp_handle);
@@ -89,11 +92,12 @@ struct FreePageReply {
     bool ret;
 };
 /**
- * @brief 释放page。
+ * @brief Free a page
  *
  * @param master_context
  * @param daemon_connection
  * @param req
+ * @param resp_handle
  */
 void freePage(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
               FreePageRequest& req, ResponseHandle<FreePageReply>& resp_handle);
@@ -107,12 +111,13 @@ struct GetRackDaemonByPageIDReply {
     rack_id_t rack_id;
 };
 /**
- * @brief 根据page id获取对应rack的daemon的IPv4地址。该调用应在daemon的`远程直接访问`情况下使用。
+ * @brief Get the IPv4 address of the daemon corresponding to rack based on the page id. This call
+ * should be used in the remote direct io case of the daemon.
  *
  * @param master_context
  * @param client_connection
  * @param req
- * @return GetRackDaemonByPageIDReply
+ * @param resp_handle
  */
 void getRackDaemonByPageID(MasterContext& master_context,
                            MasterToDaemonConnection& daemon_connection,
@@ -130,12 +135,12 @@ struct LatchRemotePageReply {
     mac_id_t dest_daemon_id;
 };
 /**
- * @brief 获取并锁定远端page不被swap
+ * @brief Get and latch the remote page from being swapped.
  *
  * @param master_context
  * @param daemon_connection
  * @param req
- * @return LatchRemotePageReply 返回目标daemon的rdma ip与port，以供建立连接
+ * @param resp_handle
  */
 void latchRemotePage(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
                      LatchRemotePageRequest& req,
@@ -149,12 +154,12 @@ struct UnLatchRemotePageReply {
     bool ret;
 };
 /**
- * @brief 解锁远端page
+ * @brief Unlatch remote page
  *
  * @param master_context
  * @param daemon_connection
  * @param req
- * @return UnLatchRemotePageReply 返回目标daemon的rdma ip与port，以供建立连接
+ * @param resp_handle
  */
 void unLatchRemotePage(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
                        UnLatchRemotePageRequest& req,
@@ -162,23 +167,23 @@ void unLatchRemotePage(MasterContext& master_context, MasterToDaemonConnection& 
 
 struct UnLatchPageAndSwapRequest {
     mac_id_t mac_id;
-    page_id_t page_id;
-    mac_id_t new_daemon_id;
-    rack_id_t new_rack_id;
-    page_id_t page_id_swap;  // invalid 不换出
-    mac_id_t new_daemon_id_swap;
-    rack_id_t new_rack_id_swap;
+    page_id_t page_id;            // Swapin page (originally at the far end)
+    mac_id_t new_daemon_id;       // Your own daemon id
+    rack_id_t new_rack_id;        // Your own rack id
+    page_id_t page_id_swap;       // Swapped out page (originally local), if invalid, no swap
+    mac_id_t new_daemon_id_swap;  // The peer's daemon id
+    rack_id_t new_rack_id_swap;   // The peer's rack id
 };
 struct UnLatchPageAndSwapReply {
     bool ret;
 };
 /**
- * @brief 解锁远端page，并将该page转移至该daemon手中
+ * @brief Unlatch the remote page and transfer the page to this daemon
  *
  * @param master_context
  * @param daemon_connection
  * @param req
- * @return UnLatchPageAndSwapReply 返回目标daemon的rdma ip与port，以供建立连接
+ * @param resp_handle
  */
 void unLatchPageAndSwap(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
                         UnLatchPageAndSwapRequest& req,

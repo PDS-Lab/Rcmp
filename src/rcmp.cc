@@ -1,4 +1,4 @@
-#include "rchms.hpp"
+#include "rcmp.hpp"
 
 #include "impl.hpp"
 #include "lock.hpp"
@@ -6,7 +6,7 @@
 
 using namespace std::chrono_literals;
 
-namespace rchms {
+namespace rcmp {
 
 PoolContext::PoolContext(ClientOptions options) {
     m_impl = new PoolContextImpl();
@@ -221,7 +221,6 @@ Status PoolContext::FreePage(GAddr gaddr, size_t count) { DLOG_FATAL("Not Suppor
 //     auto p_lock =
 //         m_impl->m_ptl_cache_lock.find_or_emplace(page_id, []() { return new SharedMutex(); });
 //     cache_lock = p_lock.first->second;
-//     // 上读锁
 //     // DLOG("CN %u: write page %lu lock", m_impl->m_client_id, page_id);
 //     cache_lock->lock_shared();
 
@@ -238,13 +237,13 @@ Status PoolContext::FreePage(GAddr gaddr, size_t count) { DLOG_FATAL("Not Suppor
 //                 m_impl->batch_flush_worker.join();
 //             }
 
-//             std::vector<std::tuple<rchms::GAddr, size_t, offset_t>> batch_list;
+//             std::vector<std::tuple<rcmp::GAddr, size_t, offset_t>> batch_list;
 //             batch_list.swap(m_impl->m_batch_list);
 
 //             m_impl->batch_flush_worker = std::thread(
 //                 [&, batch_list = std::move(batch_list), m_batch_buffer =
 //                 m_impl->m_batch_buffer]() {
-//                     std::unordered_map<rchms::GAddr, std::pair<size_t, offset_t>> umap;
+//                     std::unordered_map<rcmp::GAddr, std::pair<size_t, offset_t>> umap;
 //                     for (auto &tu : batch_list) {
 //                         umap[std::get<0>(tu)] = std::make_pair(std::get<1>(tu), std::get<2>(tu));
 //                     }
@@ -265,11 +264,9 @@ Status PoolContext::FreePage(GAddr gaddr, size_t count) { DLOG_FATAL("Not Suppor
 //                    reinterpret_cast<uintptr_t>(m_impl->m_cxl_format.page_data_start_addr) +
 //                    pageCache->offset + in_page_offset),
 //                buf, size);
-//         // 更新page访问请况统计
 //         pageCache->stats.add(getTimestamp());
 //     }
 
-//     // 解锁
 //     cache_lock->unlock_shared();
 //     // DLOG("CN %u: write page %lu unlock", m_impl->m_client_id, page_id);
 //     return Status::OK;
@@ -277,7 +274,7 @@ Status PoolContext::FreePage(GAddr gaddr, size_t count) { DLOG_FATAL("Not Suppor
 
 const ClientOptions &PoolContext::GetOptions() const { return m_impl->m_options; }
 
-}  // namespace rchms
+}  // namespace rcmp
 
 void ClientContext::InitCXLPool() {
     m_cxl_memory_addr =
@@ -307,7 +304,7 @@ void ClientContext::ConnectWithDaemon() {
     m_local_rack_daemon_connection.msgq_conn = std::make_unique<MsgQClient>(
         msgq::MsgQueueRPC{m_msgq_nexus.get(), m_msgq_nexus->GetPublicMsgQ(), nullptr, this});
 
-    // 3. 发送join rack rpc
+    /* 3. 发送 join rack rpc */
     auto fu = m_local_rack_daemon_connection.msgq_conn->call<SpinPromise>(
         rpc_daemon::joinRack, {
                                   .client_ipv4 = m_options.client_ip,
@@ -315,7 +312,7 @@ void ClientContext::ConnectWithDaemon() {
                                   .rack_id = m_options.rack_id,
                               });
 
-    // 4. daemon会发送udp消息，告诉recv queue的偏移地址
+    /* 4. The daemon sends an udp message telling the offset address of the recv queue */
     msgq::MsgUDPConnPacket msg;
     m_udp_conn_recver->recv_blocking(msg);
 
@@ -327,7 +324,7 @@ void ClientContext::ConnectWithDaemon() {
 
     InitMsgQPooller();
 
-    // 5. 正式接收rpc消息
+    /* 5. Formal reception of rpc messages */
     auto &resp = fu.get();
 
     m_client_id = resp.client_mac_id;
@@ -339,7 +336,7 @@ void ClientContext::ConnectWithDaemon() {
 }
 
 void ClientContext::InitMsgQPooller() {
-    // 启动polling worker
+    // Launch of poll workers
     m_msgq_stop = false;
     m_msgq_worker = std::thread([this]() {
         boost::fibers::use_scheduling_algorithm<priority_scheduler>();
@@ -356,7 +353,7 @@ void ClientContext::InitMsgQPooller() {
 
 /*********************** for test **************************/
 
-namespace rchms {
+namespace rcmp {
 void PoolContext::__DumpStats() {
     auto &stats = m_impl->m_stats;
     auto &msgq_stats = m_impl->m_msgq_nexus->m_stats;
@@ -390,7 +387,6 @@ Status PoolContext::__TestDataSend1(int *array, size_t size) {
 
     auto &resp = fu.get();
 
-    // check
     assert(resp.size == size);
     for (size_t i = 0; i < resp.size; i++) {
         assert(resp.data[i] == array[i]);
@@ -410,7 +406,6 @@ Status PoolContext::__TestDataSend2(int *array, size_t size) {
 
     auto &resp = fu.get();
 
-    // check
     assert(resp.size == size);
     for (size_t i = 0; i < resp.size; i++) {
         assert(resp.data[i] == array[i]);
@@ -441,4 +436,4 @@ Status PoolContext::__StopPerf() {
     return Status::OK;
 }
 
-}  // namespace rchms
+}  // namespace rcmp

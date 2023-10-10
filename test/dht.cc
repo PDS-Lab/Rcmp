@@ -5,7 +5,7 @@
 
 #include "cmdline.h"
 #include "log.hpp"
-#include "rchms.hpp"
+#include "rcmp.hpp"
 #include "stats.hpp"
 #include "utils.hpp"
 
@@ -38,7 +38,7 @@ int main(int argc, char *argv[]) {
     bool ret = cmd.parse(argc, argv);
     DLOG_ASSERT(ret);
 
-    rchms::ClientOptions options;
+    rcmp::ClientOptions options;
     options.client_ip = cmd.get<std::string>("client_ip");
     options.client_port = cmd.get<uint16_t>("client_port");
     options.cxl_devdax_path = cmd.get<std::string>("cxl_devdax_path");
@@ -46,7 +46,7 @@ int main(int argc, char *argv[]) {
     options.rack_id = cmd.get<uint32_t>("rack_id");
     options.with_cxl = true;
 
-    rchms::PoolContext *pool = rchms::Open(options);
+    rcmp::PoolContext *pool = rcmp::Open(options);
 
     HashTableRep h;
     h.pool = pool;

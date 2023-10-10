@@ -78,7 +78,7 @@ class zipf_distribution {
     }
 
     /**
-     * @brief 返回zipf分布随机数[0, max)
+     * @brief Returns zipf distributed random number [0, max)
      *
      * @tparam Generator
      * @param g

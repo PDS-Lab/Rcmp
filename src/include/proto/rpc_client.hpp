@@ -13,13 +13,6 @@ struct RemovePageCacheRequest {
 struct RemovePageCacheReply {
     bool ret;
 };
-/**
- * @brief 清理page cache
- *
- * @param client_context
- * @param daemon_connection
- * @param page_id
- */
 void removePageCache(ClientContext& client_context, ClientToDaemonConnection& daemon_connection,
                      RemovePageCacheRequest& req,
                      ResponseHandle<RemovePageCacheReply>& resp_handle);

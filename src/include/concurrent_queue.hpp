@@ -13,12 +13,6 @@ template <typename T, size_t SZ, ConcurrentQueueProducerMode PROD_MODE,
           ConcurrentQueueConsumerMode CONS_MODE>
 class ConcurrentQueue;
 
-/**
- * @brief 单生产者单消费者队列
- *
- * @tparam T
- * @tparam SZ
- */
 template <typename T, size_t SZ>
 class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::SP, ConcurrentQueueConsumerMode::SC> {
    public:
@@ -31,7 +25,7 @@ class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::SP, ConcurrentQueueCon
         uint32_t tail = m_tail.load(std::memory_order_relaxed);
         uint32_t next_tail = (tail + 1) % SZ;
         if (UNLIKELY(next_tail == m_head.load(std::memory_order_acquire))) {
-            return false;  // 队列已满
+            return false;  // full
         }
         m_data[tail] = std::move(n);
         m_tail.store(next_tail, std::memory_order_release);
@@ -41,7 +35,7 @@ class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::SP, ConcurrentQueueCon
     bool TryDequeue(T *n) {
         uint32_t head = m_head.load(std::memory_order_relaxed);
         if (UNLIKELY(head == m_tail.load(std::memory_order_acquire))) {
-            return false;  // 队列已空
+            return false;  // empty
         }
         *n = std::move(m_data[head]);
         m_head.store((head + 1) % SZ, std::memory_order_release);
@@ -143,19 +137,13 @@ class ConcurrentMPSCQueue {
     std::atomic<uint32_t> m_cons_tail;
 };
 
-/**
- * @brief 多生产者单消费者队列
- *
- * @tparam T
- * @tparam SZ
- */
 template <typename T, size_t SZ>
 class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::MP, ConcurrentQueueConsumerMode::SC> {
    public:
     size_t capacity() const { return SZ; }
 
     void ForceEnqueue(T n) {
-        // 线程随机到一个子queue中
+        // Threads are randomised into a sub-queue
         static thread_local int r =
             ((uintptr_t)&r ^ ((uintptr_t)&r >> 5) ^ 0x783f8ac35) % shard_num;
         auto &shard = m_queue_shards[r];
@@ -201,12 +189,6 @@ class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::MP, ConcurrentQueueCon
     ConcurrentMPSCQueue<T, SZ / shard_num> m_queue_shards[shard_num];
 };
 
-/**
- * @brief 多生产者多消费者队列
- *
- * @tparam T
- * @tparam SZ
- */
 template <typename T, size_t SZ>
 class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::MP, ConcurrentQueueConsumerMode::MC> {
    public:

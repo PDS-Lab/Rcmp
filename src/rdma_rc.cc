@@ -303,7 +303,7 @@ int RDMAConnection::connect(const std::string &ip, uint16_t port, const void *pa
     conn_param.private_data = param;
     conn_param.private_data_len = param_size;
 
-    // TODO: 两个daemon互联容易出现异常无法连接
+    // TODO: Two daemon interconnections are prone to anomalies and fail to connect.
 
     if (rdma_connect(cm_id, &conn_param)) {
         DLOG_ERROR("rdma_connect fail");
@@ -596,14 +596,14 @@ RDMAFuture RDMAConnection::m_submit_impl(SgeWr *sge_wrs, size_t n) {
     std::swap(sge_wr_list, m_sw_head_);
     std::swap(sge_wr_list_tail, m_sw_tail_);
 
-    // 选择一个qp传输，需要线程安全
+    // Select a qp transfer that needs to be thread-safe
     auto cm_id = m_cm_ids_.front();
     m_cm_ids_.pop_front();
     m_cm_ids_.push_back(cm_id);
 
     lck.unlock();
 
-    // 现在是线程安全的处理send wr
+    // It's now thread-safe to handle send wr
 
     boost::this_fiber::properties<priority_props>().set_low_priority();
 
@@ -614,7 +614,7 @@ RDMAFuture RDMAConnection::m_submit_impl(SgeWr *sge_wrs, size_t n) {
     sge_wr_list_tail->wr.next = nullptr;
     sge_wr_list_tail->wr.send_flags |= IBV_SEND_SIGNALED;
 
-    // 探察当前正在发送的wr个数
+    // Detecting the number of wr's currently being sent
     uint32_t inflight = m_inflight_count_.load(std::memory_order_acquire);
     do {
         if (UNLIKELY((int)(inflight + fu.m_sd_->inflight) > MAX_SEND_WR)) {
@@ -682,14 +682,13 @@ int RDMAFuture::try_get() {
         return -1;
     }
 
-    // 轮询resp
     if (m_sd_->wc_finish) {
         boost::this_fiber::properties<priority_props>().set_low_priority();
         return 0;
     }
 
+    // timeout detection
     if (RDMAConnection::RDMA_TIMEOUT_ENABLE) {
-        // 超时检测
         uint32_t now = getMsTimestamp();
         if (UNLIKELY(now - m_sd_->now_ms > RDMAConnection::RDMA_TIMEOUT_MS)) {
             m_sd_->timeout = true;

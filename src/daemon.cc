@@ -24,14 +24,14 @@
 using namespace std::chrono_literals;
 
 void DaemonContext::InitCXLPool() {
-    // 1. 打开cxl设备映射
+    /* 1. Open CXL device mapping */
     m_cxl_memory_addr =
         cxl_open_simulate(m_options.cxl_devdax_path, m_options.cxl_memory_size, &m_cxl_devdax_fd);
 
     cxl_memory_init(m_cxl_format, m_cxl_memory_addr, m_options.cxl_memory_size,
                     (m_options.max_client_limit + 1) * MsgQueueManager::RING_ELEM_SIZE);
 
-    // 2. 确认page个数
+    /* 2. Confirm the number of pages */
     m_page_table.total_page_num = m_cxl_format.super_block->page_data_zone_size / page_size;
     m_page_table.max_swap_page_num = m_options.swap_zone_size / page_size;
 
@@ -53,7 +53,7 @@ void DaemonContext::InitCXLPool() {
 }
 
 void DaemonContext::InitRPCNexus() {
-    // 1. init erpc
+    /* 1. init erpc */
     std::string server_uri = erpc::concat_server_uri(m_options.daemon_ip, m_options.daemon_port);
     m_erpc_ctx.nexus = std::make_unique<erpc::NexusWrap>(server_uri);
 
@@ -75,7 +75,7 @@ void DaemonContext::InitRPCNexus() {
     m_erpc_ctx.rpc_set.push_back(std::move(rpc));
     DLOG_ASSERT(m_erpc_ctx.rpc_set.size() == 1);
 
-    // 2. init msgq
+    /* 2. init msgq */
     m_msgq_manager.nexus = std::make_unique<msgq::MsgQueueNexus>(m_cxl_format.msgq_zone_start_addr);
     m_msgq_manager.start_addr = m_cxl_format.msgq_zone_start_addr;
     m_msgq_manager.msgq_allocator =
@@ -88,7 +88,7 @@ void DaemonContext::InitRPCNexus() {
     m_msgq_manager.rpc = std::make_unique<msgq::MsgQueueRPC>(
         m_msgq_manager.nexus.get(), nullptr, m_msgq_manager.nexus->GetPublicMsgQ(), this);
 
-    // 3. bind rpc function
+    /* 3. bind rpc function */
     m_msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::joinRack)::rpc_type,
                                             bind_msgq_rpc_func<true>(rpc_daemon::joinRack));
     m_msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::alloc)::rpc_type,
@@ -194,7 +194,7 @@ void DaemonContext::ConnectWithMaster() {
     for (size_t i = 0; i < resp.other_rack_count; ++i) {
         auto &rack_info = resp.other_rack_infos[i];
 
-        // 与该daemon建立erpc与RDMA RC
+        // Establish erpc and RDMA RC with this daemon
         DaemonToDaemonConnection *dd_conn = new DaemonToDaemonConnection();
         dd_conn->erpc_conn = std::make_unique<ErpcClient>(rpc, rack_info.daemon_ipv4.get_string(),
                                                           rack_info.daemon_erpc_port);
@@ -284,7 +284,7 @@ int main(int argc, char *argv[]) {
     bool ret = cmd.parse(argc, argv);
     DLOG_ASSERT(ret);
 
-    rchms::DaemonOptions options;
+    rcmp::DaemonOptions options;
     options.master_ip = cmd.get<std::string>("master_ip");
     options.master_port = cmd.get<uint16_t>("master_port");
     options.daemon_ip = cmd.get<std::string>("daemon_ip");

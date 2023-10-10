@@ -95,16 +95,17 @@ void allocPage(MasterContext& master_context, MasterToDaemonConnection& daemon_c
         req.count, rack_table->GetMaxFreePageNum() - rack_table->GetCurrentAllocatedPageNum());
     size_t other_rack_alloc_page_num = req.count - current_rack_alloc_page_num;
 
-    // 已分配page的序号
+    // ID of the allocated page
     size_t alloced_page_idx = 0;
-    // 采取就近原则分配page到daemon所在rack
+    // Adopt the proximity principle to allocate pages to the rack where the daemon is located.
     while (alloced_page_idx < current_rack_alloc_page_num) {
         master_context.m_page_directory.AddPage(rack_table, new_page_id + alloced_page_idx);
         alloced_page_idx++;
     }
 
     if (other_rack_alloc_page_num > 0) {
-        // 如果current daemon没有多余page，则向其他rack daemon注册allocPageMemory
+        // If the current daemon does not have a spare page, register allocPageMemory with the other
+        // rack daemon.
 
         struct CTX {
             decltype(((ErpcClient*)0)->call<CortPromise>(rpc_daemon::allocPageMemory, {})) fu;
@@ -113,10 +114,9 @@ void allocPage(MasterContext& master_context, MasterToDaemonConnection& daemon_c
             size_t alloc_cnt;
         };
 
-        // 暂存消息上下文
         std::vector<CTX> ctx_vec;
 
-        // 遍历rack表，找出有空闲page的rack分配
+        // Iterate through the rack table to find the rack allocation with free pages
         master_context.m_cluster_manager.cluster_rack_table.foreach_all(
             [&](std::pair<const rack_id_t, RackMacTable*>& p) {
                 RackMacTable* rack_table = p.second;
@@ -144,9 +144,8 @@ void allocPage(MasterContext& master_context, MasterToDaemonConnection& daemon_c
 
                 alloced_page_idx += rack_alloc_page_num;
 
-                // 减去在该rack分配的page数
                 other_rack_alloc_page_num -= rack_alloc_page_num;
-                // 如果到0，则可以停止遍历
+                // If it reaches 0, stop traversing
                 return other_rack_alloc_page_num != 0;
             });
 
@@ -172,8 +171,9 @@ void freePage(MasterContext& master_context, MasterToDaemonConnection& daemon_co
     RackMacTable* rack_table;
     PageRackMetadata* page_meta = master_context.m_page_directory.FindPage(req.start_page_id);
 
-    // TODO: 支持free任意rack上的page
-    // 需要删除指定rack上的page meta、cache等元数据
+    // TODO: Support for free page on any rack
+
+    // Need to delete page meta, cache, and other metadata on a given rack
     DLOG_FATAL("Not Support");
 
     rack_table = master_context.m_cluster_manager.cluster_rack_table[page_meta->rack_id];
@@ -205,7 +205,7 @@ void latchRemotePage(MasterContext& master_context, MasterToDaemonConnection& da
 
             DLOG_ASSERT(page_swap_meta != nullptr, "Can't find page %lu", req.page_id_swap);
 
-            // id小的优先上锁，避免死锁
+            // Smaller ids are preferred for locking to avoid deadlocks.
             if (req.page_id < req.page_id_swap) {
                 page_meta->latch.lock();
                 page_swap_meta->latch.lock();
@@ -223,7 +223,7 @@ void latchRemotePage(MasterContext& master_context, MasterToDaemonConnection& da
 
             DLOG_ASSERT(page_swap_meta != nullptr, "Can't find page %lu", req.page_id_swap);
 
-            // id小的优先上锁，避免死锁
+            // Smaller ids are preferred for locking to avoid deadlocks.
             if (req.page_id < req.page_id_swap) {
                 page_meta->latch.lock_shared();
                 page_swap_meta->latch.lock_shared();

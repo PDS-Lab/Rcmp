@@ -22,8 +22,9 @@ class ConcurrentHashMap {
    public:
     /**
      * @brief
-     * @warning
-     * 重哈希会导致迭代器失效，但无法感知该变化。在大量insert时应该及时更新iterator，或者使用at。
+     * @warning Rehashing causes the iterator to fail, but the change cannot be sensed. The iterator
+     * should be updated in a timely manner during a large number of `insert()`, or `at()` should be
+     * used.
      */
     class iterator {
        public:
@@ -59,13 +60,6 @@ class ConcurrentHashMap {
         return count;
     }
 
-    /**
-     * @brief 与std::unordered_map::insert相同
-     *
-     * @param key
-     * @param val
-     * @return std::pair<iterator, bool>
-     */
     std::pair<iterator, bool> insert(K key, V val) {
         int index = hash(key);
         auto& shard = m_shards[index];
@@ -76,13 +70,6 @@ class ConcurrentHashMap {
         return {{index, p.first}, p.second};
     }
 
-    /**
-     * @brief 与std::unordered_map::find相同
-     *
-     * @param key
-     * @param val
-     * @return std::pair<iterator, bool>
-     */
     iterator find(K key) {
         int index = hash(key);
         auto& shard = m_shards[index];
@@ -96,13 +83,6 @@ class ConcurrentHashMap {
         return end();
     }
 
-    /**
-     * @brief 与std::unordered_map::at相同。
-     * @warning 未找到时抛出错误
-     *
-     * @param key
-     * @return V&
-     */
     V& at(K key) {
         int index = hash(key);
         auto& shard = m_shards[index];
@@ -115,12 +95,12 @@ class ConcurrentHashMap {
     V& operator[](K key) { return at(key); }
 
     /**
-     * @brief 查找一个元素。如果不存在，则调用cotr_fn()插入新元素
+     * @brief Finds an element. If it does not exist, call `cotr_fn()` to insert a new element
      *
      * @tparam ConFn
      * @param key
-     * @param cotr_fn 返回新元素
-     * @return std::pair<iterator, bool> 如果插入成功，返回true；查找成功返回false
+     * @param cotr_fn
+     * @return std::pair<iterator, bool>
      */
     template <typename ConFn>
     std::pair<iterator, bool> find_or_emplace(K key, ConFn&& ctor_fn) {
@@ -159,10 +139,8 @@ class ConcurrentHashMap {
     }
 
     /**
-     * @brief 遍历表
-     *
      * @tparam F
-     * @param f bool(std::pair<const K, V> &)，返回false代表终止遍历
+     * @param f bool(std::pair<const K, V> &)，Returning false means the traversal is terminated.
      */
     template <typename F>
     void foreach_all(F&& f) {
@@ -180,10 +158,8 @@ class ConcurrentHashMap {
     }
 
     /**
-     * @brief 伪随机遍历表
-     *
      * @tparam F
-     * @param f bool(std::pair<const K, V> &)，返回false代表终止遍历
+     * @param f bool(std::pair<const K, V> &)，Returning false means the traversal is terminated.
      */
     template <typename Genrator, typename F>
     void random_foreach_all(Genrator g, F&& f) {

@@ -149,7 +149,6 @@ void msgq_call_target(msgq::MsgBuffer &req_raw, void *ctx) {
     uint64_t perf_stat_timer;
     self_ctx->m_stats.start_sample(perf_stat_timer);
 
-    // mutable防止引用析构
     self_ctx->GetFiberPool().EnqueueTask(
         [self_ctx, req_raw, perf_stat_timer = perf_stat_timer]() mutable {
             auto req = reinterpret_cast<typename EFW::RequestType *>(req_raw.get_buf());
@@ -180,7 +179,7 @@ void msgq_call_target(msgq::MsgBuffer &req_raw, void *ctx) {
                 rpc->enqueue_response(req_raw, resp_handle.GetBuffer());
             }
 
-            // 发送端的buffer将由接收端释放
+            // The buffer on the sending side will be released by the receiving side
             rpc->free_msg_buffer(req_raw);
 
             self_ctx->m_stats.rpc_exec_sample(perf_stat_timer);
@@ -190,16 +189,16 @@ void msgq_call_target(msgq::MsgBuffer &req_raw, void *ctx) {
 }  // namespace detail
 
 /**
- * @brief 使用erpc的处理函数类型，绑定proto中定义的rpc处理函数。
+ * @brief Use the erpc handler type to bind the rpc handler function defined in proto.
  *
- * @warning 每种func仅能bind一次，且要求不同的rpc func有不同的入参类型。这代表每种rpc
- * handler都需要定义`Request`与`Response`结构体。
+ * @warning Each func can only bind once, and requires different input types for different rpc func.
+ * This means that each rpc handler needs to define `Request` and `Response` structures.
  *
- * @tparam ESTABLISH 是否为建立通信的RPC请求。在`ESTABLISH`为`true`时，hanlder会从heap中申请peer
- * connection加入到连接表中。
+ * @tparam ESTABLISH Whether RPC request to establish communication. When `ESTABLISH` is `true`,
+ * hanlder requests a peer connection from the heap to add to the connection table.
  * @tparam RpcFunc
  * @param func
- * @return auto erpc的处理函数类型
+ * @return auto Types of handler functions for erpc
  */
 template <bool ESTABLISH, typename RpcFunc>
 auto bind_erpc_func(RpcFunc func) {
