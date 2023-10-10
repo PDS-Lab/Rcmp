@@ -98,13 +98,16 @@ class PoolContext {
      */
     Status FreePage(GAddr gaddr, size_t count);
 
-    template <typename T>
-    Status CAS(GAddr gaddr, T &expected, T desired, bool &ret) {
-        static_assert(sizeof(T) <= 8, "The compare and swap size mustn't greater than 8B.");
-        return CAS(gaddr, &expected, &desired, sizeof(T), ret);
-    }
-
-    Status CAS(GAddr gaddr, void *expected, void *desired, size_t s, bool &ret);
+    /**
+     * @brief CAS 8byte-aligned addr
+     *
+     * @param gaddr
+     * @param expected
+     * @param desired
+     * @param ret
+     * @return Status
+     */
+    Status CAS(GAddr gaddr, uint64_t &expected, uint64_t desired, bool &ret);
 
     // /**
     //  * @brief Write data from `buf` to `gaddr` address, size `size`.

@@ -1,5 +1,7 @@
 #include "rcmp.hpp"
 
+#include <atomic>
+
 #include "impl.hpp"
 #include "lock.hpp"
 #include "proto/rpc_register.hpp"
@@ -187,6 +189,75 @@ Status PoolContext::Write(GAddr gaddr, size_t size, const void *buf) {
     m_impl->m_stats.cxl_write_sample(size, perf_stat_timer);
 
     m_impl->m_stats.write_sample(perf_stat_timer_);
+    return Status::OK;
+}
+
+Status PoolContext::CAS(GAddr gaddr, uint64_t &expected, uint64_t desired, bool &ret) {
+    uint64_t perf_stat_timer, perf_stat_timer_;
+    m_impl->m_stats.start_sample(perf_stat_timer);
+    perf_stat_timer_ = perf_stat_timer;
+
+    page_id_t page_id = GetPageID(gaddr);
+    offset_t in_page_offset = GetPageOffset(gaddr);
+    LocalPageCache *page_cache;
+    LocalPageCacheMeta *page_cache_meta;
+
+    auto &ptl = PageThreadLocalCache::getInstance(m_impl->m_tcache_mgr).page_cache_table;
+
+    page_cache_meta = ptl.FindOrCreateCacheMeta(page_id);
+
+    std::unique_lock<Mutex> cache_lock(page_cache_meta->ref_lock);
+
+    page_cache = ptl.FindCache(page_cache_meta);
+
+    m_impl->m_stats.page_cache_search_sample(perf_stat_timer);
+
+    if (page_cache == nullptr) {
+        m_impl->m_stats.local_page_miss_sample();
+        // DLOG("Write can't find page %ld m_page_table_cache.", page_id);
+
+        MsgQFuture<rpc_daemon::GetPageCXLRefOrProxyReply, SpinPromise<msgq::MsgBuffer>> fu;
+        fu = m_impl->m_local_rack_daemon_connection.msgq_conn->call<SpinPromise>(
+            rpc_daemon::getPageCXLRefOrProxy,
+            {
+                .mac_id = m_impl->m_client_id,
+                .type = rpc_daemon::GetPageCXLRefOrProxyRequest::CAS,
+                .gaddr = gaddr,
+                .u = {.cas =
+                          {
+                              .expected = expected,
+                              .desired = desired,
+                          }},
+            });
+
+        auto &resp = fu.get();
+
+        if (!resp.refs) {
+            ret = (expected == resp.old_val);
+            expected = resp.old_val;
+            return Status::OK;
+        }
+
+        page_cache = ptl.AddCache(page_cache_meta, resp.offset);
+
+        m_impl->m_stats.page_cache_fault_sample(perf_stat_timer);
+
+        // DLOG("get ref: %ld --- %#lx", page_id, pageCache->offset);
+    } else {
+        m_impl->m_stats.local_page_hit_sample();
+    }
+
+    page_cache->Update();
+
+    m_impl->m_stats.page_cache_update_sample(perf_stat_timer);
+
+    ret = __atomic_compare_exchange_n(
+        reinterpret_cast<uint64_t *>(m_impl->GetVirtualAddr(page_cache->offset + in_page_offset)),
+        &expected, desired, true, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+
+    m_impl->m_stats.cxl_cas_sample(perf_stat_timer);
+
+    m_impl->m_stats.cas_sample(perf_stat_timer_);
     return Status::OK;
 }
 
