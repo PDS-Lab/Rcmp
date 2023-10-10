@@ -2,6 +2,7 @@
 
 #include <atomic>
 
+#include "common.hpp"
 #include "impl.hpp"
 #include "lock.hpp"
 #include "proto/rpc_register.hpp"
@@ -279,7 +280,21 @@ GAddr PoolContext::AllocPage(size_t count) {
     return gaddr;
 }
 
-Status PoolContext::FreePage(GAddr gaddr, size_t count) { DLOG_FATAL("Not Support"); }
+Status PoolContext::FreePage(GAddr gaddr, size_t count) {
+    DLOG_ASSERT(gaddr % page_size == 0, "gaddr must align by page_size");
+
+    page_id_t page_id = GetPageID(gaddr);
+    auto fu = m_impl->m_local_rack_daemon_connection.msgq_conn->call<SpinPromise>(
+        rpc_daemon::freePage, {
+                                  .mac_id = m_impl->m_client_id,
+                                  .start_page_id = page_id,
+                                  .count = count,
+                              });
+
+    auto &resp = fu.get();
+
+    return Status::OK;
+}
 
 // // TODO: write lock
 // Status PoolContext::WriteBatch(GAddr gaddr, size_t size, void *buf) {

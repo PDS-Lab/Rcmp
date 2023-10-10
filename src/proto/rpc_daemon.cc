@@ -1,5 +1,7 @@
 #include "proto/rpc_daemon.hpp"
 
+#include <mutex>
+
 #include "promise.hpp"
 #include "proto/rpc_adaptor.hpp"
 #include "proto/rpc_client.hpp"
@@ -389,7 +391,7 @@ retry:
                     PageMetadata* swap_page_meta_tmp =
                         daemon_context.m_page_table.FindOrCreatePageMeta(oldest_page_pair.second);
                     if (swap_page_meta_tmp != nullptr && swap_page_meta_tmp->vm_meta != nullptr &&
-                        swap_page_meta_tmp->vm_meta->TryPin()) {
+                        swap_page_meta_tmp->page_ref_lock.try_lock()) {
                         swapout_page_id = oldest_page_pair.second;
                         swapout_page_meta = swap_page_meta_tmp;
                         need_swap = true;
@@ -417,8 +419,8 @@ retry:
             // TODO: swap page and page dead lock？
 
             // Write lock on page_meta of the page that is about to be swapped out
-            swapout_page_ref_lock =
-                std::unique_lock<CortSharedMutex>(swapout_page_meta->page_ref_lock);
+            swapout_page_ref_lock = std::unique_lock<CortSharedMutex>(
+                swapout_page_meta->page_ref_lock, std::adopt_lock);
         }
 
         swapin_addr = daemon_context.GetVirtualAddr(reserve_page_vm_meta->cxl_memory_offset);
@@ -485,8 +487,6 @@ retry:
 
         /* 4. Migration complete, update tlb */
         {
-            // Try to pin the page to prevent immediate random elimination!
-            reserve_page_vm_meta->TryPin();
             daemon_context.m_page_table.ApplyPageMemory(swapin_page_meta, reserve_page_vm_meta);
             if (is_swap) {
                 // Recovery of migrated pages
@@ -502,7 +502,6 @@ retry:
 
             // Migration of the swapin page has been completed and unlocked
             swapin_page_ref_lock.unlock();
-            reserve_page_vm_meta->UnPin();
         }
 
         /* 5. Send unLatchPageAndSwap to MN, change page dir, return RPC */
@@ -578,7 +577,22 @@ void allocPage(DaemonContext& daemon_context, DaemonToClientConnection& client_c
 
 void freePage(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
               FreePageRequest& req, ResponseHandle<FreePageReply>& resp_handle) {
-    DLOG_FATAL("Not Support");
+    // detach a free page task
+    daemon_context.GetFiberPool().EnqueueTask([&]() {
+        // Calling freePage to the MN
+        auto fu = daemon_context.m_conn_manager.GetMasterConnection().erpc_conn->call<CortPromise>(
+            rpc_master::freePage, {
+                                      .mac_id = daemon_context.m_daemon_id,
+                                      .start_page_id = req.start_page_id,
+                                      .count = req.count,
+                                  });
+
+        auto& resp = fu.get();
+    });
+
+    resp_handle.Init();
+    auto& reply = resp_handle.Get();
+    reply.ret = true;
 }
 
 void alloc(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
@@ -779,6 +793,29 @@ void delPageRefAndCacheBroadcast(DaemonContext& daemon_context, page_id_t page_i
         fu.get();
     }
     // DLOG("Finish delPageCacheBroadcast");
+}
+
+void tryDelPage(DaemonContext& daemon_context, DaemonToMasterConnection& master_connection,
+                TryDelPageRequest& req, ResponseHandle<TryDelPageReply>& resp_handle) {
+    PageMetadata* page_meta = daemon_context.m_page_table.FindOrCreatePageMeta(req.page_id);
+    DLOG_ASSERT(page_meta->vm_meta != nullptr, "Can't find page %lu", req.page_id);
+
+    std::unique_lock<CortSharedMutex> page_ref_lock(page_meta->page_ref_lock, std::try_to_lock);
+    if (!page_ref_lock.owns_lock()) {
+        resp_handle.Init();
+        auto& reply = resp_handle.Get();
+        reply.ret = false;
+        return;
+    }
+
+    delPageRefAndCacheBroadcast(daemon_context, req.page_id, page_meta, -1);
+
+    daemon_context.m_page_table.CancelPageMemory(page_meta);
+
+    resp_handle.Init();
+    auto& reply = resp_handle.Get();
+    reply.ret = true;
+    return;
 }
 
 /************************ for test ***************************/

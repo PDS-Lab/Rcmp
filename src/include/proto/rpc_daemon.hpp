@@ -246,6 +246,16 @@ struct TryMigratePageReply {
 void tryMigratePage(DaemonContext& daemon_context, DaemonToDaemonConnection& daemon_connection,
                     TryMigratePageRequest& req, ResponseHandle<TryMigratePageReply>& resp_handle);
 
+struct TryDelPageRequest {
+    mac_id_t mac_id;
+    page_id_t page_id;
+};
+struct TryDelPageReply {
+    bool ret;
+};
+void tryDelPage(DaemonContext& daemon_context, DaemonToMasterConnection& master_connection,
+                TryDelPageRequest& req, ResponseHandle<TryDelPageReply>& resp_handle);
+
 /************************* for test ***************************/
 
 struct __TestDataSend1Request {

@@ -44,10 +44,6 @@ struct DaemonToClientConnection;
 struct DaemonToDaemonConnection;
 
 struct PageVMMapMetadata {
-    bool TryPin() { return !pinned.test_and_set(); }
-    void UnPin() { pinned.clear(); }
-
-    std::atomic_flag pinned{false};
     offset_t cxl_memory_offset;  // Relative to `format.page_data_start_addr`
     std::set<DaemonToClientConnection *> ref_client;
     std::set<DaemonToDaemonConnection *> ref_daemon;

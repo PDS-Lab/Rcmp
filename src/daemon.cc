@@ -67,6 +67,8 @@ void DaemonContext::InitRPCNexus() {
                                         bind_erpc_func<false>(rpc_daemon::delPageRDMARef));
     m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::tryMigratePage)::rpc_type,
                                         bind_erpc_func<false>(rpc_daemon::tryMigratePage));
+    m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::tryDelPage)::rpc_type,
+                                        bind_erpc_func<false>(rpc_daemon::tryDelPage));
 
     erpc::SMHandlerWrap smhw;
     smhw.set_empty();
@@ -98,6 +100,8 @@ void DaemonContext::InitRPCNexus() {
         bind_msgq_rpc_func<false>(rpc_daemon::getPageCXLRefOrProxy));
     m_msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::allocPage)::rpc_type,
                                             bind_msgq_rpc_func<false>(rpc_daemon::allocPage));
+    m_msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::freePage)::rpc_type,
+                                            bind_msgq_rpc_func<false>(rpc_daemon::freePage));
 
     m_msgq_manager.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::__testdataSend1)::rpc_type,
                                             bind_msgq_rpc_func<false>(rpc_daemon::__testdataSend1));

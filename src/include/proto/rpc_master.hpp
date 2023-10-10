@@ -85,6 +85,7 @@ void allocPage(MasterContext& master_context, MasterToDaemonConnection& daemon_c
                AllocPageRequest& req, ResponseHandle<AllocPageReply>& resp_handle);
 
 struct FreePageRequest {
+    mac_id_t mac_id;
     page_id_t start_page_id;
     size_t count;
 };

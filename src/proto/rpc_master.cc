@@ -1,8 +1,14 @@
 #include "proto/rpc_master.hpp"
 
+#include <boost/fiber/operations.hpp>
+#include <mutex>
+
+#include "lock.hpp"
 #include "promise.hpp"
 #include "proto/rpc_adaptor.hpp"
 #include "proto/rpc_register.hpp"
+
+using namespace std::literals;
 
 namespace rpc_master {
 
@@ -169,17 +175,33 @@ void allocPage(MasterContext& master_context, MasterToDaemonConnection& daemon_c
 void freePage(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
               FreePageRequest& req, ResponseHandle<FreePageReply>& resp_handle) {
     RackMacTable* rack_table;
-    PageRackMetadata* page_meta = master_context.m_page_directory.FindPage(req.start_page_id);
+    PageRackMetadata* page_meta;
 
-    // TODO: Support for free page on any rack
+    for (size_t i = 0; i < req.count; ++i) {
+        page_id_t page_id = req.start_page_id + i;
+        page_meta = master_context.m_page_directory.FindPage(page_id);
 
-    // Need to delete page meta, cache, and other metadata on a given rack
-    DLOG_FATAL("Not Support");
+        // Need to delete page meta, cache, and other metadata on a given rack
 
-    rack_table = master_context.m_cluster_manager.cluster_rack_table[page_meta->rack_id];
+    retry:
+        std::unique_lock<CortSharedMutex> page_lock(page_meta->latch);
+        rack_table = master_context.m_cluster_manager.cluster_rack_table[page_meta->rack_id];
 
-    master_context.m_page_directory.RemovePage(rack_table, req.start_page_id);
-    master_context.m_page_directory.page_id_allocator->Recycle(req.start_page_id);
+        // try delete page on rack, avoid dead lock when page swap
+
+        auto fu = rack_table->daemon_connect->erpc_conn->call<CortPromise>(
+            rpc_daemon::tryDelPage, {.mac_id = master_context.m_master_id, .page_id = page_id});
+
+        auto& reply = fu.get();
+        if (!reply.ret) {
+            page_lock.unlock();
+            boost::this_fiber::sleep_for(5us);
+            goto retry;
+        }
+
+        master_context.m_page_directory.RemovePage(rack_table, req.start_page_id);
+        master_context.m_page_directory.page_id_allocator->Recycle(req.start_page_id);
+    }
 
     resp_handle.Init();
     auto& reply = resp_handle.Get();

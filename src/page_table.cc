@@ -26,6 +26,9 @@ void PageDirectory::RemovePage(RackMacTable *rack_table, page_id_t page_id) {
     auto it = table.find(page_id);
     PageRackMetadata *page_meta = it->second;
     table.erase(it);
+
+    DLOG("Del page %lu --> rack %u", page_id, page_meta->rack_id);
+
     delete page_meta;
     rack_table->current_allocated_page_num--;
 }
@@ -68,7 +71,7 @@ void PageTableManager::RandomPickUnvisitVMPage(bool force, bool &ret, page_id_t 
 
     table.random_foreach_all(eng, [&](std::pair<const page_id_t, PageMetadata *> &p) {
         if (p.second->vm_meta != nullptr && (force || p.second->vm_meta->ref_client.empty()) &&
-            p.second->vm_meta->TryPin()) {
+            p.second->page_ref_lock.try_lock()) {
             page_id = p.first;
             page_meta = p.second;
             ret = true;

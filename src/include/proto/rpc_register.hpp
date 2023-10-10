@@ -25,6 +25,7 @@ BIND_RPC_TYPE_STRUCT(rpc_daemon::alloc);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::free);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::getPageRDMARef);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::delPageRDMARef);
+BIND_RPC_TYPE_STRUCT(rpc_daemon::tryDelPage);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::tryMigratePage);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::__testdataSend1);
 BIND_RPC_TYPE_STRUCT(rpc_daemon::__testdataSend2);

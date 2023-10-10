@@ -75,6 +75,8 @@ void MasterContext::InitRPCNexus() {
                                         bind_erpc_func<true>(rpc_master::joinClient));
     m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_master::allocPage)::rpc_type,
                                         bind_erpc_func<false>(rpc_master::allocPage));
+    m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_master::freePage)::rpc_type,
+                                        bind_erpc_func<false>(rpc_master::freePage));
     m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_master::latchRemotePage)::rpc_type,
                                         bind_erpc_func<false>(rpc_master::latchRemotePage));
     m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_master::unLatchRemotePage)::rpc_type,

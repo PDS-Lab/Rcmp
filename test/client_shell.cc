@@ -36,6 +36,10 @@ int main(int argc, char *argv[]) {
         if (cmdstr == "a") {
             rcmp::GAddr gaddr = pool->AllocPage(1);
             cout << gaddr << endl;
+        } else if (cmdstr == "f") {
+            rcmp::GAddr gaddr;
+            cin >> gaddr;
+            pool->FreePage(gaddr, 1);
         } else if (cmdstr == "r") {
             rcmp::GAddr gaddr;
             cin >> gaddr;
@@ -60,9 +64,11 @@ int main(int argc, char *argv[]) {
         } else if (cmdstr == "?") {
             cout << "Usage:\n"
                     "\ta \t\t alloc 2MB gaddr\n"
+                    "\tf \t\t free 2MB gaddr\n"
                     "\tr <gaddr> \t\t read gaddr 8B int\n"
                     "\tw <gaddr> <int> \t\twrite gaddr 8B int\n"
                     "\tcas <gaddr> <int> <int> \t\tcas gaddr 8B int, expected, desired\n"
+                    "\tq \t\t quit\n"
                     "\t? \t\t for help"
                  << endl;
         } else {
