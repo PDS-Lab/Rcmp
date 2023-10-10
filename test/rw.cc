@@ -29,7 +29,6 @@ int main(int argc, char *argv[]) {
     cmd.add<size_t>("iteration");
     cmd.add<size_t>("payload_size");
     cmd.add<uint64_t>("addr_range");
-    cmd.add<int>("read_ratio");
     cmd.add<int>("thread");
     cmd.add<int>("thread_all", 0, "", false, 0);
     cmd.add<int>("node_id");
@@ -63,7 +62,6 @@ int main(int argc, char *argv[]) {
         .NID = cmd.get<int>("node_id"),
         .NODES = cmd.get<int>("no_node"),
         .IT = cmd.get<size_t>("iteration"),
-        .RA = cmd.get<int>("read_ratio"),
         // .PAYLOAD = cmd.get<size_t>("payload_size"),
         .SA = 2097152,
         .RANGE = cmd.get<uint64_t>("addr_range"),

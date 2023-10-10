@@ -47,11 +47,22 @@ int main(int argc, char *argv[]) {
             uint64_t n;
             cin >> gaddr >> n;
             pool->Write(gaddr, 8, &n);
+        } else if (cmdstr == "cas") {
+            rcmp::GAddr gaddr;
+            uint64_t e, d;
+            bool ret;
+            cin >> gaddr >> e >> d;
+            pool->CAS(gaddr, e, d, ret);
+            if (!ret) {
+                cout << "CAS Fail, expected " << e << endl;
+            }
+            cout << ret << endl;
         } else if (cmdstr == "?") {
             cout << "Usage:\n"
                     "\ta \t\t alloc 2MB gaddr\n"
                     "\tr <gaddr> \t\t read gaddr 8B int\n"
                     "\tw <gaddr> <int> \t\twrite gaddr 8B int\n"
+                    "\tcas <gaddr> <int> <int> \t\tcas gaddr 8B int, expected, desired\n"
                     "\t? \t\t for help"
                  << endl;
         } else {

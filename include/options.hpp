@@ -2,6 +2,7 @@
 
 #include <string>
 
+// enable stat
 #define RCMP_PERF_ON 1
 
 namespace rcmp {

@@ -73,7 +73,6 @@ struct BenchParam {
     int NODES;               // node number
     size_t IT;               // iteration(per thread)
     int TH;                  // thread count
-    int RA;                  // read ratio
     size_t PAYLOAD;          // payload size
     MemPoolBase::GAddr SA;   // start gaddr
     size_t RANGE;            // gaddr range [SA, SA+RANGE)

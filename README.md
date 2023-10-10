@@ -1,53 +1,74 @@
-# RDMA-CXL混合异构内存池
+# Rcmp: RDMA-CXL Memory Pool
 
-RCMP应用程序在单个计算节点（CN）上运行，可以访问一个或多个数据节点（DN）。管理节点（MN）是集群的管理者，监控和管理这个集群的运行状态，储存RCMP集群的元数据信息，并且完成内存分配。内存基于page粒度分配，每个数据节点都必须向管理节点注册提供给应用程序的内存量。
+Rcmp is a user-layer library for a distributed memory pooling system that mixes CXL and RDMA. Rcmp deploys large memory pools in separate racks, using CXL for coherent memory access within racks and RDMA for remote one-side access across racks. The CXL memory devices used within the rack have sub-microsecond latency, which can greatly accelerate remote memory access. And RDMA can scale the capacity of the memory pool well. However, since RDMA cannot do memory coherent access by raw verbs API, Rcmp introduces Remote Direct IO and Remote Page Swap policys in combination with RDMA to achieve coherent access across racks. For more information, please refer to our [xxx](#paper).
 
-在物理层面构建内存池系统时，通常将计算物理机与存储物理机（包括CXL DRAM/AEP/SSD）分区放置，并通过CXL Switch在同一机柜内链接，这在该系统中视为一个机柜的管理。机柜内守护进程（Daemon）用于处理访问请求。各个机柜之间通过RDMA连接在一起，组成更大的网络结构。同时保留传统机柜（非CXL互联，包括DRAM/AEP/SSD/HDD）。
+Rcmp currently supports the following features:
 
-## 依赖库
+* **Memory Allocation and Release**: Clients allocate and release page-sized memory space via the AllocPage and FreePage APIs.
 
-* asio
+* **Consistent Memory Read/Write**: Users can access memory data using the global address GAddr and access data through Read/Write/CAS API. According to memory access hotspot is divided into CXL load/store access and RDMA one-side verb operation.
 
-## 主要部件
+# How to use
 
-### 管理节点（MN）
-* 维护集群的机柜状态
-* 分配大块内存page
-* 维护page与机柜的地址映射
-* 作为page交换的协调者
+* Using the Rcmp dynamic library
 
-### 守护进程（Daemon）
-* 作为跨机柜访问的代理，接管本机柜内的CN向其他机柜访问的请求
-* 维护机柜内的slab分配器，对page细粒度分块
-* 维护page到本机柜内CXL的地址映射
-* 维护page的访问热度，以进行page的交换到本地机柜
-* 接收来自其他机柜的直写请求
+    The interfaces are defined in `include/rcmp.hpp`, and their use can be found in the `test/client_shell.cc`. This test launches a memory pool operations program and uses Rcmp's API to perform various operations on the memory pool.
 
-### 计算节点（CN）
-* 应用端通过API访问本地CXL设备与其他机柜的内存
+1. Dependencies
 
-### 数据节点（DN）
-* 提供数据的持久化服务，包括CXL设备和传统设备
+    * gcc(>=4.6)
 
-## 模块设计
+    * numactl
 
-### 管理节点MN
-* Cluster Manager：维护集群系统元数据
-* Page Allocator：page分配器
-* Page Directory：维护page到机柜的映射目录
-* Migration Handler：page迁移的协调调度
-* RRPC：RDMA RPC通信模块
+    * boost-fiber
 
-### CXL Daemon
-* Msg Queue：采用CXL内存实现的与CN进程间通信的消息队列
-* Page Table：维护page到CXL内存的映射
-* Slab Allocator：slab分配器，细粒度划分page
-* Swap Handler：page swap的调度实现
-* CXL Proxy：接收来自其他机柜的数据访问，读取/写入CXL
-* Hot Statistic：page访问热度统计
-* RRPC：RDMA RPC通信模块
+2. Compile
 
-### CN包括应用程序库 Lib
-* Page Table Cache：本地page缓存
-* Msg Queue：与Daemon通信的消息队列
-* RRPC：RDMA RPC通信模块
+    ```shell
+    mkdir -p build
+    cd build
+    cmake .. -DCMAKE_BUILD_TYPE=Release
+    make
+    ```
+
+3. Run
+
+* Start Master (MN)
+
+    The MN process will start `ERPC`, please **apply for huge pages with 2GB granularity** in advance.
+
+    ```shell
+    sudo /home/user/Rcmp/build/rcmp_master --master_ip=192.168.200.51 --master_port=31850
+    ```
+
+* Start Rack Daemon (DN)
+
+    The DN process will start `ERPC`, please **apply for huge pages with 2GB granularity** in advance.
+
+    This project currently uses shared memory across NUMA to simulate CXL access. Run `script/create_cxl_mem.sh` to create shared memory on NUMA 1.
+
+    All other processes run on NUMA 0.
+
+    ```shell
+    # Add rack 0 on 192.168.200.51 with CXL size 2.19GB
+    sudo numactl -N 0 /home/user/Rcmp/build/rcmp_daemon --master_ip=192.168.200.51 --master_port=31850 --daemon_ip=192.168.200.51 --daemon_port=31851 --rack_id=0 --cxl_devdax_path=/dev/shm/cxlsim0 --cxl_memory_size=2357198848 --hot_decay=0.04 --hot_swap_watermark=3
+    ```
+
+    ```shell
+    # Add rack 1 on 192.168.201.89 with CXL size 18GB
+    sudo numactl -N 0 /home/gyx/Rcmp/build/rcmp_daemon --master_ip=192.168.200.51 --master_port=31850 --daemon_ip=192.168.201.89 --daemon_port=31852 --rack_id=1 --cxl_devdax_path=/dev/shm/cxlsim0 --cxl_memory_size=19327352832 --hot_decay=0.04 --hot_swap_watermark=3
+    ```
+
+* Launching the client test program (CN)
+
+    To simulate CXL, launch CN in the same rack on the same server as DN.
+
+    `test/rw.cc` is a micro-benchmark. Use redis for cross-rack test synchronisation.
+
+    ```shell
+    sudo numactl -N 0 /home/user/Rcmp/build/test/rw --client_ip=192.168.200.51 --client_port=14800 --rack_id=0 --cxl_devdax_path=/dev/shm/cxlsim0 --cxl_memory_size=2357198848 --iteration=10000000 --payload_size=64 --addr_range=17179869184 --thread=32 --thread_all=1 --no_node=1 --node_id=0 --redis_server_ip=192.168.201.52:6379
+    ```
+
+# Reference
+
+<span id="paper"></span>[1] xxx
