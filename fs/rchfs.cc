@@ -249,6 +249,9 @@ int rchfs_unlink(const char* path) {
 
     auto it = file_map.find(path);
     dir_remove_subfile(it);
+    for (auto addr : it->second.block_map) {
+        pool->FreePage(addr, 1);
+    }
     file_map.erase(it);
     return 0;
 }
