@@ -2,7 +2,7 @@
 
 #include <string>
 
-#define RCHMS_PERF_ON 0
+#define RCHMS_PERF_ON 1
 
 namespace rchms {
 

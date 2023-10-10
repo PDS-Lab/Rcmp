@@ -113,7 +113,7 @@ void* rchfs_init(struct fuse_conn_info* conn) {
     pool = rchms::Open(options);
     file_map.insert({"/", (Entry){.st = {
                                       .st_nlink = 2,
-                                      .st_mode = 0755 | S_IFDIR,
+                                      .st_mode = 0775 | S_IFDIR,
                                   }}});
     return nullptr;
 }
@@ -182,7 +182,7 @@ int rchfs_open(const char* path, struct fuse_file_info* fi) {
 }
 
 int rchfs_read(const char* path, char* buf, size_t size, off_t off, struct fuse_file_info* fi) {
-    // DLOG("path: %s, size: %lu", path, size);
+    DLOG("path: %s, size: %lu", path, size);
 
     Entry* ent = (Entry*)fi->fh;
     if (off > ent->st.st_size) {
@@ -209,7 +209,7 @@ int rchfs_read(const char* path, char* buf, size_t size, off_t off, struct fuse_
 
 int rchfs_write(const char* path, const char* buf, size_t size, off_t off,
                 struct fuse_file_info* fi) {
-    // DLOG("path: %s, size: %lu", path, size);
+    DLOG("path: %s, size: %lu", path, size);
 
     Entry* ent = (Entry*)fi->fh;
     off_t minsize = off + size;
