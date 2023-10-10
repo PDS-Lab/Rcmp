@@ -54,6 +54,7 @@ struct GetPageCXLRefOrProxyRequest {
         READ,
         WRITE,
         WRITE_RAW,
+        CAS,
     } type;
     rcmp::GAddr gaddr;
     union {
@@ -68,6 +69,10 @@ struct GetPageCXLRefOrProxyRequest {
             size_t cn_write_raw_size;
             uint8_t cn_write_raw_buf[0];
         } write_raw;
+        struct {
+            size_t expected;
+            size_t desired;
+        } cas;
     } u;
 };
 struct GetPageCXLRefOrProxyReply {
@@ -76,8 +81,13 @@ struct GetPageCXLRefOrProxyReply {
         struct {  // refs == true
             offset_t offset;
         };
-        struct {  // refs == false
-            uint8_t read_data[0];
+        struct {      // refs == false
+            struct {  // cas
+                uint64_t old_val;
+            };
+            struct {  // read
+                uint8_t read_data[0];
+            };
         };
     };
 };

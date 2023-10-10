@@ -242,6 +242,15 @@ retry:
                 my_size = req.u.write_raw.cn_write_raw_size;
                 break;
             }
+            case GetPageCXLRefOrProxyRequest::CAS: {
+                resp_handle.Init();
+                auto& reply = resp_handle.Get();
+
+                ibv_mr* mr = daemon_context.GetMR(&reply.old_val);
+                my_data_buf = reinterpret_cast<uintptr_t>(&reply.old_val);
+                my_lkey = mr->lkey;
+                break;
+            }
         }
 
         /* 6. Calling one-side RDMA operation to read/write remote memory */
@@ -274,6 +283,12 @@ retry:
                     //      remote_page_ref_meta->remote_page_addr + page_offset,
                     //      remote_page_ref_meta->remote_page_rkey, my_data_buf, my_lkey);
                     break;
+                case GetPageCXLRefOrProxyRequest::CAS:
+                    dest_daemon_conn->rdma_conn->prep_cas(
+                        &sge_wr, my_data_buf, my_lkey,
+                        (remote_page_ref_meta->remote_page_addr + page_offset),
+                        remote_page_ref_meta->remote_page_rkey, req.u.cas.expected,
+                        req.u.cas.desired);
             }
             auto fu = dest_daemon_conn->rdma_conn->submit(&sge_wr, 1);
 

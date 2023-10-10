@@ -29,9 +29,12 @@ struct SysStatistics {
     uint64_t cxl_write_io = 0;
     uint64_t cxl_write_byte = 0;
     uint64_t cxl_write_time = 0;
+    uint64_t cxl_cas_io = 0;
+    uint64_t cxl_cas_time = 0;
 
     uint64_t read_time = 0;
     uint64_t write_time = 0;
+    uint64_t cas_time = 0;
 
     void local_page_miss_sample() {
 #if (RCMP_PERF_ON != 0)
@@ -114,6 +117,15 @@ struct SysStatistics {
 #endif  // RCMP_PERF_ON
     }
 
+    void cxl_cas_sample(uint64_t &timer) {
+#if (RCMP_PERF_ON != 0)
+        uint64_t tmp = getNsTimestamp();
+        cxl_cas_io++;
+        cxl_cas_time += tmp - timer;
+        timer = tmp;
+#endif  // RCMP_PERF_ON
+    }
+
     void write_sample(uint64_t &timer) {
 #if (RCMP_PERF_ON != 0)
         uint64_t tmp = getNsTimestamp();
@@ -126,6 +138,14 @@ struct SysStatistics {
 #if (RCMP_PERF_ON != 0)
         uint64_t tmp = getNsTimestamp();
         read_time += tmp - timer;
+        timer = tmp;
+#endif  // RCMP_PERF_ON
+    }
+
+    void cas_sample(uint64_t &timer) {
+#if (RCMP_PERF_ON != 0)
+        uint64_t tmp = getNsTimestamp();
+        cas_time += tmp - timer;
         timer = tmp;
 #endif  // RCMP_PERF_ON
     }
