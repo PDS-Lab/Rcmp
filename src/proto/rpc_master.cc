@@ -179,11 +179,11 @@ void freePage(MasterContext& master_context, MasterToDaemonConnection& daemon_co
 
     for (size_t i = 0; i < req.count; ++i) {
         page_id_t page_id = req.start_page_id + i;
+    retry:
         page_meta = master_context.m_page_directory.FindPage(page_id);
 
         // Need to delete page meta, cache, and other metadata on a given rack
 
-    retry:
         std::unique_lock<CortSharedMutex> page_lock(page_meta->latch);
         rack_table = master_context.m_cluster_manager.cluster_rack_table[page_meta->rack_id];
 
