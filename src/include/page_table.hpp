@@ -112,6 +112,7 @@ struct PageTableManager {
 
     void EraseRemotePageRefMeta(PageMetadata *page_meta);
     PageVMMapMetadata *AllocPageMemory();
+    void FreePageMemory(PageVMMapMetadata *page_vm_meta);
     void ApplyPageMemory(PageMetadata *page_meta, PageVMMapMetadata *page_vm_meta);
     void CancelPageMemory(PageMetadata *page_meta);
     void RandomPickUnvisitVMPage(bool force, bool &ret, page_id_t &page_id,

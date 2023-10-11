@@ -51,6 +51,12 @@ PageVMMapMetadata *PageTableManager::AllocPageMemory() {
     return page_vm_meta;
 }
 
+void PageTableManager::FreePageMemory(PageVMMapMetadata *page_vm_meta) {
+    page_allocator->deallocate(page_vm_meta->cxl_memory_offset, 1);
+    current_used_page_num--;
+    delete page_vm_meta;
+}
+
 void PageTableManager::ApplyPageMemory(PageMetadata *page_meta, PageVMMapMetadata *page_vm_meta) {
     DLOG_ASSERT(page_meta->vm_meta == nullptr, "Can't cover existed page vm meta");
     page_meta->vm_meta = page_vm_meta;
@@ -60,9 +66,7 @@ void PageTableManager::ApplyPageMemory(PageMetadata *page_meta, PageVMMapMetadat
 void PageTableManager::CancelPageMemory(PageMetadata *page_meta) {
     auto tmp = page_meta->vm_meta;
     page_meta->vm_meta = nullptr;
-    page_allocator->deallocate(tmp->cxl_memory_offset, 1);
-    current_used_page_num--;
-    delete tmp;
+    FreePageMemory(tmp);
 }
 
 void PageTableManager::RandomPickUnvisitVMPage(bool force, bool &ret, page_id_t &page_id,

@@ -315,7 +315,8 @@ retry:
         std::unique_lock<CortSharedMutex> swapin_page_ref_lock(swapin_page_meta->page_ref_lock);
 
         // Determining whether a remote ref is invalid (ABA)
-        if (remote_page_ref_meta != swapin_page_meta->remote_ref_meta) {
+        if (remote_page_ref_meta !=
+            daemon_context.m_page_table.FindOrCreateRemotePageRefMeta(swapin_page_meta)) {
             goto retry;
         }
 
@@ -487,12 +488,14 @@ retry:
 
         /* 4. Migration complete, update tlb */
         {
-            daemon_context.m_page_table.ApplyPageMemory(swapin_page_meta, reserve_page_vm_meta);
             if (is_swap) {
                 // Recovery of migrated pages
+                daemon_context.m_page_table.ApplyPageMemory(swapin_page_meta, reserve_page_vm_meta);
                 daemon_context.m_page_table.CancelPageMemory(swapout_page_meta);
             } else {
-                // TODO: remote server reject swap
+                // remote server reject swap
+                // TODO: maybe erase remote ref will call more rpc
+                daemon_context.m_page_table.FreePageMemory(reserve_page_vm_meta);
             }
 
             // Swapout page has been migrated and unlocked
