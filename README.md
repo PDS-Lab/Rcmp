@@ -1,6 +1,6 @@
-# Rcmp: Hybrid memory pooling system based on RDMA and CXL
+# Rcmp: A hybrid memory pooling system based on RDMA and CXL
 
-Rcmp is a user-layer library for a distributed memory pooling system that mixes CXL and RDMA. Rcmp deploys large memory pools in separate racks, using CXL for coherent memory access within racks and RDMA for remote one-side access across racks. The CXL memory devices used within the rack have sub-microsecond latency, which can greatly accelerate remote memory access. And RDMA can scale the capacity of the memory pool well. However, since RDMA cannot do memory coherent access by raw verbs API, Rcmp introduces Remote Direct IO and Remote Page Swap policys in combination with RDMA to achieve coherent access across racks. For more information, please refer to our [xxx](#paper).
+Rcmp is a user-layer library for a distributed memory pooling system that mixes CXL and RDMA. Rcmp deploys large memory pools in separate racks, using CXL for coherent memory access within racks and RDMA for remote one-side access across racks. The CXL memory devices used within the rack have sub-microsecond latency, which can greatly accelerate remote memory access. And RDMA can scale the capacity of the memory pool well. However, since RDMA cannot do memory coherent access by raw verbs API, Rcmp introduces Remote Direct IO and Remote Page Swap policys in combination with RDMA to achieve coherent access across racks.
 
 Rcmp currently supports the following features:
 
@@ -84,7 +84,3 @@ After starting the necessary memory pool cluster environment (start MNs with DNs
     rchfs uses the FUSE API to implement a simple high-capacity in-memory file system. File metadata is stored on the client, file data blocks are allocated using Rcmp's AllocPage, and write/read system calls are redirected to Rcmp's Write/Read API. Later, we will add file metadata sharing in memory pool.
 
     Location: `fs/rchfs.cc`.
-
-# Reference
-
-<span id="paper"></span>[1] xxx
