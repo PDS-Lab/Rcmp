@@ -1,4 +1,4 @@
-# Rcmp: RDMA-CXL Memory Pool
+# Rcmp: Hybrid memory pooling system based on RDMA and CXL
 
 Rcmp is a user-layer library for a distributed memory pooling system that mixes CXL and RDMA. Rcmp deploys large memory pools in separate racks, using CXL for coherent memory access within racks and RDMA for remote one-side access across racks. The CXL memory devices used within the rack have sub-microsecond latency, which can greatly accelerate remote memory access. And RDMA can scale the capacity of the memory pool well. However, since RDMA cannot do memory coherent access by raw verbs API, Rcmp introduces Remote Direct IO and Remote Page Swap policys in combination with RDMA to achieve coherent access across racks. For more information, please refer to our [xxx](#paper).
 
@@ -31,7 +31,7 @@ Rcmp currently supports the following features:
     make
     ```
 
-3. Run
+3. Run Cluster
 
 * Start Master (MN)
 
@@ -68,6 +68,22 @@ Rcmp currently supports the following features:
     ```shell
     sudo numactl -N 0 /home/user/Rcmp/build/test/rw --client_ip=192.168.200.51 --client_port=14800 --rack_id=0 --cxl_devdax_path=/dev/shm/cxlsim0 --cxl_memory_size=2357198848 --iteration=10000000 --payload_size=64 --addr_range=17179869184 --thread=32 --thread_all=1 --no_node=1 --node_id=0 --redis_server_ip=192.168.201.52:6379
     ```
+
+# Application
+
+After starting the necessary memory pool cluster environment (start MNs with DNs), use the Rcmp dynamic library to create the memory pool application. The following gives the implementation of the application that already exists in the project.
+
+* Distributed hash table
+
+    The distributed hash table uses the Rcmp interface to implement a linearly probed two-tier hash table. For simplicity, the hash table is fixed-sized. We will implement dynamic scaling added later (similar to CCEH).
+
+    Location: `test/dht.hpp`.
+
+* rchfs
+
+    rchfs uses the FUSE API to implement a simple high-capacity in-memory file system. File metadata is stored on the client, file data blocks are allocated using Rcmp's AllocPage, and write/read system calls are redirected to Rcmp's Write/Read API. Later, we will add file metadata sharing in memory pool.
+
+    Location: `fs/rchfs.cc`.
 
 # Reference
 

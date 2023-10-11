@@ -1,4 +1,4 @@
-# Rcmp: RDMA-CXL Memory Pool
+# Rcmp: Hybrid memory pooling system based on RDMA and CXL
 
 Rcmp是一个CXL与RDMA混合的分布式内存池系统的用户态库。Rcmp采用分机柜部署大型内存池，在机柜内部使用CXL进行一致性的内存访问，跨机柜采用RDMA进行远程单边访问。在机柜内部使用的CXL内存设备的时延达到亚微秒级别，能够极大加速内存访问。而RDMA能够良好地扩展内存池的容量。但由于RDMA无法做到内存的一致性访问，Rcmp在结合RDMA时引入Remote Direct IO以及Remote Page Swap机制实现了跨机柜的一致性访问。更多信息可参考我们的论文[xxx](#paper)。
 
@@ -68,6 +68,22 @@ Rcmp目前支持以下功能：
     ```shell
     sudo numactl -N 0 /home/user/Rcmp/build/test/rw --client_ip=192.168.200.51 --client_port=14800 --rack_id=0 --cxl_devdax_path=/dev/shm/cxlsim0 --cxl_memory_size=2357198848 --iteration=10000000 --payload_size=64 --addr_range=17179869184 --thread=32 --thread_all=1 --no_node=1 --node_id=0 --redis_server_ip=192.168.201.52:6379
     ```
+
+# 应用
+
+启动了必要的内存池集群环境后（启动MN与DNs），使用Rcmp动态库创建内存池应用。下列给出项目中已存在的应用实现。
+
+* 分布式哈希表
+
+    分布式哈希表利用Rcmp接口实现一个线性探测的双层哈希表。简易起见，该哈希表是固定大小的，以后增加动态扩容功能（类似于CCEH）。
+
+    位置：`test/dht.hpp`。
+
+* rchfs
+
+    rchfs使用FUSE API实现了简易的大容量内存文件系统。文件元数据保存于客户端，文件数据块利用Rcmp的AllocPage分配，并将write/read系统调用重定向到Rcmp的Write/Read API。以后增加文件元数据共享的功能。
+
+    位置：`fs/rchfs.cc`。
 
 # 参考
 
