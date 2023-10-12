@@ -106,7 +106,7 @@ struct MsgQueue final {
     ConcurrentQueue<MsgHeader, 10240, ConcurrentQueueProducerMode::MP,
                     ConcurrentQueueConsumerMode::SC>
         msgq_q;
-    RingArena<msgq_ring_buf_len, 20> m_ra;
+    RingArena<msgq_ring_buf_len, 8> m_ra;
 };
 
 #endif  // MSGQ_SINGLE_FIFO_ON

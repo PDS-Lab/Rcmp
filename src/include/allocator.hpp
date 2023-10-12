@@ -104,6 +104,8 @@ class RingArena {
     const void* base() const { return m_bs; }
 
     void* allocate(size_t s) {
+        DLOG_ASSERT(s <= block_size, "Can't allocate large than block size: %lu, %lu", s, block_size);
+
         thread_local uint8_t b_cur = (reinterpret_cast<uintptr_t>(&b_cur) >> 5) % BucketNum;
         b_cur = (b_cur + 1) % BucketNum;
         uint8_t bc = b_cur;

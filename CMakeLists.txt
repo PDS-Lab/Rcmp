@@ -66,7 +66,7 @@ add_executable(
 target_link_libraries(
     rchfs
     rcmp
-    fuse
+    fuse3
 )
 
 add_subdirectory(test)

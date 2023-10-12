@@ -2,11 +2,11 @@
 #define _FILE_OFFSET_BITS 64
 #endif
 
-#define FUSE_USE_VERSION 26
+#define FUSE_USE_VERSION 39
 
 #include <asm-generic/errno-base.h>
 #include <fcntl.h>
-#include <fuse.h>
+#include <fuse3/fuse.h>
 #include <sys/stat.h>
 
 #include <algorithm>
@@ -108,7 +108,7 @@ UMITER createfile(const char* path, mode_t mode, dev_t rdev) {
     return it;
 }
 
-void* rchfs_init(struct fuse_conn_info* conn) {
+void* rchfs_init(struct fuse_conn_info* conn, struct fuse_config* cfg) {
     DLOG("");
     pool = rcmp::Open(options);
     file_map.insert({"/", (Entry){.st = {
@@ -123,13 +123,18 @@ void rchfs_destroy(void* ctx) {
     rcmp::Close(pool);
 }
 
-int rchfs_getattr(const char* path, struct stat* stbuf) {
+int rchfs_getattr(const char* path, struct stat* stbuf, struct fuse_file_info* fi) {
     DLOG("path: %s", path);
-    auto it = file_map.find(path);
-    if (it == file_map.end()) {
-        return -ENOENT;
+
+    Entry* ent;
+    if (fi == nullptr || (ent = (Entry*)fi->fh) == nullptr) {
+        auto it = file_map.find(path);
+        if (it == file_map.end()) {
+            return -ENOENT;
+        }
+        ent = &it->second;
     }
-    *stbuf = it->second.st;
+    *stbuf = ent->st;
     return 0;
 }
 
@@ -155,17 +160,20 @@ int rchfs_mkdir(const char* path, mode_t mode) {
     return 0;
 }
 
-int rchfs_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t offset,
-                  struct fuse_file_info* fi) {
+int rchfs_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off_t off,
+                  struct fuse_file_info* fi, enum fuse_readdir_flags) {
     DLOG("path: %s", path);
 
     Entry* ent = (Entry*)fi->fh;
     if (ent == nullptr) {
         auto it = file_map.find(path);
+        if (it == file_map.end()) {
+            return -ENOENT;
+        }
         ent = &it->second;
     }
     for (auto& p : ent->subfile_list) {
-        filler(buf, getname(p->first).c_str(), &ent->st, 0);
+        filler(buf, getname(p->first).c_str(), &ent->st, 0, FUSE_FILL_DIR_PLUS);
     }
     return 0;
 }
@@ -234,7 +242,7 @@ int rchfs_write(const char* path, const char* buf, size_t size, off_t off,
     return size;
 }
 
-int rchfs_truncate(const char* path, off_t size) {
+int rchfs_truncate(const char* path, off_t size, struct fuse_file_info* fi) {
     DLOG("path: %s", path);
 
     auto it = file_map.find(path);
@@ -304,7 +312,7 @@ const fuse_opt option_spec[] = {OPTION("--client_ip=%s", client_ip),
 
 int main(int argc, char* argv[]) {
     int ret;
-    option opts;
+    option opts{};
     fuse_args args = FUSE_ARGS_INIT(argc, argv);
 
     if (fuse_opt_parse(&args, &opts, option_spec, NULL) == -1) return 1;
