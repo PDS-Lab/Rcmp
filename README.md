@@ -20,7 +20,17 @@ Rcmp currently supports the following features:
 
     * numactl
 
-    * boost-fiber
+    * boost-fiber-dev
+
+    * boost-coroutine-dev
+
+    * boost-context-dev
+
+    * asio
+
+    * redis-plus-plus
+
+    * fuse3
 
 2. Compile
 
