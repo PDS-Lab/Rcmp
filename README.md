@@ -94,3 +94,7 @@ After starting the necessary memory pool cluster environment (start MNs with DNs
     rchfs uses the FUSE API to implement a simple high-capacity in-memory file system. File metadata is stored on the client, file data blocks are allocated using Rcmp's AllocPage, and write/read system calls are redirected to Rcmp's Write/Read API. Later, we will add file metadata sharing in memory pool.
 
     Location: `fs/rchfs.cc`.
+
+# Paper
+
+Zhonghua Wang, Yixing Guo, Kai Lu*, Jiguang Wan, Daohui Wang, Ting Yao, Huatao Wu. Rcmp: Reconstructing RDMA-based Memory Disaggregation via CXL. ACM Transactions on Architecture and Code Optimization (TACO) 2023. (Just Accepted)
