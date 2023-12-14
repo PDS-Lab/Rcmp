@@ -2,6 +2,7 @@
 
 #include <mutex>
 
+#include "common.hpp"
 #include "promise.hpp"
 #include "proto/rpc_adaptor.hpp"
 #include "proto/rpc_client.hpp"
@@ -140,9 +141,8 @@ retry:
                             .erpc_conn->call<CortPromise>(rpc_master::latchRemotePage,
                                                           {
                                                               .mac_id = daemon_context.m_daemon_id,
-                                                              .isWriteLock = false,
+                                                              .exclusive = false,
                                                               .page_id = page_id,
-                                                              .page_id_swap = invalid_page_id,
                                                           });
 
                     auto& latch_resp = latch_fu.get();
@@ -173,6 +173,7 @@ retry:
                             .erpc_conn->call<CortPromise>(rpc_master::unLatchRemotePage,
                                                           {
                                                               .mac_id = daemon_context.m_daemon_id,
+                                                              .exclusive = false,
                                                               .page_id = page_id,
                                                           });
 
@@ -180,9 +181,10 @@ retry:
                 }
             });
 
-    size_t remote_page_current_hot = remote_page_ref_meta->Update();
+    int remote_page_ref_meta_version = remote_page_ref_meta->version;
+    FreqStats::Heatness remote_page_current_hot = remote_page_ref_meta->UpdateWrite();
     // Swap only when just equal to the watermark
-    if (remote_page_current_hot != daemon_context.m_options.hot_swap_watermark)
+    if (remote_page_current_hot.last_heat < daemon_context.m_options.hot_swap_watermark)
     /*
      * ---------------------------------------------
      *                PAGE DIRECT IO
@@ -312,15 +314,18 @@ retry:
         page_ref_lock.unlock();
 
         PageMetadata* swapin_page_meta = page_meta;
-        std::unique_lock<CortSharedMutex> swapin_page_ref_lock(swapin_page_meta->page_ref_lock);
-
-        // Determining whether a remote ref is invalid (ABA)
-        if (remote_page_ref_meta !=
-            daemon_context.m_page_table.FindOrCreateRemotePageRefMeta(swapin_page_meta)) {
+        std::unique_lock<CortSharedMutex> swapin_page_ref_lock(swapin_page_meta->page_ref_lock,
+                                                               std::try_to_lock);
+        // First worker gets lock, does page-swaping work. Otherwise retry.
+        if (!swapin_page_ref_lock.owns_lock()) {
             goto retry;
         }
 
-        daemon_context.m_stats.page_swap_sample();
+        // Determining whether a remote ref is invalid (ABA)
+        if (remote_page_ref_meta_version !=
+            daemon_context.m_page_table.FindOrCreateRemotePageRefMeta(swapin_page_meta)->version) {
+            goto retry;
+        }
 
         /* 1. Prepare memory for the area of the page swap and determine if a page swap is required
          */
@@ -345,34 +350,47 @@ retry:
             boost::this_fiber::yield();
         }
 
-        reserve_page_vm_meta = daemon_context.m_page_table.AllocPageMemory();
-        // DLOG("reserve_page_vm_meta->offset = %#lx", reserve_page_vm_meta->cxl_memory_offset);
-
         // Not enough local, swap out page
         if (daemon_context.m_page_table.NearlyFull()) {
             // Randomly select a page that has not been accessed by a client in this cabinet for
             // exchange Example: Exchange recipient's move-in pages, or requested but unused pages
-            daemon_context.m_page_table.RandomPickUnvisitVMPage(false, need_swap, swapout_page_id,
-                                                                swapout_page_meta);
+            need_swap =
+                daemon_context.m_page_table.PickUnvisitVMPage(swapout_page_id, swapout_page_meta);
 
             // If all pages are referenced by the client, get the oldest page as a swap page from
             // the client.
             if (!need_swap) {
-                uint64_t oldest_time = UINT64_MAX;
-                MinHeap<std::pair<uint64_t, page_id_t>> oldest_heap;
+                MinHeap<std::pair<float, page_id_t>> heat_heap;
+                swapout_page_id = invalid_page_id;
 
-                // Make a request for the oldest page to all clients.
-                {
+                do {
+                    const size_t max_num_detect_pages =
+                        sizeof(rpc_client::GetPagePastAccessFreqRequest::pages) / sizeof(page_id_t);
+
+                    // random sample pages to swapout
+                    auto rand_pick_vm_pages = daemon_context.m_page_table.RandomPickVMPage(
+                        std::min((size_t)(daemon_context.m_page_table.current_used_page_num * 0.1),
+                                 max_num_detect_pages));
+
+                    std::set<DaemonToClientConnection*> broadcast_clients;
+                    for (auto& pagep : rand_pick_vm_pages) {
+                        broadcast_clients.merge(pagep.second->vm_meta->ref_client);
+                    }
+
+                    rpc_client::GetPagePastAccessFreqRequest req;
+                    req.mac_id = daemon_context.m_daemon_id;
+                    req.num_detect_pages = rand_pick_vm_pages.size();
+                    memcpy(req.pages, rand_pick_vm_pages.data(),
+                           rand_pick_vm_pages.size() * sizeof(rand_pick_vm_pages.size()));
+
                     std::vector<MsgQFuture<rpc_client::GetPagePastAccessFreqReply,
                                            CortPromise<msgq::MsgBuffer>>>
                         fu_vec;
 
-                    for (auto& client_conn : daemon_context.m_conn_manager.m_client_connect_table) {
+                    for (auto& client_conn : broadcast_clients) {
                         auto fu = client_conn->msgq_conn->call<CortPromise>(
                             rpc_client::getPagePastAccessFreq,
-                            {
-                                .mac_id = daemon_context.m_daemon_id,
-                            });
+                            (rpc_client::GetPagePastAccessFreqRequest)req);
 
                         fu_vec.push_back(std::move(fu));
                     }
@@ -380,33 +398,30 @@ retry:
                     for (auto& fu : fu_vec) {
                         auto& wd_resp = fu.get();
 
-                        if (wd_resp.oldest_page_id != invalid_page_id) {
-                            oldest_heap.push({wd_resp.last_access_ts, wd_resp.oldest_page_id});
+                        if (wd_resp.coldest_page_id != invalid_page_id) {
+                            heat_heap.push({wd_resp.avg_heat, wd_resp.coldest_page_id});
                         }
                     }
-                }
 
-                while (!oldest_heap.empty()) {
-                    auto oldest_page_pair = oldest_heap.top();
-                    oldest_heap.pop();
-                    PageMetadata* swap_page_meta_tmp =
-                        daemon_context.m_page_table.FindOrCreatePageMeta(oldest_page_pair.second);
-                    if (swap_page_meta_tmp != nullptr && swap_page_meta_tmp->vm_meta != nullptr &&
-                        swap_page_meta_tmp->page_ref_lock.try_lock()) {
-                        swapout_page_id = oldest_page_pair.second;
-                        swapout_page_meta = swap_page_meta_tmp;
-                        need_swap = true;
-                        break;
+                    // Get the coldest page which has mininum average heat.
+                    while (!heat_heap.empty()) {
+                        auto p = heat_heap.top();
+                        auto meta = daemon_context.m_page_table.FindOrCreatePageMeta(p.second);
+                        // Before swaping, we try lock it to avoid accessing and swapping by other
+                        // workers. Then swapout_page_ref_lock will acquire ownership of a lock
+                        // release.
+                        if (meta->vm_meta && meta->page_ref_lock.try_lock()) {
+                            swapout_page_id = p.second;
+                            break;
+                        }
                     }
-                }
+
+                    // If sampled pages are all locked by other worker, we need re-sampling pages.
+                } while (swapout_page_id == invalid_page_id);
             }
 
             // If the client gets the oldest page that is being Pinned, it randomly selects an
             // un-Pinned page
-            if (!need_swap) {
-                daemon_context.m_page_table.RandomPickUnvisitVMPage(
-                    true, need_swap, swapout_page_id, swapout_page_meta);
-            }
 
             DLOG_ASSERT(need_swap);
             DLOG_ASSERT(swapout_page_id != invalid_page_id);
@@ -424,66 +439,80 @@ retry:
                 swapout_page_meta->page_ref_lock, std::adopt_lock);
         }
 
-        swapin_addr = daemon_context.GetVirtualAddr(reserve_page_vm_meta->cxl_memory_offset);
-        swapin_mr = daemon_context.GetMR(reinterpret_cast<void*>(swapin_addr));
-        swapin_key = swapin_mr->rkey;
-
         // DLOG(
         //     "DN %u: Expect inPage %lu (from DN: %u) outPage %lu. swapin_addr = %ld, swapin_key ="
         //     "%d",
         //     daemon_context.m_daemon_id, page_id, dest_daemon_conn->daemon_id, swapout_page_id,
         //     swapin_addr, swapin_key);
 
-        /* 2. Send LatchPage(page_id) to MN to get the daemon for the page on MN and latch the page
+        /* 2. Send tryMigratePage(page_id) to MN to get the daemon for the page on MN and latch the
+         * page
          */
         {
             auto latch_fu =
                 daemon_context.m_conn_manager.GetMasterConnection().erpc_conn->call<CortPromise>(
-                    rpc_master::latchRemotePage, {
-                                                     .mac_id = daemon_context.m_daemon_id,
-                                                     .isWriteLock = true,
-                                                     .page_id = page_id,
-                                                     .page_id_swap = swapout_page_id,
-                                                 });
+                    rpc_master::tryMigratePage, {
+                                                    .mac_id = daemon_context.m_daemon_id,
+                                                    .exclusive = true,
+                                                    .page_id = page_id,
+                                                    .page_heat = remote_page_current_hot.last_heat,
+                                                    .page_id_swap = swapout_page_id,
+                                                });
 
-            /**
-             * 2.1 If there is a page that needs to be swapped out, broadcast the DN that has the
-             * ref of the current page to be swapped out, delete its ref, and notify all clients
-             * that have accessed the page under the current rack to delete the corresponding cache.
-             */
-            if (need_swap) {
-                // DLOG("swap delPageRefAndCacheBroadcast");
-                delPageRefAndCacheBroadcast(daemon_context, swapout_page_id, swapout_page_meta);
+            /* 2.1 Waiting for latch to finish */
+            auto& try_resp = latch_fu.get();
+            if (!try_resp.ret) {
+                // If migrate failed, which means other DN is swapping same page, we clear the page
+                // heat to delay the next swap.
+                swapin_page_meta->remote_ref_meta->ClearHeat();
+                goto retry;
             }
-
-            /* 2.2 Waiting for latch to finish */
-            latch_fu.get();
         }
+
+        /* Start Page Swap */
+
+        daemon_context.m_stats.page_swap_sample();
+
+        /**
+         * 2.2 If there is a page that needs to be swapped out, broadcast the DN that has the
+         * ref of the current page to be swapped out, delete its ref, and notify all clients
+         * that have accessed the page under the current rack to delete the corresponding cache.
+         */
+        if (need_swap) {
+            // DLOG("swap delPageRefAndCacheBroadcast");
+            delPageRefAndCacheBroadcast(daemon_context, swapout_page_id, swapout_page_meta);
+        }
+
+        // Alloc swapping page area
+        reserve_page_vm_meta = daemon_context.m_page_table.AllocPageMemory();
+        // DLOG("reserve_page_vm_meta->offset = %#lx", reserve_page_vm_meta->cxl_memory_offset);
+        swapin_addr = daemon_context.GetVirtualAddr(reserve_page_vm_meta->cxl_memory_offset);
+        swapin_mr = daemon_context.GetMR(reinterpret_cast<void*>(swapin_addr));
+        swapin_key = swapin_mr->rkey;
 
         DLOG_ASSERT(swapin_page_meta->remote_ref_meta != nullptr, "Can't find page %lu's ref",
                     page_id);
-        // Clear the ref of the moved page
+        // Clear the ref of the moved page. We have to make sure that the metadata is all wiped out
+        // before migration so that we can prevent errors caused by concurrent operations.
         daemon_context.m_page_table.EraseRemotePageRefMeta(swapin_page_meta);
 
         /* 3. Send page migration to daemon (tryMigratePage), wait for it to complete migration,
          * return to RPC */
         {
             auto migrate_fu = dest_daemon_conn->erpc_conn->call<CortPromise>(
-                rpc_daemon::tryMigratePage, {
-                                                .mac_id = daemon_context.m_daemon_id,
-                                                .page_id = page_id,  // Expectation migration page
-                                                .swap_page_id = swapout_page_id,
-                                                // TODO: hot score
-                                                .hot_score = 0x2342345,
-                                                .swapout_page_addr = swapout_addr,
-                                                .swapin_page_addr = swapin_addr,
-                                                .swapout_page_rkey = swapout_key,
-                                                .swapin_page_rkey = swapin_key,
-                                            });
+                rpc_daemon::MigratePage, {
+                                             .mac_id = daemon_context.m_daemon_id,
+                                             .page_id = page_id,  // Expectation migration page
+                                             .swap_page_id = swapout_page_id,
+                                             .swapout_page_addr = swapout_addr,
+                                             .swapin_page_addr = swapin_addr,
+                                             .swapout_page_rkey = swapout_key,
+                                             .swapin_page_rkey = swapin_key,
+                                         });
 
             auto& migrate_resp = migrate_fu.get();
 
-            is_swap = migrate_resp.swaped;
+            is_swap = migrate_resp.swapped;
         }
 
         /* 4. Migration complete, update tlb */
@@ -511,7 +540,7 @@ retry:
         {
             auto unlatch_fu =
                 daemon_context.m_conn_manager.GetMasterConnection().erpc_conn->call<CortPromise>(
-                    rpc_master::unLatchPageAndSwap,
+                    rpc_master::MigratePageDone,
                     {
                         .mac_id = daemon_context.m_daemon_id,
                         .page_id = page_id,
@@ -571,6 +600,7 @@ void allocPage(DaemonContext& daemon_context, DaemonToClientConnection& client_c
         PageMetadata* page_meta =
             daemon_context.m_page_table.FindOrCreatePageMeta(start_page_id + c);
         daemon_context.m_page_table.ApplyPageMemory(page_meta, page_vm_meta);
+        daemon_context.m_page_table.unvisited_pages.push({start_page_id + c, page_meta});
     }
 
     resp_handle.Init();
@@ -650,8 +680,8 @@ void delPageRDMARef(DaemonContext& daemon_context, DaemonToDaemonConnection& dae
     reply.ret = true;
 }
 
-void tryMigratePage(DaemonContext& daemon_context, DaemonToDaemonConnection& daemon_connection,
-                    TryMigratePageRequest& req, ResponseHandle<TryMigratePageReply>& resp_handle) {
+void MigratePage(DaemonContext& daemon_context, DaemonToDaemonConnection& daemon_connection,
+                 MigratePageRequest& req, ResponseHandle<MigratePageReply>& resp_handle) {
     daemon_context.m_stats.page_swap_sample();
 
     PageMetadata* page_meta = daemon_context.m_page_table.FindOrCreatePageMeta(req.page_id);
@@ -661,8 +691,6 @@ void tryMigratePage(DaemonContext& daemon_context, DaemonToDaemonConnection& dae
     DLOG_ASSERT(page_meta->vm_meta != nullptr, "Can't find page %lu", req.page_id);
     // DLOG("DN: %u recv tryMigratePage for page %lu. swap page = %lu", daemon_context.m_daemon_id,
     //      req.page_id, req.swap_page_id);
-
-    // TODO: hot score reject
 
     // Broadcast the DN that has the ref of the current page, delete the ref, and notify all clients
     // that have accessed the page under the current rack to delete the corresponding cache.
@@ -733,11 +761,12 @@ void tryMigratePage(DaemonContext& daemon_context, DaemonToDaemonConnection& dae
         PageMetadata* swap_page_meta =
             daemon_context.m_page_table.FindOrCreatePageMeta(req.swap_page_id);
         daemon_context.m_page_table.ApplyPageMemory(swap_page_meta, local_page_vm_meta);
+        daemon_context.m_page_table.unvisited_pages.push({req.swap_page_id, swap_page_meta});
     }
 
     resp_handle.Init();
     auto& reply = resp_handle.Get();
-    reply.swaped = is_swap;
+    reply.swapped = is_swap;
     // DLOG("DN %u: finished migrate!", daemon_context.m_daemon_id);
 }
 

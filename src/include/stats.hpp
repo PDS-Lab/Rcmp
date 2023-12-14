@@ -6,6 +6,7 @@
 #include <deque>
 #include <random>
 #include <vector>
+
 #include "lock.hpp"
 
 class Histogram {
@@ -37,24 +38,29 @@ class Histogram {
 
 class FreqStats {
    public:
-    FreqStats(size_t max_recent_record, float lambda, uint64_t restart_interval);
-    ~FreqStats() = default;
+    struct Heatness {
+        uint64_t last_time;
+        float last_heat;
 
-    size_t add(uint64_t t);
+        Heatness() : last_time(0), last_heat(0) {}
+
+        static Heatness one(uint64_t t);
+        Heatness heat(uint64_t t) const;
+        void clear();
+
+        Heatness operator+(const Heatness &b) const;
+    };
+
+    FreqStats(uint64_t half_life_us);
+
+    Heatness add_wr(uint64_t t);
+    Heatness add_rd(uint64_t t);
     void clear();
-    size_t freq(uint64_t t) const;
-    uint64_t start() const;
-    uint64_t last() const;
-    void dump(size_t &cnt, std::vector<uint64_t> &time_v);
+
+    Heatness m_wr_heat;
+    Heatness m_rd_heat;
 
    private:
-    // std::atomic<size_t> m_cnt;
-    size_t m_cnt;
-    size_t m_max_recent_record;
-    std::deque<uint64_t> m_time_q;
-    uint64_t m_last_time;
-    uint64_t m_start_time;
-    uint64_t m_restart_interval;
     float m_lambda;
 
     static Mutex m_exp_decays_lck;

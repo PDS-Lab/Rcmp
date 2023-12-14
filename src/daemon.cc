@@ -48,8 +48,7 @@ void DaemonContext::InitCXLPool() {
     DLOG("max_swap_page_num: %lu", m_page_table.max_swap_page_num);
     DLOG("max_data_page_num: %lu", m_page_table.max_data_page_num);
 
-    m_page_table.max_recent_record = 8;
-    m_page_table.hot_decay_lambda = m_options.hot_decay_lambda;
+    m_page_table.heat_half_life_us = m_options.heat_half_life_us;
 }
 
 void DaemonContext::InitRPCNexus() {
@@ -65,8 +64,8 @@ void DaemonContext::InitRPCNexus() {
                                         bind_erpc_func<false>(rpc_daemon::allocPageMemory));
     m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::delPageRDMARef)::rpc_type,
                                         bind_erpc_func<false>(rpc_daemon::delPageRDMARef));
-    m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::tryMigratePage)::rpc_type,
-                                        bind_erpc_func<false>(rpc_daemon::tryMigratePage));
+    m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::MigratePage)::rpc_type,
+                                        bind_erpc_func<false>(rpc_daemon::MigratePage));
     m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::tryDelPage)::rpc_type,
                                         bind_erpc_func<false>(rpc_daemon::tryDelPage));
 
@@ -283,7 +282,7 @@ int main(int argc, char *argv[]) {
     cmd.add<rack_id_t>("rack_id");
     cmd.add<std::string>("cxl_devdax_path");
     cmd.add<size_t>("cxl_memory_size");
-    cmd.add<float>("hot_decay");
+    cmd.add<float>("heat_half_life_us");
     cmd.add<size_t>("hot_swap_watermark");
     bool ret = cmd.parse(argc, argv);
     DLOG_ASSERT(ret);
@@ -300,7 +299,7 @@ int main(int argc, char *argv[]) {
     options.swap_zone_size = 100ul << 20;
     options.max_client_limit = 32;
     options.prealloc_fiber_num = 8;
-    options.hot_decay_lambda = cmd.get<float>("hot_decay");
+    options.heat_half_life_us = cmd.get<float>("heat_half_life_us");
     options.hot_swap_watermark = cmd.get<size_t>("hot_swap_watermark");
 
     DaemonContext &daemon_context = DaemonContext::getInstance();

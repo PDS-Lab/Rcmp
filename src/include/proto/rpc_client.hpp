@@ -31,10 +31,14 @@ void getCurrentWriteData(ClientContext& client_context, ClientToDaemonConnection
 
 struct GetPagePastAccessFreqRequest {
     mac_id_t mac_id;
+    int num_detect_pages;
+    page_id_t pages[128];
 };
 struct GetPagePastAccessFreqReply {
-    page_id_t oldest_page_id;
-    uint64_t last_access_ts;
+    float avg_heat;
+    page_id_t coldest_page_id;
+    float coldest_page_wr_heat;
+    float coldest_page_rd_heat;
 };
 void getPagePastAccessFreq(ClientContext& client_context,
                            ClientToDaemonConnection& daemon_connection,

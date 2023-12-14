@@ -35,8 +35,10 @@ void PageDirectory::RemovePage(RackMacTable *rack_table, page_id_t page_id) {
 
 void PageTableManager::EraseRemotePageRefMeta(PageMetadata *page_meta) {
     std::unique_lock<CortMutex> page_remote_ref_lock(page_meta->remote_ref_lock);
-    delete page_meta->remote_ref_meta;
-    page_meta->remote_ref_meta = nullptr;
+    if (page_meta->remote_ref_meta) {
+        delete page_meta->remote_ref_meta;
+        page_meta->remote_ref_meta = nullptr;
+    }
 }
 
 PageVMMapMetadata *PageTableManager::AllocPageMemory() {
@@ -69,20 +71,22 @@ void PageTableManager::CancelPageMemory(PageMetadata *page_meta) {
     FreePageMemory(tmp);
 }
 
-void PageTableManager::RandomPickUnvisitVMPage(bool force, bool &ret, page_id_t &page_id,
-                                               PageMetadata *&page_meta) {
-    thread_local std::mt19937 eng(rand());
-
-    table.random_foreach_all(eng, [&](std::pair<const page_id_t, PageMetadata *> &p) {
-        if (p.second->vm_meta != nullptr && (force || p.second->vm_meta->ref_client.empty()) &&
-            p.second->page_ref_lock.try_lock()) {
+bool PageTableManager::PickUnvisitVMPage(page_id_t &page_id, PageMetadata *&page_meta) {
+    while (!unvisited_pages.empty()) {
+        auto p = unvisited_pages.front();
+        unvisited_pages.pop();
+        if (!p.second->vm_meta || p.second->vm_meta->ref_client.empty()) {
             page_id = p.first;
             page_meta = p.second;
-            ret = true;
-            return false;
+            return true;
         }
-        return true;
-    });
+    }
+    return false;
+}
+
+std::vector<std::pair<page_id_t, PageMetadata *>> PageTableManager::RandomPickVMPage(size_t n) {
+    thread_local std::mt19937 eng(rand());
+    return table.getRandomN(eng, n);
 }
 
 PageCacheTable::~PageCacheTable() {
@@ -95,14 +99,23 @@ PageCacheTable::~PageCacheTable() {
 }
 
 LocalPageCacheMeta *PageCacheTable::FindOrCreateCacheMeta(page_id_t page_id) {
-    // std::shared_lock<SharedMutex> lck(table_lock);
+    std::shared_lock<SharedMutex> lck(table_lock);
     auto it = table.find(page_id);
     if (it == table.end()) {
-        // lck.unlock();
-        // std::unique_lock<SharedMutex> lck;
+        lck.unlock();
+        std::unique_lock<SharedMutex> lck;
         it = table.insert({page_id, new LocalPageCacheMeta()}).first;
     }
     return it->second;
+}
+
+LocalPageCache *PageCacheTable::FindCache(page_id_t page_id) {
+    std::shared_lock<SharedMutex> lck(table_lock);
+    auto it = table.find(page_id);
+    if (it == table.end()) {
+        return nullptr;
+    }
+    return it->second->cache;
 }
 
 LocalPageCache *PageCacheTable::FindCache(LocalPageCacheMeta *cache_meta) const {

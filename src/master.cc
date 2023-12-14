@@ -81,8 +81,10 @@ void MasterContext::InitRPCNexus() {
                                         bind_erpc_func<false>(rpc_master::latchRemotePage));
     m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_master::unLatchRemotePage)::rpc_type,
                                         bind_erpc_func<false>(rpc_master::unLatchRemotePage));
-    m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_master::unLatchPageAndSwap)::rpc_type,
-                                        bind_erpc_func<false>(rpc_master::unLatchPageAndSwap));
+    m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_master::tryMigratePage)::rpc_type,
+                                        bind_erpc_func<false>(rpc_master::tryMigratePage));
+    m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_master::MigratePageDone)::rpc_type,
+                                        bind_erpc_func<false>(rpc_master::MigratePageDone));
 
     erpc::SMHandlerWrap smhw;
     smhw.set_empty();

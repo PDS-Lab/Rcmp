@@ -127,9 +127,8 @@ void getRackDaemonByPageID(MasterContext& master_context,
 
 struct LatchRemotePageRequest {
     mac_id_t mac_id;
-    bool isWriteLock;
+    bool exclusive;
     page_id_t page_id;
-    page_id_t page_id_swap;
 };
 struct LatchRemotePageReply {
     rack_id_t dest_rack_id;
@@ -149,6 +148,7 @@ void latchRemotePage(MasterContext& master_context, MasterToDaemonConnection& da
 
 struct UnLatchRemotePageRequest {
     mac_id_t mac_id;
+    bool exclusive;
     page_id_t page_id;
 };
 struct UnLatchRemotePageReply {
@@ -166,7 +166,29 @@ void unLatchRemotePage(MasterContext& master_context, MasterToDaemonConnection& 
                        UnLatchRemotePageRequest& req,
                        ResponseHandle<UnLatchRemotePageReply>& resp_handle);
 
-struct UnLatchPageAndSwapRequest {
+struct tryMigratePageRequest {
+    mac_id_t mac_id;
+    bool exclusive;
+    page_id_t page_id;
+    float page_heat;
+    page_id_t page_id_swap;
+};
+struct tryMigratePageReply {
+    bool ret;
+};
+/**
+ * @brief Try migrate page, if success, all pages will locked. You need call `MigratePageDone` when
+ * migrating is done.
+ *
+ * @param master_context
+ * @param daemon_connection
+ * @param req
+ * @param resp_handle
+ */
+void tryMigratePage(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
+                    tryMigratePageRequest& req, ResponseHandle<tryMigratePageReply>& resp_handle);
+
+struct MigratePageDoneRequest {
     mac_id_t mac_id;
     page_id_t page_id;            // Swapin page (originally at the far end)
     mac_id_t new_daemon_id;       // Your own daemon id
@@ -175,7 +197,7 @@ struct UnLatchPageAndSwapRequest {
     mac_id_t new_daemon_id_swap;  // The peer's daemon id
     rack_id_t new_rack_id_swap;   // The peer's rack id
 };
-struct UnLatchPageAndSwapReply {
+struct MigratePageDoneReply {
     bool ret;
 };
 /**
@@ -186,8 +208,8 @@ struct UnLatchPageAndSwapReply {
  * @param req
  * @param resp_handle
  */
-void unLatchPageAndSwap(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
-                        UnLatchPageAndSwapRequest& req,
-                        ResponseHandle<UnLatchPageAndSwapReply>& resp_handle);
+void MigratePageDone(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
+                     MigratePageDoneRequest& req,
+                     ResponseHandle<MigratePageDoneReply>& resp_handle);
 
 }  // namespace rpc_master

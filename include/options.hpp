@@ -40,9 +40,9 @@ class DaemonOptions {
     size_t max_client_limit = 32;
     size_t swap_zone_size = 64ul << 20;
 
-    int prealloc_fiber_num = 32;    // Number of pre-allocated boost coroutine
-    float hot_decay_lambda = 0.04;  // Page Heat decay coefficient
-    size_t hot_swap_watermark = 3;  // Page Swap heat threshold
+    int prealloc_fiber_num = 32;     // Number of pre-allocated boost coroutine
+    float heat_half_life_us = 1000;  // Page Heat decay coefficient
+    float hot_swap_watermark = 3;    // Page Swap heat threshold
 
     int cm_qp_num = 2;  // Number of QPs connected to other daemons
 };

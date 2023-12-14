@@ -7,6 +7,7 @@
 #include "allocator.hpp"
 #include "common.hpp"
 #include "concurrent_hashmap.hpp"
+#include "hashtable.hpp"
 #include "lock.hpp"
 #include "robin_hood.h"
 #include "stats.hpp"
@@ -50,15 +51,17 @@ struct PageVMMapMetadata {
 };
 
 struct RemotePageRefMeta {
-    uint64_t Update() { return stats.add(rdtsc() / 1e3); }
-
+    int version;
     FreqStats stats;
     uintptr_t remote_page_addr;
     uint32_t remote_page_rkey;
     DaemonToDaemonConnection *remote_page_daemon_conn;
 
-    RemotePageRefMeta(size_t max_recent_record, float hot_decay_lambda)
-        : stats(max_recent_record, hot_decay_lambda, hot_stat_freq_timeout_interval) {}
+    RemotePageRefMeta(uint64_t half_life_us) : stats(half_life_us), version(rand()) {}
+
+    FreqStats::Heatness UpdateWrite() { return stats.add_wr(rdtsc() / 1e3); }
+    FreqStats::Heatness UpdateRead() { return stats.add_rd(rdtsc() / 1e3); }
+    void ClearHeat() { stats.clear(); }
 };
 
 struct PageMetadata {
@@ -90,8 +93,7 @@ struct PageTableManager {
         if (page_meta->remote_ref_meta == nullptr) {
             std::unique_lock<CortMutex> page_remote_ref_lock(page_meta->remote_ref_lock);
             if (page_meta->remote_ref_meta == nullptr) {
-                RemotePageRefMeta *remote_ref_meta =
-                    new RemotePageRefMeta(max_recent_record, hot_decay_lambda);
+                RemotePageRefMeta *remote_ref_meta = new RemotePageRefMeta(heat_half_life_us);
                 fn(remote_ref_meta, std::move(args)...);
                 page_meta->remote_ref_meta = remote_ref_meta;
             }
@@ -103,8 +105,7 @@ struct PageTableManager {
         if (page_meta->remote_ref_meta == nullptr) {
             std::unique_lock<CortMutex> page_remote_ref_lock(page_meta->remote_ref_lock);
             if (page_meta->remote_ref_meta == nullptr) {
-                page_meta->remote_ref_meta =
-                    new RemotePageRefMeta(max_recent_record, hot_decay_lambda);
+                page_meta->remote_ref_meta = new RemotePageRefMeta(heat_half_life_us);
             }
         }
         return page_meta->remote_ref_meta;
@@ -115,8 +116,8 @@ struct PageTableManager {
     void FreePageMemory(PageVMMapMetadata *page_vm_meta);
     void ApplyPageMemory(PageMetadata *page_meta, PageVMMapMetadata *page_vm_meta);
     void CancelPageMemory(PageMetadata *page_meta);
-    void RandomPickUnvisitVMPage(bool force, bool &ret, page_id_t &page_id,
-                                 PageMetadata *&page_meta);
+    bool PickUnvisitVMPage(page_id_t &page_id, PageMetadata *&page_meta);
+    std::vector<std::pair<page_id_t, PageMetadata *>> RandomPickVMPage(size_t n);
 
     // TODO: release page meta resource when vm_meta and remote_ref_meta are nullptr
 
@@ -128,8 +129,7 @@ struct PageTableManager {
 
     size_t GetCurrentUsedPageNum() const { return current_used_page_num; }
 
-    size_t max_recent_record;
-    float hot_decay_lambda;
+    uint64_t heat_half_life_us;
 
     size_t total_page_num;     // Number of all pages
     size_t max_swap_page_num;  // Number of pages in swap area
@@ -137,18 +137,21 @@ struct PageTableManager {
 
     std::atomic<size_t> current_used_page_num;  // Number of data pages currently in use
 
-    ConcurrentHashMap<page_id_t, PageMetadata *, CortSharedMutex> table;
+    RandomAccessMap<page_id_t, PageMetadata *, CortSharedMutex> table;
+    std::queue<std::pair<page_id_t, PageMetadata *>> unvisited_pages;  // lock unsafe
     std::unique_ptr<SingleAllocator<page_size>> page_allocator;
 };
 
 struct LocalPageCache {
-    uint64_t Update() { return stats.add(rdtsc() / 1000); }
+    FreqStats::Heatness UpdateWrite() { return stats.add_wr(rdtsc() / 1000); }
+    FreqStats::Heatness UpdateRead() { return stats.add_rd(rdtsc() / 1000); }
+    FreqStats::Heatness WriteHeat() { return stats.m_wr_heat.heat(rdtsc() / 1000); }
+    FreqStats::Heatness ReadHeat() { return stats.m_rd_heat.heat(rdtsc() / 1000); }
 
     FreqStats stats;
     offset_t offset;
 
-    LocalPageCache(size_t max_recent_record)
-        : stats(max_recent_record, 0, hot_stat_freq_timeout_interval) {}
+    LocalPageCache(uint64_t half_life_us) : stats(half_life_us) {}
 };
 
 struct LocalPageCacheMeta {
@@ -160,6 +163,7 @@ struct PageCacheTable {
     ~PageCacheTable();
 
     LocalPageCacheMeta *FindOrCreateCacheMeta(page_id_t page_id);
+    LocalPageCache *FindCache(page_id_t page_id);
     LocalPageCache *FindCache(LocalPageCacheMeta *cache_meta) const;
     LocalPageCache *AddCache(LocalPageCacheMeta *cache_meta, offset_t offset);
     void RemoveCache(LocalPageCacheMeta *cache_meta);

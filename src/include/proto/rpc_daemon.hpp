@@ -221,19 +221,18 @@ struct DelPageRDMARefReply {
 void delPageRDMARef(DaemonContext& daemon_context, DaemonToDaemonConnection& daemon_connection,
                     DelPageRDMARefRequest& req, ResponseHandle<DelPageRDMARefReply>& resp_handle);
 
-struct TryMigratePageRequest {
+struct MigratePageRequest {
     mac_id_t mac_id;
     page_id_t page_id;
     page_id_t swap_page_id;
-    uint64_t hot_score;
     uintptr_t swapout_page_addr;  // When `swapout_page_addr == 0` and `swapout_page_rkey == 0`, it
                                   // means no swapout.
     uintptr_t swapin_page_addr;
     uint32_t swapout_page_rkey;
     uint32_t swapin_page_rkey;
 };
-struct TryMigratePageReply {
-    bool swaped;
+struct MigratePageReply {
+    bool swapped;
 };
 /**
  * @brief
@@ -243,8 +242,8 @@ struct TryMigratePageReply {
  * @param req
  * @param resp_handle
  */
-void tryMigratePage(DaemonContext& daemon_context, DaemonToDaemonConnection& daemon_connection,
-                    TryMigratePageRequest& req, ResponseHandle<TryMigratePageReply>& resp_handle);
+void MigratePage(DaemonContext& daemon_context, DaemonToDaemonConnection& daemon_connection,
+                    MigratePageRequest& req, ResponseHandle<MigratePageReply>& resp_handle);
 
 struct TryDelPageRequest {
     mac_id_t mac_id;

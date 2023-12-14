@@ -212,48 +212,15 @@ void latchRemotePage(MasterContext& master_context, MasterToDaemonConnection& da
                      LatchRemotePageRequest& req,
                      ResponseHandle<LatchRemotePageReply>& resp_handle) {
     DLOG_ASSERT(req.page_id != invalid_page_id, "Invalid Page");
-    DLOG_ASSERT(req.page_id != req.page_id_swap, "Can't latch same page %lu", req.page_id);
 
     PageRackMetadata* page_meta = master_context.m_page_directory.FindPage(req.page_id);
 
     DLOG_ASSERT(page_meta != nullptr, "Can't find page %lu", req.page_id);
 
-    if (req.isWriteLock) {
-        if (req.page_id_swap == invalid_page_id) {
-            page_meta->latch.lock();
-        } else {
-            PageRackMetadata* page_swap_meta =
-                master_context.m_page_directory.FindPage(req.page_id_swap);
-
-            DLOG_ASSERT(page_swap_meta != nullptr, "Can't find page %lu", req.page_id_swap);
-
-            // Smaller ids are preferred for locking to avoid deadlocks.
-            if (req.page_id < req.page_id_swap) {
-                page_meta->latch.lock();
-                page_swap_meta->latch.lock();
-            } else {
-                page_swap_meta->latch.lock();
-                page_meta->latch.lock();
-            }
-        }
+    if (req.exclusive) {
+        page_meta->latch.lock();
     } else {
-        if (req.page_id_swap == invalid_page_id) {
-            page_meta->latch.lock_shared();
-        } else {
-            PageRackMetadata* page_swap_meta =
-                master_context.m_page_directory.FindPage(req.page_id_swap);
-
-            DLOG_ASSERT(page_swap_meta != nullptr, "Can't find page %lu", req.page_id_swap);
-
-            // Smaller ids are preferred for locking to avoid deadlocks.
-            if (req.page_id < req.page_id_swap) {
-                page_meta->latch.lock_shared();
-                page_swap_meta->latch.lock_shared();
-            } else {
-                page_swap_meta->latch.lock_shared();
-                page_meta->latch.lock_shared();
-            }
-        }
+        page_meta->latch.lock_shared();
     }
 
     resp_handle.Init();
@@ -267,16 +234,52 @@ void unLatchRemotePage(MasterContext& master_context, MasterToDaemonConnection& 
                        ResponseHandle<UnLatchRemotePageReply>& resp_handle) {
     PageRackMetadata* page_meta = master_context.m_page_directory.FindPage(req.page_id);
 
-    page_meta->latch.unlock_shared();
+    if (req.exclusive) {
+        page_meta->latch.unlock();
+    } else {
+        page_meta->latch.unlock_shared();
+    }
 
     resp_handle.Init();
     auto& reply = resp_handle.Get();
     reply.ret = true;
 }
 
-void unLatchPageAndSwap(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
-                        UnLatchPageAndSwapRequest& req,
-                        ResponseHandle<UnLatchPageAndSwapReply>& resp_handle) {
+void tryMigratePage(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
+                    tryMigratePageRequest& req, ResponseHandle<tryMigratePageReply>& resp_handle) {
+    DLOG_ASSERT(req.page_id != invalid_page_id, "Invalid Page");
+    DLOG_ASSERT(req.page_id != req.page_id_swap, "Can't latch same page %lu", req.page_id);
+
+    PageRackMetadata* page_meta = master_context.m_page_directory.FindPage(req.page_id);
+
+    DLOG_ASSERT(page_meta != nullptr, "Can't find page %lu", req.page_id);
+
+    if (req.page_id_swap == invalid_page_id) {
+        page_meta->latch.lock();
+    } else {
+        PageRackMetadata* page_swap_meta =
+            master_context.m_page_directory.FindPage(req.page_id_swap);
+
+        DLOG_ASSERT(page_swap_meta != nullptr, "Can't find page %lu", req.page_id_swap);
+
+        // Smaller ids are preferred for locking to avoid deadlocks.
+        if (req.page_id < req.page_id_swap) {
+            page_meta->latch.lock();
+            page_swap_meta->latch.lock();
+        } else {
+            page_swap_meta->latch.lock();
+            page_meta->latch.lock();
+        }
+    }
+
+    resp_handle.Init();
+    auto& reply = resp_handle.Get();
+    reply.ret = true;
+}
+
+void MigratePageDone(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,
+                     MigratePageDoneRequest& req,
+                     ResponseHandle<MigratePageDoneReply>& resp_handle) {
     PageRackMetadata* page_meta = master_context.m_page_directory.FindPage(req.page_id);
 
     page_meta->rack_id = req.new_rack_id;

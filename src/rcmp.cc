@@ -93,7 +93,7 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
         m_impl->m_stats.local_page_hit_sample();
     }
 
-    page_cache->Update();
+    page_cache->UpdateRead();
 
     m_impl->m_stats.page_cache_update_sample(perf_stat_timer);
 
@@ -180,7 +180,7 @@ Status PoolContext::Write(GAddr gaddr, size_t size, const void *buf) {
         m_impl->m_stats.local_page_hit_sample();
     }
 
-    page_cache->Update();
+    page_cache->UpdateWrite();
 
     m_impl->m_stats.page_cache_update_sample(perf_stat_timer);
 
@@ -248,7 +248,7 @@ Status PoolContext::CAS(GAddr gaddr, uint64_t &expected, uint64_t desired, bool 
         m_impl->m_stats.local_page_hit_sample();
     }
 
-    page_cache->Update();
+    page_cache->UpdateWrite();
 
     m_impl->m_stats.page_cache_update_sample(perf_stat_timer);
 
@@ -281,7 +281,7 @@ GAddr PoolContext::AllocPage(size_t count) {
 }
 
 Status PoolContext::FreePage(GAddr gaddr, size_t count) {
-    DLOG_ASSERT(gaddr % page_size == 0, "gaddr must align by page_size");
+    // DLOG_ASSERT(gaddr % page_size == 0, "gaddr must align by page_size");
 
     page_id_t page_id = GetPageID(gaddr);
     auto fu = m_impl->m_local_rack_daemon_connection.msgq_conn->call<SpinPromise>(

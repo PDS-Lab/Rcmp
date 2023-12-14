@@ -97,56 +97,60 @@ Histogram Histogram::merge(Histogram &other) {
 Mutex FreqStats::m_exp_decays_lck;
 std::vector<float> FreqStats::m_exp_decays;
 
-FreqStats::FreqStats(size_t max_recent_record, float lambda, uint64_t restart_interval)
-    : m_max_recent_record(max_recent_record),
-      m_restart_interval(restart_interval),
-      m_cnt(0),
-      m_lambda(lambda) {
+FreqStats::FreqStats(uint64_t half_life_us)
+    : m_lambda(0.693147180559945309417232121458176568 /* ln 2*/ / half_life_us) {
+    if (m_exp_decays.size() >= half_life_us * 4) {
+        return;
+    }
+
     std::unique_lock<Mutex> lck(m_exp_decays_lck);
-    for (int i = m_exp_decays.size(); i < m_restart_interval; ++i) {
+    for (int i = m_exp_decays.size(); i < half_life_us * 4; ++i) {
         m_exp_decays.push_back(exp(-m_lambda * i));
     }
 }
 
-size_t FreqStats::add(uint64_t t) {
-    size_t pre;
-    uint64_t delta_t = t - m_last_time;
-    if (delta_t >= m_restart_interval) {
-        pre = 1;
-        // m_cnt.store(1, std::memory_order::memory_order_relaxed);
-        m_cnt++;
-        m_start_time = t;
-    } else {
-        // pre =
-        //     m_cnt.fetch_add(1, std::memory_order::memory_order_relaxed) * m_exp_decays[delta_t] +
-        //     1;
-        pre = m_cnt * m_exp_decays[delta_t] + 1;
-        m_cnt++;
-    }
-    m_last_time = t;
-    return pre;
+FreqStats::Heatness FreqStats::add_wr(uint64_t t) {
+    m_wr_heat = m_wr_heat + Heatness::one(t);
+    return m_wr_heat;
+}
+
+FreqStats::Heatness FreqStats::add_rd(uint64_t t) {
+    m_rd_heat = m_rd_heat + Heatness::one(t);
+    return m_rd_heat;
 }
 
 void FreqStats::clear() {
-    // m_cnt.store(0, std::memory_order::memory_order_relaxed);
-    m_cnt = 0;
-    m_time_q.clear();
+    m_wr_heat.clear();
+    m_wr_heat.clear();
 }
 
-size_t FreqStats::freq(uint64_t t) const {
-    uint64_t delta_t = t - m_last_time;
-    if (delta_t >= m_restart_interval) {
-        return 0;
+FreqStats::Heatness FreqStats::Heatness::one(uint64_t t) {
+    Heatness h;
+    h.last_time = t;
+    h.last_heat = 1;
+    return h;
+}
+
+FreqStats::Heatness FreqStats::Heatness::heat(uint64_t t) const {
+    Heatness h;
+    h.last_time = t;
+    uint64_t delta = t - last_time;
+    if (t >= FreqStats::m_exp_decays.size()) {
+        h.last_heat = last_heat * std::pow(FreqStats::m_exp_decays[1], delta);
     } else {
-        // return m_cnt.load(std::memory_order::memory_order_relaxed) * m_exp_decays[delta_t];
-        return m_cnt * m_exp_decays[delta_t];
+        h.last_heat = last_heat * FreqStats::m_exp_decays[delta];
     }
+    return h;
 }
-uint64_t FreqStats::start() const { return m_start_time; }
-uint64_t FreqStats::last() const { return m_last_time; }
 
-void FreqStats::dump(size_t &cnt, std::vector<uint64_t> &time_v) {
-    // cnt = m_cnt.load(std::memory_order::memory_order_relaxed);
-    cnt = m_cnt;
-    time_v.assign(m_time_q.begin(), m_time_q.end());
+void FreqStats::Heatness::clear() {
+    last_time = 0;
+    last_heat = 0;
+}
+
+FreqStats::Heatness FreqStats::Heatness::operator+(const FreqStats::Heatness &b) const {
+    FreqStats::Heatness h;
+    h.last_time = std::max(last_time, b.last_time);
+    h.last_heat = heat(h.last_time).last_heat + b.heat(h.last_time).last_heat;
+    return h;
 }
