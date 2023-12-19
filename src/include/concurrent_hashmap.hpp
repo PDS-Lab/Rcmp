@@ -157,28 +157,6 @@ class ConcurrentHashMap {
         }
     }
 
-    /**
-     * @tparam F
-     * @param f bool(std::pair<const K, V> &)，Returning false means the traversal is terminated.
-     */
-    template <typename Genrator, typename F>
-    void random_foreach_all(Genrator g, F&& f) {
-        const size_t i_ = g() % BucketNum;
-        size_t i = i_;
-        do {
-            auto& shard = m_shards[i];
-            auto& map = shard.m_map;
-
-            std::shared_lock<__SharedMutex> guard(shard.m_lock);
-            for (auto& p : map) {
-                if (!f(p)) {
-                    return;
-                }
-            }
-            i = (i + 1) % BucketNum;
-        } while (i != i_);
-    }
-
    private:
     struct CACHE_ALIGN Shard {
         __SharedMutex m_lock;

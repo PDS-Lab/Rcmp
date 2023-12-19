@@ -21,23 +21,19 @@ void getPagePastAccessFreq(ClientContext& client_context,
                            ResponseHandle<GetPagePastAccessFreqReply>& resp_handle) {
     page_id_t coldest_page = invalid_page_id;
     float coldest_heat = MAXFLOAT;
-    float coldest_page_wr_heat, coldest_page_rd_heat;
     float sum_heat = 0, num_found = 0;
 
     for (int i = 0; i < req.num_detect_pages; i++) {
         // Getting the access heat of a sampled page
         bool found = false;
-        FreqStats::Heatness page_heat, page_wr_heat, page_rd_heat;
+        FreqStats::Heatness page_heat;
         client_context.m_tcache_mgr.foreach_all([&](PageThreadLocalCache& tcache) {
             auto cache = tcache.page_cache_table.FindCache(req.pages[i]);
             if (cache) {
-                page_wr_heat = page_wr_heat + cache->WriteHeat();
-                page_rd_heat = page_rd_heat + cache->ReadHeat();
+                page_heat = page_heat + cache->Heat();
                 found = true;
             }
         });
-
-        page_heat = page_wr_heat + page_rd_heat;
 
         if (found) {
             ++num_found;
@@ -46,8 +42,6 @@ void getPagePastAccessFreq(ClientContext& client_context,
             if (coldest_heat > page_heat.last_heat) {
                 coldest_page = req.pages[i];
                 coldest_heat = page_heat.last_heat;
-                coldest_page_wr_heat = page_wr_heat.last_heat;
-                coldest_page_rd_heat = page_rd_heat.last_heat;
             }
         }
     }
@@ -59,8 +53,7 @@ void getPagePastAccessFreq(ClientContext& client_context,
     resp_handle.Init();
     auto& reply = resp_handle.Get();
     reply.coldest_page_id = coldest_page;
-    reply.coldest_page_wr_heat = coldest_page_wr_heat;
-    reply.coldest_page_rd_heat = coldest_page_rd_heat;
+    reply.coldest_page_heat = coldest_heat;
     reply.avg_heat = avg_heat;
 }
 

@@ -182,7 +182,14 @@ retry:
             });
 
     int remote_page_ref_meta_version = remote_page_ref_meta->version;
-    FreqStats::Heatness remote_page_current_hot = remote_page_ref_meta->UpdateWrite();
+    FreqStats::Heatness remote_page_current_hot;
+    if (req.type == GetPageCXLRefOrProxyRequest::READ) {
+        remote_page_current_hot =
+            remote_page_ref_meta->UpdateReadHeat() + remote_page_ref_meta->WriteHeat();
+    } else {
+        remote_page_current_hot =
+            remote_page_ref_meta->UpdateWriteHeat() + remote_page_ref_meta->ReadHeat();
+    }
     // Swap only when just equal to the watermark
     if (remote_page_current_hot.last_heat < daemon_context.m_options.hot_swap_watermark)
     /*

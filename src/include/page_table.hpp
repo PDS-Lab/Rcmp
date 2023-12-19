@@ -59,8 +59,10 @@ struct RemotePageRefMeta {
 
     RemotePageRefMeta(uint64_t half_life_us) : stats(half_life_us), version(rand()) {}
 
-    FreqStats::Heatness UpdateWrite() { return stats.add_wr(rdtsc() / 1e3); }
-    FreqStats::Heatness UpdateRead() { return stats.add_rd(rdtsc() / 1e3); }
+    FreqStats::Heatness WriteHeat() { return stats.m_wr_heat.heat(rdtsc() / 1e3); }
+    FreqStats::Heatness ReadHeat() { return stats.m_wr_heat.heat(rdtsc() / 1e3); }
+    FreqStats::Heatness UpdateWriteHeat() { return stats.add_wr(rdtsc() / 1e3); }
+    FreqStats::Heatness UpdateReadHeat() { return stats.add_rd(rdtsc() / 1e3); }
     void ClearHeat() { stats.clear(); }
 };
 
@@ -143,10 +145,8 @@ struct PageTableManager {
 };
 
 struct LocalPageCache {
-    FreqStats::Heatness UpdateWrite() { return stats.add_wr(rdtsc() / 1000); }
-    FreqStats::Heatness UpdateRead() { return stats.add_rd(rdtsc() / 1000); }
-    FreqStats::Heatness WriteHeat() { return stats.m_wr_heat.heat(rdtsc() / 1000); }
-    FreqStats::Heatness ReadHeat() { return stats.m_rd_heat.heat(rdtsc() / 1000); }
+    FreqStats::Heatness UpdateHeat() { return stats.add_wr(rdtsc() / 1000); }
+    FreqStats::Heatness Heat() { return stats.m_wr_heat.heat(rdtsc() / 1000); }
 
     FreqStats stats;
     offset_t offset;

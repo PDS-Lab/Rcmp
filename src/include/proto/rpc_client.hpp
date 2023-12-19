@@ -37,7 +37,7 @@ struct GetPagePastAccessFreqRequest {
 struct GetPagePastAccessFreqReply {
     float avg_heat;
     page_id_t coldest_page_id;
-    float coldest_page_wr_heat;
+    float coldest_page_heat;
     float coldest_page_rd_heat;
 };
 void getPagePastAccessFreq(ClientContext& client_context,
