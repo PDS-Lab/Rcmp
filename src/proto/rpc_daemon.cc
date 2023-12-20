@@ -362,7 +362,7 @@ retry:
             // Randomly select a page that has not been accessed by a client in this cabinet for
             // exchange Example: Exchange recipient's move-in pages, or requested but unused pages
             need_swap =
-                daemon_context.m_page_table.PickUnvisitVMPage(swapout_page_id, swapout_page_meta);
+                daemon_context.m_page_table.PickUnvisitPage(swapout_page_id, swapout_page_meta);
 
             // If all pages are referenced by the client, get the oldest page as a swap page from
             // the client.
@@ -579,6 +579,7 @@ void allocPageMemory(DaemonContext& daemon_context, DaemonToMasterConnection& ma
         PageMetadata* page_meta =
             daemon_context.m_page_table.FindOrCreatePageMeta(req.start_page_id + c);
         daemon_context.m_page_table.ApplyPageMemory(page_meta, page_vm_meta);
+        daemon_context.m_page_table.unvisited_pages.push({req.start_page_id + c, page_meta});
     }
 
     resp_handle.Init();
@@ -618,7 +619,7 @@ void allocPage(DaemonContext& daemon_context, DaemonToClientConnection& client_c
 void freePage(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
               FreePageRequest& req, ResponseHandle<FreePageReply>& resp_handle) {
     // detach a free page task
-    daemon_context.GetFiberPool().EnqueueTask([&]() {
+    daemon_context.GetFiberPool().EnqueueTask([&, req]() {
         // Calling freePage to the MN
         auto fu = daemon_context.m_conn_manager.GetMasterConnection().erpc_conn->call<CortPromise>(
             rpc_master::freePage, {

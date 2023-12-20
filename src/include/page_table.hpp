@@ -7,7 +7,6 @@
 #include "allocator.hpp"
 #include "common.hpp"
 #include "concurrent_hashmap.hpp"
-#include "hashtable.hpp"
 #include "lock.hpp"
 #include "robin_hood.h"
 #include "stats.hpp"
@@ -118,7 +117,7 @@ struct PageTableManager {
     void FreePageMemory(PageVMMapMetadata *page_vm_meta);
     void ApplyPageMemory(PageMetadata *page_meta, PageVMMapMetadata *page_vm_meta);
     void CancelPageMemory(PageMetadata *page_meta);
-    bool PickUnvisitVMPage(page_id_t &page_id, PageMetadata *&page_meta);
+    bool PickUnvisitPage(page_id_t &page_id, PageMetadata *&page_meta);
     std::vector<std::pair<page_id_t, PageMetadata *>> RandomPickVMPage(size_t n);
 
     // TODO: release page meta resource when vm_meta and remote_ref_meta are nullptr

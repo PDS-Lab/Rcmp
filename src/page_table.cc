@@ -71,7 +71,7 @@ void PageTableManager::CancelPageMemory(PageMetadata *page_meta) {
     FreePageMemory(tmp);
 }
 
-bool PageTableManager::PickUnvisitVMPage(page_id_t &page_id, PageMetadata *&page_meta) {
+bool PageTableManager::PickUnvisitPage(page_id_t &page_id, PageMetadata *&page_meta) {
     while (!unvisited_pages.empty()) {
         auto p = unvisited_pages.front();
         unvisited_pages.pop();

@@ -299,6 +299,11 @@ void MigratePageDone(MasterContext& master_context, MasterToDaemonConnection& da
         // DLOG("Swap page %lu to rack: %u, DN:%u. This operation is initiated by DN %u",
         //      req.page_id_swap, req.new_rack_id_swap, req.new_daemon_id_swap,
         //      daemon_connection.daemon_id);
+    } else {
+        ++master_context.m_cluster_manager.cluster_rack_table[req.new_rack_id]
+              ->current_allocated_page_num;
+        --master_context.m_cluster_manager.cluster_rack_table[req.new_rack_id_swap]
+              ->current_allocated_page_num;
     }
 
     resp_handle.Init();
