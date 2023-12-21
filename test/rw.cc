@@ -63,7 +63,7 @@ int main(int argc, char *argv[]) {
         .NODES = cmd.get<int>("no_node"),
         .IT = cmd.get<size_t>("iteration"),
         // .PAYLOAD = cmd.get<size_t>("payload_size"),
-        .SA = 2097152,
+        .SA = page_size * 1,
         .RANGE = cmd.get<uint64_t>("addr_range"),
         .ZIPF = 0.99,
         .redis_server_ip = cmd.get<string>("redis_server_ip"),

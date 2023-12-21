@@ -250,12 +250,15 @@ void tryMigratePage(MasterContext& master_context, MasterToDaemonConnection& dae
     DLOG_ASSERT(req.page_id != invalid_page_id, "Invalid Page");
     DLOG_ASSERT(req.page_id != req.page_id_swap, "Can't latch same page %lu", req.page_id);
 
+    bool success = true;
     PageRackMetadata* page_meta = master_context.m_page_directory.FindPage(req.page_id);
 
     DLOG_ASSERT(page_meta != nullptr, "Can't find page %lu", req.page_id);
 
     if (req.page_id_swap == invalid_page_id) {
-        page_meta->latch.lock();
+        if (!page_meta->latch.try_lock()) {
+            success = false;
+        }
     } else {
         PageRackMetadata* page_swap_meta =
             master_context.m_page_directory.FindPage(req.page_id_swap);
@@ -264,17 +267,25 @@ void tryMigratePage(MasterContext& master_context, MasterToDaemonConnection& dae
 
         // Smaller ids are preferred for locking to avoid deadlocks.
         if (req.page_id < req.page_id_swap) {
-            page_meta->latch.lock();
-            page_swap_meta->latch.lock();
+            if (!page_meta->latch.try_lock()) {
+                success = false;
+            } else if (!page_swap_meta->latch.try_lock()) {
+                page_meta->latch.unlock();
+                success = false;
+            }
         } else {
-            page_swap_meta->latch.lock();
-            page_meta->latch.lock();
+            if (!page_swap_meta->latch.try_lock()) {
+                success = false;
+            } else if (!page_meta->latch.try_lock()) {
+                page_swap_meta->latch.unlock();
+                success = false;
+            }
         }
     }
 
     resp_handle.Init();
     auto& reply = resp_handle.Get();
-    reply.ret = true;
+    reply.ret = success;
 }
 
 void MigratePageDone(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,

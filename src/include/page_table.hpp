@@ -51,12 +51,13 @@ struct PageVMMapMetadata {
 
 struct RemotePageRefMeta {
     int version;
+    bool swapping = false;
     FreqStats stats;
     uintptr_t remote_page_addr;
     uint32_t remote_page_rkey;
     DaemonToDaemonConnection *remote_page_daemon_conn;
 
-    RemotePageRefMeta(uint64_t half_life_us) : stats(half_life_us), version(rand()) {}
+    RemotePageRefMeta(uint64_t half_life_us) : version(rand()) {}
 
     FreqStats::Heatness WriteHeat() { return stats.m_wr_heat.heat(rdtsc() / 1e3); }
     FreqStats::Heatness ReadHeat() { return stats.m_wr_heat.heat(rdtsc() / 1e3); }
@@ -149,8 +150,6 @@ struct LocalPageCache {
 
     FreqStats stats;
     offset_t offset;
-
-    LocalPageCache(uint64_t half_life_us) : stats(half_life_us) {}
 };
 
 struct LocalPageCacheMeta {

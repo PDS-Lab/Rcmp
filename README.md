@@ -66,7 +66,7 @@ Rcmp currently supports the following features:
 
     ```shell
     # Add rack 1 on 192.168.201.89 with CXL size 18GB
-    sudo numactl -N 0 /home/gyx/Rcmp/build/rcmp_daemon --master_ip=192.168.200.51 --master_port=31850 --daemon_ip=192.168.201.89 --daemon_port=31852 --rack_id=1 --cxl_devdax_path=/dev/shm/cxlsim0 --cxl_memory_size=19327352832 --hot_decay=0.04 --hot_swap_watermark=3
+    sudo numactl -N 0 /home/user/Rcmp/build/rcmp_daemon --master_ip=192.168.200.51 --master_port=31850 --daemon_ip=192.168.201.89 --daemon_port=31852 --rack_id=1 --cxl_devdax_path=/dev/shm/cxlsim0 --cxl_memory_size=19327352832 --hot_decay=0.04 --hot_swap_watermark=3
     ```
 
 * Launching the client test program (CN)

@@ -75,7 +75,8 @@ bool PageTableManager::PickUnvisitPage(page_id_t &page_id, PageMetadata *&page_m
     while (!unvisited_pages.empty()) {
         auto p = unvisited_pages.front();
         unvisited_pages.pop();
-        if (!p.second->vm_meta || p.second->vm_meta->ref_client.empty()) {
+        if ((!p.second->vm_meta || p.second->vm_meta->ref_client.empty()) &&
+            p.second->page_ref_lock.try_lock()) {
             page_id = p.first;
             page_meta = p.second;
             return true;
@@ -99,18 +100,14 @@ PageCacheTable::~PageCacheTable() {
 }
 
 LocalPageCacheMeta *PageCacheTable::FindOrCreateCacheMeta(page_id_t page_id) {
-    std::shared_lock<SharedMutex> lck(table_lock);
     auto it = table.find(page_id);
     if (it == table.end()) {
-        lck.unlock();
-        std::unique_lock<SharedMutex> lck;
         it = table.insert({page_id, new LocalPageCacheMeta()}).first;
     }
     return it->second;
 }
 
 LocalPageCache *PageCacheTable::FindCache(page_id_t page_id) {
-    std::shared_lock<SharedMutex> lck(table_lock);
     auto it = table.find(page_id);
     if (it == table.end()) {
         return nullptr;
@@ -123,7 +120,7 @@ LocalPageCache *PageCacheTable::FindCache(LocalPageCacheMeta *cache_meta) const 
 }
 
 LocalPageCache *PageCacheTable::AddCache(LocalPageCacheMeta *cache_meta, offset_t offset) {
-    cache_meta->cache = new LocalPageCache(8);
+    cache_meta->cache = new LocalPageCache();
     cache_meta->cache->offset = offset;
     return cache_meta->cache;
 }

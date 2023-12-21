@@ -273,6 +273,10 @@ void DaemonContext::RDMARCPoll() {
     }
 }
 
+void DaemonContext::InitHeatDecayCache() {
+    FreqStats::init_exp_decays(m_options.heat_half_life_us);
+}
+
 int main(int argc, char *argv[]) {
     cmdline::parser cmd;
     cmd.add<std::string>("master_ip");

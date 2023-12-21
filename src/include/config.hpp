@@ -6,7 +6,7 @@
 
 #define MSGQ_SINGLE_FIFO_ON 0
 
-constexpr static size_t page_size = 2ul << 20;
+constexpr static size_t page_size = 4ul << 10;
 constexpr static size_t cache_line_size = 64;
 constexpr static size_t min_slab_size = 64;
 constexpr static size_t mem_region_aligned_size = 2ul << 30;

@@ -111,7 +111,8 @@ inline void run_sample(const string &testname, const BenchParam &param, int type
                 mt19937_64 eng(tid);
 
                 for (int i = 0; i < param.IT; ++i) {
-                    rv[i] = zipf_distr(eng) * param.PAYLOAD;
+                    mt19937_64 e(zipf_distr(eng));
+                    rv[i] = e() * param.PAYLOAD;
                 }
             } else if (type & TestType::SEQ) {
                 int S = rdd(tid, 0);

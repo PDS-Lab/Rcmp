@@ -51,8 +51,6 @@ class FreqStats {
         Heatness operator+(const Heatness &b) const;
     };
 
-    FreqStats(uint64_t half_life_us);
-
     Heatness add_wr(uint64_t t);
     Heatness add_rd(uint64_t t);
     void clear();
@@ -60,9 +58,9 @@ class FreqStats {
     Heatness m_wr_heat;
     Heatness m_rd_heat;
 
-   private:
-    float m_lambda;
+    static void init_exp_decays(uint64_t half_life_us);
 
+   private:
     static Mutex m_exp_decays_lck;
     static std::vector<float> m_exp_decays;
 };

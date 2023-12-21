@@ -245,7 +245,7 @@ class RandomAccessMap {
             return {iterator(it->second, key, this), false};
         }
 
-        int index = key_to_index_[key] = values_.size() - 1;
+        int index = key_to_index_[key] = values_.size();
         values_.push_back({key, std::move(ctor_fn())});
         return {iterator(index, key, this), true};
     }

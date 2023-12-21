@@ -97,18 +97,6 @@ Histogram Histogram::merge(Histogram &other) {
 Mutex FreqStats::m_exp_decays_lck;
 std::vector<float> FreqStats::m_exp_decays;
 
-FreqStats::FreqStats(uint64_t half_life_us)
-    : m_lambda(0.693147180559945309417232121458176568 /* ln 2*/ / half_life_us) {
-    if (m_exp_decays.size() >= half_life_us * 4) {
-        return;
-    }
-
-    std::unique_lock<Mutex> lck(m_exp_decays_lck);
-    for (int i = m_exp_decays.size(); i < half_life_us * 4; ++i) {
-        m_exp_decays.push_back(exp(-m_lambda * i));
-    }
-}
-
 FreqStats::Heatness FreqStats::add_wr(uint64_t t) {
     m_wr_heat = m_wr_heat + Heatness::one(t);
     return m_wr_heat;
@@ -117,6 +105,14 @@ FreqStats::Heatness FreqStats::add_wr(uint64_t t) {
 FreqStats::Heatness FreqStats::add_rd(uint64_t t) {
     m_rd_heat = m_rd_heat + Heatness::one(t);
     return m_rd_heat;
+}
+
+void FreqStats::init_exp_decays(uint64_t half_life_us) {
+    float m_lambda = 0.693147180559945309417232121458176568 /* ln 2*/ / half_life_us;
+
+    for (int i = m_exp_decays.size(); i < half_life_us * 4; ++i) {
+        m_exp_decays.push_back(exp(-m_lambda * i));
+    }
 }
 
 void FreqStats::clear() {

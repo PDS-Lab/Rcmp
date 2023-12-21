@@ -69,7 +69,7 @@ struct GetPageCXLRefOrProxyRequest {
             size_t cn_write_raw_size;
             uint8_t cn_write_raw_buf[0];
         } write_raw;
-        struct {
+        struct {  // type == CAS
             size_t expected;
             size_t desired;
         } cas;
@@ -243,7 +243,7 @@ struct MigratePageReply {
  * @param resp_handle
  */
 void MigratePage(DaemonContext& daemon_context, DaemonToDaemonConnection& daemon_connection,
-                    MigratePageRequest& req, ResponseHandle<MigratePageReply>& resp_handle);
+                 MigratePageRequest& req, ResponseHandle<MigratePageReply>& resp_handle);
 
 struct TryDelPageRequest {
     mac_id_t mac_id;

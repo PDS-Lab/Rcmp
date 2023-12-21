@@ -364,6 +364,7 @@ struct DaemonContext : public NOCOPYABLE {
     void ConnectWithMaster();
     void RegisterCXLMR();
     void RDMARCPoll();
+    void InitHeatDecayCache();
 };
 
 /************************  Client   **********************/
