@@ -50,8 +50,8 @@ struct PageVMMapMetadata {
 };
 
 struct RemotePageRefMeta {
-    int version;
-    bool swapping = false;
+    volatile int version;
+    volatile bool swapping = false;
     FreqStats stats;
     uintptr_t remote_page_addr;
     uint32_t remote_page_rkey;
