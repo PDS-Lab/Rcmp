@@ -63,7 +63,7 @@ class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::MP, ConcurrentQueueCon
         atomic_po_val_t h, oh, nh;
 
         oh = m_prod_head.fetch_add_both(1, 1, std::memory_order_acquire);
-        while (UNLIKELY(oh.pos - m_cons_tail >= SZ)) {
+        while (UNLIKELY(oh.pos - m_cons_tail.load(std::memory_order_relaxed) >= SZ)) {
             h = m_prod_tail.load(std::memory_order_acquire);
             while (h.cnt == oh.cnt &&
                    !m_prod_tail.compare_exchange_weak(h, oh, std::memory_order_release,
@@ -87,7 +87,7 @@ class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::MP, ConcurrentQueueCon
 
         oh = m_prod_head.load(std::memory_order_acquire);
         do {
-            if (UNLIKELY(oh.pos - m_cons_tail >= SZ)) {
+            if (UNLIKELY(oh.pos - m_cons_tail.load(std::memory_order_relaxed) >= SZ)) {
                 return false;
             }
             nh.pos = oh.pos + 1;
@@ -114,7 +114,7 @@ class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::MP, ConcurrentQueueCon
     uint32_t TryDequeue(Iter first, Iter last) {
         uint32_t l = 0;
         uint32_t count = std::distance(first, last);
-        uint32_t ot = m_cons_tail;
+        uint32_t ot = m_cons_tail.load(std::memory_order_relaxed);
         l = std::min(count, m_prod_tail.load(std::memory_order_relaxed).pos - ot);
         if (l == 0) {
             return 0;
@@ -124,9 +124,7 @@ class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::MP, ConcurrentQueueCon
             *(first++) = std::move(m_data[(ot + i) % SZ]);
         }
 
-        std::atomic_thread_fence(std::memory_order_acquire);
-
-        m_cons_tail += l;
+        m_cons_tail.store(ot + l, std::memory_order_release);
         return l;
     }
 
@@ -136,7 +134,7 @@ class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::MP, ConcurrentQueueCon
 
     T m_data[SZ];
 
-    volatile uint32_t m_cons_tail;
+    std::atomic<uint32_t> m_cons_tail;
 };
 
 template <typename T, size_t SZ>
