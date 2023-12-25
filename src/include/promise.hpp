@@ -113,7 +113,7 @@ using CortPromise = boost::fibers::promise<T>;
 template <typename T>
 using CortFuture = boost::fibers::future<T>;
 
-struct ControlBlock {
+struct FutureControlBlock {
     bool ready = false;
     boost::fibers::mutex mtx;
     boost::fibers::condition_variable cv;
