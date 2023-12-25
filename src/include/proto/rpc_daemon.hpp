@@ -58,6 +58,8 @@ struct GetPageCXLRefOrProxyRequest {
         CAS,
     } type;
     rcmp::GAddr gaddr;
+    uint32_t hint_version;
+    uint64_t hint;
     union {
         struct {  // type == WRITE
             size_t cn_write_size;
@@ -78,6 +80,8 @@ struct GetPageCXLRefOrProxyRequest {
 };
 struct GetPageCXLRefOrProxyReply {
     bool refs;
+    uint32_t hint_version;
+    uint64_t hint;
     union {
         struct {  // refs == true
             offset_t offset;

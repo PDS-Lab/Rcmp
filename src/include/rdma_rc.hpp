@@ -181,7 +181,7 @@ struct RDMAConnection {
     std::thread *m_conn_handler_;
 
     Mutex m_mu_;
-    std::unique_ptr<SyncData> m_current_sd_ = {nullptr};
+    // std::unique_ptr<SyncData> m_current_sd_ = {nullptr};
     SgeWr *m_sw_head_ = nullptr;
     SgeWr *m_sw_tail_ = nullptr;
 

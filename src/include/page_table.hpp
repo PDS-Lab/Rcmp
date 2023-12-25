@@ -67,6 +67,7 @@ struct RemotePageRefMeta {
 };
 
 struct PageMetadata {
+    uint32_t version;
     CortSharedMutex page_ref_lock;
     CortMutex remote_ref_lock;
     PageVMMapMetadata *vm_meta = nullptr;
@@ -152,23 +153,29 @@ struct LocalPageCache {
     offset_t offset;
 };
 
-struct LocalPageCacheMeta {
+struct RemotePageHint {
+    uint32_t version = 0;
+    uint64_t hint = 0;
+};
+
+struct PageCacheMeta {
     Mutex ref_lock;
     LocalPageCache *cache = nullptr;
+    RemotePageHint hint;
 };
 
 struct PageCacheTable {
     ~PageCacheTable();
 
-    LocalPageCacheMeta *FindOrCreateCacheMeta(page_id_t page_id);
+    PageCacheMeta *FindOrCreateCacheMeta(page_id_t page_id);
     LocalPageCache *FindCache(page_id_t page_id);
-    LocalPageCache *FindCache(LocalPageCacheMeta *cache_meta) const;
-    LocalPageCache *AddCache(LocalPageCacheMeta *cache_meta, offset_t offset);
-    void RemoveCache(LocalPageCacheMeta *cache_meta);
+    LocalPageCache *FindCache(PageCacheMeta *cache_meta) const;
+    LocalPageCache *AddCache(PageCacheMeta *cache_meta, offset_t offset);
+    void RemoveCache(PageCacheMeta *cache_meta);
 
     SharedMutex table_lock;
 
-    robin_hood::unordered_flat_map<page_id_t, LocalPageCacheMeta *, std::hash<page_id_t>> table;
+    robin_hood::unordered_flat_map<page_id_t, PageCacheMeta *, std::hash<page_id_t>> table;
 };
 
 struct PageThreadLocalCache;

@@ -115,8 +115,12 @@ void getPageCXLRefOrProxy(DaemonContext& daemon_context,
     page_id_t page_id = GetPageID(req.gaddr);
     offset_t page_offset = GetPageOffset(req.gaddr);
 
-retry:
-    page_meta = daemon_context.m_page_table.FindOrCreatePageMeta(page_id);
+    if (req.hint != 0 && ((PageMetadata*)(req.hint))->version == req.hint_version) {
+        page_meta = (PageMetadata*)(req.hint);
+    } else {
+    retry:
+        page_meta = daemon_context.m_page_table.FindOrCreatePageMeta(page_id);
+    }
     std::shared_lock<CortSharedMutex> page_ref_lock(page_meta->page_ref_lock);
 
     /* 1. Local get access to page */
@@ -173,6 +177,8 @@ retry:
 
         auto& reply = resp_handle.Get();
         reply.refs = false;
+        reply.hint = (uint64_t)page_meta;
+        reply.hint_version = page_meta->version;
         return;
     }
 

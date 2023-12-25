@@ -50,7 +50,6 @@ class priority_scheduler : public boost::fibers::algo::algorithm_with_properties
    private:
     typedef boost::fibers::scheduler::ready_queue_type /*< See [link ready_queue_t]. >*/ rqueue_t;
 
-    // rqueue_t rqueue_;
     rqueue_t rqueue_high_;
     rqueue_t rqueue_low_;
     std::mutex mtx_{};

@@ -87,7 +87,7 @@ bool PageTableManager::PickUnvisitPage(page_id_t &page_id, PageMetadata *&page_m
 
 std::vector<std::pair<page_id_t, PageMetadata *>> PageTableManager::RandomPickVMPage(size_t n) {
     thread_local std::mt19937 eng(rand());
-    return table.getRandomN(eng, n, [](const std::pair<page_id_t, PageMetadata *> p){
+    return table.getRandomN(eng, n, [](const std::pair<page_id_t, PageMetadata *> p) {
         return p.second->vm_meta != nullptr;
     });
 }
@@ -101,10 +101,10 @@ PageCacheTable::~PageCacheTable() {
     }
 }
 
-LocalPageCacheMeta *PageCacheTable::FindOrCreateCacheMeta(page_id_t page_id) {
+PageCacheMeta *PageCacheTable::FindOrCreateCacheMeta(page_id_t page_id) {
     auto it = table.find(page_id);
     if (it == table.end()) {
-        it = table.insert({page_id, new LocalPageCacheMeta()}).first;
+        it = table.insert({page_id, new PageCacheMeta()}).first;
     }
     return it->second;
 }
@@ -117,17 +117,17 @@ LocalPageCache *PageCacheTable::FindCache(page_id_t page_id) {
     return it->second->cache;
 }
 
-LocalPageCache *PageCacheTable::FindCache(LocalPageCacheMeta *cache_meta) const {
+LocalPageCache *PageCacheTable::FindCache(PageCacheMeta *cache_meta) const {
     return cache_meta->cache;
 }
 
-LocalPageCache *PageCacheTable::AddCache(LocalPageCacheMeta *cache_meta, offset_t offset) {
+LocalPageCache *PageCacheTable::AddCache(PageCacheMeta *cache_meta, offset_t offset) {
     cache_meta->cache = new LocalPageCache();
     cache_meta->cache->offset = offset;
     return cache_meta->cache;
 }
 
-void PageCacheTable::RemoveCache(LocalPageCacheMeta *cache_meta) {
+void PageCacheTable::RemoveCache(PageCacheMeta *cache_meta) {
     delete cache_meta->cache;
     cache_meta->cache = nullptr;
 }

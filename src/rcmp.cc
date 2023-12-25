@@ -44,7 +44,7 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
     page_id_t page_id = GetPageID(gaddr);
     offset_t in_page_offset = GetPageOffset(gaddr);
     LocalPageCache *page_cache;
-    LocalPageCacheMeta *page_cache_meta;
+    PageCacheMeta *page_cache_meta;
 
     // TODO: more page
 
@@ -69,6 +69,8 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
                 .mac_id = m_impl->m_client_id,
                 .type = rpc_daemon::GetPageCXLRefOrProxyRequest::READ,
                 .gaddr = gaddr,
+                .hint_version = page_cache_meta->hint.version,
+                .hint = page_cache_meta->hint.hint,
                 .u =
                     {
                         .read =
@@ -83,6 +85,8 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
         if (!resp.refs) {
             m_impl->m_stats.page_cache_fault_sample(perf_stat_timer);
             memcpy(buf, resp.read_data, size);
+            page_cache_meta->hint.hint = resp.hint;
+            page_cache_meta->hint.version = resp.hint_version;
             m_impl->m_stats.read_sample(perf_stat_timer_);
             return Status::OK;
         }
@@ -119,7 +123,7 @@ Status PoolContext::Write(GAddr gaddr, size_t size, const void *buf) {
     page_id_t page_id = GetPageID(gaddr);
     offset_t in_page_offset = GetPageOffset(gaddr);
     LocalPageCache *page_cache;
-    LocalPageCacheMeta *page_cache_meta;
+    PageCacheMeta *page_cache_meta;
 
     // TODO: more page
 
@@ -147,6 +151,8 @@ Status PoolContext::Write(GAddr gaddr, size_t size, const void *buf) {
                     req_buf->mac_id = m_impl->m_client_id;
                     req_buf->type = req_buf->WRITE_RAW;
                     req_buf->gaddr = gaddr;
+                    req_buf->hint = page_cache_meta->hint.hint;
+                    req_buf->hint_version = page_cache_meta->hint.version;
                     req_buf->u.write_raw.cn_write_raw_size = size;
                     memcpy(req_buf->u.write_raw.cn_write_raw_buf, buf, size);
                 });
@@ -157,6 +163,8 @@ Status PoolContext::Write(GAddr gaddr, size_t size, const void *buf) {
                     .mac_id = m_impl->m_client_id,
                     .type = rpc_daemon::GetPageCXLRefOrProxyRequest::WRITE,
                     .gaddr = gaddr,
+                    .hint_version = page_cache_meta->hint.version,
+                    .hint = page_cache_meta->hint.hint,
                     .u =
                         {
                             .write =
@@ -172,6 +180,8 @@ Status PoolContext::Write(GAddr gaddr, size_t size, const void *buf) {
 
         if (!resp.refs) {
             m_impl->m_stats.page_cache_fault_sample(perf_stat_timer);
+            page_cache_meta->hint.hint = resp.hint;
+            page_cache_meta->hint.version = resp.hint_version;
             m_impl->m_stats.write_sample(perf_stat_timer_);
             return Status::OK;
         }
@@ -206,7 +216,7 @@ Status PoolContext::CAS(GAddr gaddr, uint64_t &expected, uint64_t desired, bool 
     page_id_t page_id = GetPageID(gaddr);
     offset_t in_page_offset = GetPageOffset(gaddr);
     LocalPageCache *page_cache;
-    LocalPageCacheMeta *page_cache_meta;
+    PageCacheMeta *page_cache_meta;
 
     auto &ptl = PageThreadLocalCache::getInstance(m_impl->m_tcache_mgr).page_cache_table;
 
@@ -229,6 +239,8 @@ Status PoolContext::CAS(GAddr gaddr, uint64_t &expected, uint64_t desired, bool 
                 .mac_id = m_impl->m_client_id,
                 .type = rpc_daemon::GetPageCXLRefOrProxyRequest::CAS,
                 .gaddr = gaddr,
+                .hint_version = page_cache_meta->hint.version,
+                .hint = page_cache_meta->hint.hint,
                 .u = {.cas =
                           {
                               .expected = expected,
@@ -242,6 +254,8 @@ Status PoolContext::CAS(GAddr gaddr, uint64_t &expected, uint64_t desired, bool 
             m_impl->m_stats.page_cache_fault_sample(perf_stat_timer);
             ret = (expected == resp.old_val);
             expected = resp.old_val;
+            page_cache_meta->hint.hint = resp.hint;
+            page_cache_meta->hint.version = resp.hint_version;
             m_impl->m_stats.cas_sample(perf_stat_timer_);
             return Status::OK;
         }

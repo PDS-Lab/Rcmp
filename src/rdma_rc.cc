@@ -557,6 +557,7 @@ RDMAFuture RDMAConnection::m_submit_impl(SgeWr *sge_wrs, size_t n) {
 
     // std::unique_lock<Mutex> lck(m_mu_);
 
+    auto &m_current_sd_ = fu.m_sd_;
     if (m_current_sd_ == nullptr) {
         m_current_sd_ = std::make_unique<SyncData>();
         m_current_sd_->conn = this;
@@ -587,7 +588,7 @@ RDMAFuture RDMAConnection::m_submit_impl(SgeWr *sge_wrs, size_t n) {
         // return fu;
     }
 
-    fu.m_sd_.swap(m_current_sd_);
+    // fu.m_sd_.swap(m_current_sd_);
 
     SgeWr *sge_wr_list = nullptr;
     SgeWr *sge_wr_list_tail = nullptr;
