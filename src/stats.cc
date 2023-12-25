@@ -107,7 +107,7 @@ FreqStats::Heatness FreqStats::add_rd(uint64_t t) {
     return m_rd_heat;
 }
 
-void FreqStats::init_exp_decays(uint64_t half_life_us) {
+void FreqStats::init_exp_decays(float half_life_us) {
     float m_lambda = 0.693147180559945309417232121458176568 /* ln 2*/ / half_life_us;
 
     for (int i = m_exp_decays.size(); i < half_life_us * 4; ++i) {

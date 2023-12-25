@@ -245,7 +245,9 @@ class RandomAccessMap {
             return {iterator(it->second, key, this), false};
         }
 
-        int index = key_to_index_[key] = values_.size();
+        int index = values_.size();
+        key_to_index_.emplace(key, index);
+
         values_.push_back({key, std::move(ctor_fn())});
         return {iterator(index, key, this), true};
     }
@@ -270,8 +272,8 @@ class RandomAccessMap {
         }
     }
 
-    template <typename Genrator>
-    std::vector<std::pair<K, V>> getRandomN(Genrator g, size_t n) {
+    template <typename Genrator, typename F>
+    std::vector<std::pair<K, V>> getRandomN(Genrator g, size_t n, F &&filter_fn) {
         DLOG_ASSERT(n <= values_.size());
 
         std::shared_lock<__SharedMutex> guard(lock_);
@@ -283,7 +285,9 @@ class RandomAccessMap {
             int index = dis(g);
             if (!indices[index]) {
                 indices[index] = true;
-                result.push_back(values_[index]);
+                if (filter_fn(values_[index])) {
+                    result.push_back(values_[index]);
+                }
             }
         }
         return result;

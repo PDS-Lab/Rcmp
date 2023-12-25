@@ -64,8 +64,8 @@ void DaemonContext::InitRPCNexus() {
                                         bind_erpc_func<false>(rpc_daemon::allocPageMemory));
     m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::delPageRDMARef)::rpc_type,
                                         bind_erpc_func<false>(rpc_daemon::delPageRDMARef));
-    m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::MigratePage)::rpc_type,
-                                        bind_erpc_func<false>(rpc_daemon::MigratePage));
+    m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::migratePage)::rpc_type,
+                                        bind_erpc_func<false>(rpc_daemon::migratePage));
     m_erpc_ctx.nexus->register_req_func(RPC_TYPE_STRUCT(rpc_daemon::tryDelPage)::rpc_type,
                                         bind_erpc_func<false>(rpc_daemon::tryDelPage));
 
@@ -302,7 +302,7 @@ int main(int argc, char *argv[]) {
     options.cxl_memory_size = cmd.get<size_t>("cxl_memory_size");
     options.swap_zone_size = 100ul << 20;
     options.max_client_limit = 32;
-    options.prealloc_fiber_num = 8;
+    options.prealloc_fiber_num = 64;
     options.heat_half_life_us = cmd.get<float>("heat_half_life_us");
     options.hot_swap_watermark = cmd.get<size_t>("hot_swap_watermark");
 
@@ -314,6 +314,7 @@ int main(int argc, char *argv[]) {
     daemon_context.InitRDMARC();
     daemon_context.RegisterCXLMR();
     daemon_context.InitFiberPool();
+    daemon_context.InitHeatDecayCache();
     daemon_context.ConnectWithMaster();
 
     std::thread stat_worker = std::thread([&daemon_context]() {

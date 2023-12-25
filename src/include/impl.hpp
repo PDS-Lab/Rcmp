@@ -405,6 +405,7 @@ struct ClientContext : public NOCOPYABLE {
     ClientToDaemonConnection m_local_rack_daemon_connection;
 
     PageThreadCacheManager m_tcache_mgr;
+    float m_half_life_us;
 
     FiberPool m_fiber_pool_;
 
@@ -439,6 +440,7 @@ struct ClientContext : public NOCOPYABLE {
     void InitFiberPool();
     void ConnectWithDaemon();
     void InitMsgQPooller();
+    void InitHeatDecayCache();
 };
 
 struct rcmp::PoolContext::PoolContextImpl : public ClientContext {};

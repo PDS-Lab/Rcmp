@@ -168,8 +168,12 @@ void allocPage(MasterContext& master_context, MasterToDaemonConnection& daemon_c
 
     resp_handle.Init();
     auto& reply = resp_handle.Get();
-    reply.start_page_id = new_page_id;
-    reply.start_count = current_rack_alloc_page_num;
+    reply.current_start_page_id = new_page_id;
+    reply.current_page_count = current_rack_alloc_page_num;
+    reply.other_start_page_id = (req.count - current_rack_alloc_page_num > 0)
+                                    ? (new_page_id + alloced_page_idx)
+                                    : invalid_page_id;
+    reply.other_page_count = req.count - current_rack_alloc_page_num;
 }
 
 void freePage(MasterContext& master_context, MasterToDaemonConnection& daemon_connection,

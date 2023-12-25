@@ -13,6 +13,9 @@
 using namespace std::chrono_literals;
 namespace rpc_daemon {
 
+RemotePageRefMeta* get_remote_page_ref(DaemonContext& daemon_context, page_id_t page_id,
+                                       PageMetadata* page_meta);
+
 /**
  * @brief Broadcast the DN that has the ref of the current page, delete its ref; and notify all
  * clients that have accessed the page under the current rack to delete the corresponding caches.
@@ -76,6 +79,7 @@ void joinRack(DaemonContext& daemon_context, DaemonToClientConnection& client_co
     auto& reply = resp_handle.Get();
     reply.client_mac_id = client_connection.client_id;
     reply.daemon_mac_id = daemon_context.m_daemon_id;
+    reply.half_life_us = daemon_context.m_options.heat_half_life_us;
 }
 
 void crossRackConnect(DaemonContext& daemon_context, DaemonToDaemonConnection& daemon_connection,
@@ -140,57 +144,7 @@ retry:
 
     DaemonToDaemonConnection* dest_daemon_conn;
     RemotePageRefMeta* remote_page_ref_meta =
-        daemon_context.m_page_table.FindOrCreateRemotePageRefMeta(
-            page_meta, [&](RemotePageRefMeta* remote_page_ref_meta) {
-                // If it is the first time the page is accessed, go through the DirectIO process
-                // (when remote_page_ref_meta does not exist, it means it must be the first time)
-
-                /* 2. Get the daemon for the page on mn and latch the page */
-                {
-                    auto latch_fu =
-                        daemon_context.m_conn_manager.GetMasterConnection()
-                            .erpc_conn->call<CortPromise>(rpc_master::latchRemotePage,
-                                                          {
-                                                              .mac_id = daemon_context.m_daemon_id,
-                                                              .exclusive = false,
-                                                              .page_id = page_id,
-                                                          });
-
-                    auto& latch_resp = latch_fu.get();
-
-                    // Getting the peer connection
-                    dest_daemon_conn = dynamic_cast<DaemonToDaemonConnection*>(
-                        daemon_context.m_conn_manager.GetConnection(latch_resp.dest_daemon_id));
-                }
-
-                /* 3. Get remote memory rdma ref */
-                {
-                    auto rref_fu = dest_daemon_conn->erpc_conn->call<CortPromise>(
-                        rpc_daemon::getPageRDMARef, {
-                                                        .mac_id = daemon_context.m_daemon_id,
-                                                        .page_id = page_id,
-                                                    });
-
-                    auto& rref_resp = rref_fu.get();
-                    remote_page_ref_meta->remote_page_addr = rref_resp.addr;
-                    remote_page_ref_meta->remote_page_rkey = rref_resp.rkey;
-                    remote_page_ref_meta->remote_page_daemon_conn = dest_daemon_conn;
-                }
-
-                /* 4. unlatch */
-                {
-                    auto unlatch_fu =
-                        daemon_context.m_conn_manager.GetMasterConnection()
-                            .erpc_conn->call<CortPromise>(rpc_master::unLatchRemotePage,
-                                                          {
-                                                              .mac_id = daemon_context.m_daemon_id,
-                                                              .exclusive = false,
-                                                              .page_id = page_id,
-                                                          });
-
-                    auto& resp = unlatch_fu.get();
-                }
-            });
+        get_remote_page_ref(daemon_context, page_id, page_meta);
 
     auto calc_heat = [&]() {
         FreqStats::Heatness remote_page_current_hot;
@@ -276,14 +230,33 @@ void allocPage(DaemonContext& daemon_context, DaemonToClientConnection& client_c
     // A page swap may occur due to insufficient local pages during the wait period.
     auto& resp = fu.get();
 
-    page_id_t start_page_id = resp.start_page_id;
+    page_id_t start_page_id = resp.current_start_page_id;
 
-    for (size_t c = 0; c < resp.start_count; ++c) {
+    for (size_t c = 0; c < resp.current_page_count; ++c) {
         PageVMMapMetadata* page_vm_meta = daemon_context.m_page_table.AllocPageMemory();
         PageMetadata* page_meta =
             daemon_context.m_page_table.FindOrCreatePageMeta(start_page_id + c);
         daemon_context.m_page_table.ApplyPageMemory(page_meta, page_vm_meta);
         daemon_context.m_page_table.unvisited_pages.push({start_page_id + c, page_meta});
+    }
+
+    if (resp.other_page_count > 0) {
+        // Get remote ref in background, avoid blocking when accessing remote memory.
+        daemon_context.GetFiberPool().EnqueueTask([&, resp]() {
+            for (size_t i = 0; i < resp.other_page_count; ++i) {
+                page_id_t remote_page_id = resp.current_start_page_id + i;
+                PageMetadata* page_meta =
+                    daemon_context.m_page_table.FindOrCreatePageMeta(remote_page_id);
+                std::shared_lock<CortSharedMutex> page_ref_lock(page_meta->page_ref_lock);
+
+                if (page_meta->vm_meta) {
+                    // Already migrated in local
+                    continue;
+                }
+
+                get_remote_page_ref(daemon_context, remote_page_id, page_meta);
+            }
+        });
     }
 
     resp_handle.Init();
@@ -293,7 +266,7 @@ void allocPage(DaemonContext& daemon_context, DaemonToClientConnection& client_c
 
 void freePage(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
               FreePageRequest& req, ResponseHandle<FreePageReply>& resp_handle) {
-    // detach a free page task
+    // Free page in background
     daemon_context.GetFiberPool().EnqueueTask([&, req]() {
         // Calling freePage to the MN
         auto fu = daemon_context.m_conn_manager.GetMasterConnection().erpc_conn->call<CortPromise>(
@@ -325,6 +298,8 @@ void getPageRDMARef(DaemonContext& daemon_context, DaemonToDaemonConnection& dae
                     GetPageRDMARefRequest& req, ResponseHandle<GetPageRDMARefReply>& resp_handle) {
     PageMetadata* page_meta = daemon_context.m_page_table.FindOrCreatePageMeta(req.page_id);
     DLOG_ASSERT(page_meta->vm_meta != nullptr, "Can't find page %lu", req.page_id);
+
+    std::shared_lock<CortSharedMutex> page_ref_lock(page_meta->page_ref_lock);
 
     uintptr_t local_addr = daemon_context.GetVirtualAddr(page_meta->vm_meta->cxl_memory_offset);
     ibv_mr* mr = daemon_context.GetMR(reinterpret_cast<void*>(local_addr));
@@ -363,7 +338,7 @@ void delPageRDMARef(DaemonContext& daemon_context, DaemonToDaemonConnection& dae
     reply.ret = true;
 }
 
-void MigratePage(DaemonContext& daemon_context, DaemonToDaemonConnection& daemon_connection,
+void migratePage(DaemonContext& daemon_context, DaemonToDaemonConnection& daemon_connection,
                  MigratePageRequest& req, ResponseHandle<MigratePageReply>& resp_handle) {
     daemon_context.m_stats.page_swap_sample();
 
@@ -400,6 +375,12 @@ void MigratePage(DaemonContext& daemon_context, DaemonToDaemonConnection& daemon
     daemon_conn->rdma_conn->prep_write(&sge_wrs[0], local_addr, lkey, page_size,
                                        req.swapin_page_addr, req.swapin_page_rkey, false);
 
+    // DLOG(
+    //     "DN %u: rdma write submit. local_addr = %ld, lkey = %u, req.swapin_page_addr = %ld,  "
+    //     "req.swapin_page_rkey = %u",
+    //     daemon_context.m_daemon_id, local_addr, lkey, req.swapin_page_addr,
+    //     req.swapin_page_rkey);
+
     // DLOG("rdma write mid. swapout_page_addr = %lu", req.swapout_page_addr);
     bool is_swap;
     PageVMMapMetadata* local_page_vm_meta;
@@ -422,17 +403,17 @@ void MigratePage(DaemonContext& daemon_context, DaemonToDaemonConnection& daemon
         daemon_conn->rdma_conn->prep_read(&sge_wrs[1], swapin_addr, lkey, page_size,
                                           req.swapout_page_addr, req.swapout_page_rkey, false);
         sge_wrs_cnt++;
+
+        // DLOG(
+        //     "DN %u: rdma read submit. local_addr = %ld, lkey = %u, req.swapout_page_addr = %ld, "
+        //     "req.swapout_page_rkey = %u",
+        //     daemon_context.m_daemon_id, swapin_addr, lkey, req.swapout_page_addr,
+        //     req.swapout_page_rkey);
     }
 
     auto fu = daemon_conn->rdma_conn->submit(sge_wrs, sge_wrs_cnt);
 
     fu.get();
-
-    // DLOG(
-    //     "DN %u: rdma write submit. local_addr = %ld, lkey = %u, req.swapin_page_addr = %ld,  "
-    //     "req.swapin_page_rkey = %u",
-    //     daemon_context.m_daemon_id, local_addr, lkey, req.swapin_page_addr,
-    //     req.swapin_page_rkey);
 
     // DLOG("DN %u: reply", daemon_context.m_daemon_id);
 
@@ -451,6 +432,85 @@ void MigratePage(DaemonContext& daemon_context, DaemonToDaemonConnection& daemon
     auto& reply = resp_handle.Get();
     reply.swapped = is_swap;
     // DLOG("DN %u: finished migrate!", daemon_context.m_daemon_id);
+}
+
+void tryDelPage(DaemonContext& daemon_context, DaemonToMasterConnection& master_connection,
+                TryDelPageRequest& req, ResponseHandle<TryDelPageReply>& resp_handle) {
+    PageMetadata* page_meta = daemon_context.m_page_table.FindOrCreatePageMeta(req.page_id);
+    DLOG_ASSERT(page_meta->vm_meta != nullptr, "Can't find page %lu", req.page_id);
+
+    std::unique_lock<CortSharedMutex> page_ref_lock(page_meta->page_ref_lock, std::try_to_lock);
+    if (!page_ref_lock.owns_lock()) {
+        resp_handle.Init();
+        auto& reply = resp_handle.Get();
+        reply.ret = false;
+        return;
+    }
+
+    broadcast_del_page_ref_cache(daemon_context, req.page_id, page_meta, -1);
+
+    daemon_context.m_page_table.CancelPageMemory(page_meta);
+
+    resp_handle.Init();
+    auto& reply = resp_handle.Get();
+    reply.ret = true;
+    return;
+}
+
+RemotePageRefMeta* get_remote_page_ref(DaemonContext& daemon_context, page_id_t page_id,
+                                       PageMetadata* page_meta) {
+    DaemonToDaemonConnection* dest_daemon_conn;
+    return daemon_context.m_page_table.FindOrCreateRemotePageRefMeta(
+        page_meta, [&](RemotePageRefMeta* remote_page_ref_meta) {
+            // If it is the first time the page is accessed, go through the DirectIO process
+            // (when remote_page_ref_meta does not exist, it means it must be the first time)
+
+            /* 2. Get the daemon for the page on mn and latch the page */
+            {
+                auto latch_fu =
+                    daemon_context.m_conn_manager.GetMasterConnection()
+                        .erpc_conn->call<CortPromise>(rpc_master::latchRemotePage,
+                                                      {
+                                                          .mac_id = daemon_context.m_daemon_id,
+                                                          .exclusive = false,
+                                                          .page_id = page_id,
+                                                      });
+
+                auto& latch_resp = latch_fu.get();
+
+                // Getting the peer connection
+                dest_daemon_conn = dynamic_cast<DaemonToDaemonConnection*>(
+                    daemon_context.m_conn_manager.GetConnection(latch_resp.dest_daemon_id));
+            }
+
+            /* 3. Get remote memory rdma ref */
+            {
+                auto rref_fu = dest_daemon_conn->erpc_conn->call<CortPromise>(
+                    rpc_daemon::getPageRDMARef, {
+                                                    .mac_id = daemon_context.m_daemon_id,
+                                                    .page_id = page_id,
+                                                });
+
+                auto& rref_resp = rref_fu.get();
+                remote_page_ref_meta->remote_page_addr = rref_resp.addr;
+                remote_page_ref_meta->remote_page_rkey = rref_resp.rkey;
+                remote_page_ref_meta->remote_page_daemon_conn = dest_daemon_conn;
+            }
+
+            /* 4. unlatch */
+            {
+                auto unlatch_fu =
+                    daemon_context.m_conn_manager.GetMasterConnection()
+                        .erpc_conn->call<CortPromise>(rpc_master::unLatchRemotePage,
+                                                      {
+                                                          .mac_id = daemon_context.m_daemon_id,
+                                                          .exclusive = false,
+                                                          .page_id = page_id,
+                                                      });
+
+                auto& resp = unlatch_fu.get();
+            }
+        });
 }
 
 /**
@@ -508,29 +568,6 @@ void broadcast_del_page_ref_cache(DaemonContext& daemon_context, page_id_t page_
         fu.get();
     }
     // DLOG("Finish delPageCacheBroadcast");
-}
-
-void tryDelPage(DaemonContext& daemon_context, DaemonToMasterConnection& master_connection,
-                TryDelPageRequest& req, ResponseHandle<TryDelPageReply>& resp_handle) {
-    PageMetadata* page_meta = daemon_context.m_page_table.FindOrCreatePageMeta(req.page_id);
-    DLOG_ASSERT(page_meta->vm_meta != nullptr, "Can't find page %lu", req.page_id);
-
-    std::unique_lock<CortSharedMutex> page_ref_lock(page_meta->page_ref_lock, std::try_to_lock);
-    if (!page_ref_lock.owns_lock()) {
-        resp_handle.Init();
-        auto& reply = resp_handle.Get();
-        reply.ret = false;
-        return;
-    }
-
-    broadcast_del_page_ref_cache(daemon_context, req.page_id, page_meta, -1);
-
-    daemon_context.m_page_table.CancelPageMemory(page_meta);
-
-    resp_handle.Init();
-    auto& reply = resp_handle.Get();
-    reply.ret = true;
-    return;
 }
 
 void do_page_direct_io(DaemonContext& daemon_context, DaemonToClientConnection& client_connection,
@@ -658,7 +695,7 @@ void pick_evict_page(DaemonContext& daemon_context, page_id_t& swapout_page_id,
         MinHeap<std::pair<float, page_id_t>> heat_heap;
         swapout_page_id = invalid_page_id;
 
-        do {
+        while (1) {
             const size_t max_num_detect_pages =
                 sizeof(rpc_client::GetPagePastAccessFreqRequest::pages) / sizeof(page_id_t);
 
@@ -669,7 +706,27 @@ void pick_evict_page(DaemonContext& daemon_context, page_id_t& swapout_page_id,
 
             std::set<DaemonToClientConnection*> broadcast_clients;
             for (auto& pagep : rand_pick_vm_pages) {
-                broadcast_clients.merge(pagep.second->vm_meta->ref_client);
+                if (pagep.second->vm_meta != nullptr) {
+                    broadcast_clients.merge(pagep.second->vm_meta->ref_client);
+                }
+            }
+
+            if (broadcast_clients.empty()) {
+                for (auto& pagep : rand_pick_vm_pages) {
+                    auto meta = pagep.second;
+                    if (meta->page_ref_lock.try_lock()) {
+                        // Maybe the vm_meta is deleted after other worker swapping, so here we must
+                        // lock at first.
+                        if (meta->vm_meta) {
+                            swapout_page_id = pagep.first;
+                            swapout_page_meta = meta;
+                            return;
+                        } else {
+                            meta->page_ref_lock.unlock();
+                        }
+                    }
+                }
+                continue;
             }
 
             rpc_client::GetPagePastAccessFreqRequest req;
@@ -701,25 +758,32 @@ void pick_evict_page(DaemonContext& daemon_context, page_id_t& swapout_page_id,
             // Get the coldest page which has mininum average heat.
             while (!heat_heap.empty()) {
                 auto p = heat_heap.top();
+                heat_heap.pop();
                 auto meta = daemon_context.m_page_table.FindOrCreatePageMeta(p.second);
                 // Before swaping, we try lock it to avoid accessing and swapping by other
                 // workers. Then swapout_page_ref_lock will acquire ownership of a lock
                 // release.
-                if (meta->vm_meta && meta->page_ref_lock.try_lock()) {
-                    swapout_page_id = p.second;
-                    break;
+                if (meta->page_ref_lock.try_lock()) {
+                    // Maybe the vm_meta is deleted after other worker swapping, so here we must
+                    // lock at first.
+                    if (meta->vm_meta) {
+                        swapout_page_id = p.second;
+                        swapout_page_meta = meta;
+                        return;
+                    } else {
+                        meta->page_ref_lock.unlock();
+                    }
                 }
             }
 
+            boost::this_fiber::yield();
             // If sampled pages are all locked by other worker, we need re-sampling pages.
-        } while (swapout_page_id == invalid_page_id);
+        }
     }
 }
 
 bool do_page_swap(DaemonContext& daemon_context, page_id_t swapin_page_id,
                   PageMetadata* swapin_page_meta, int remote_page_ref_meta_version) {
-    DLOG("try swap page");
-
     std::unique_lock<CortSharedMutex> swapin_page_ref_lock(swapin_page_meta->page_ref_lock,
                                                            std::try_to_lock);
     RemotePageRefMeta* remote_page_ref_meta =
@@ -756,9 +820,9 @@ bool do_page_swap(DaemonContext& daemon_context, page_id_t swapin_page_id,
     std::unique_lock<CortSharedMutex> swapout_page_ref_lock;
 
     // First request memory for the page that will be migrated locally
-    while (!daemon_context.m_page_table.TestAllocPageMemory(1)) {
-        // Current swap area is full, waiting for completion.
-        boost::this_fiber::yield();
+    if (!daemon_context.m_page_table.TestAllocPageMemory(1)) {
+        remote_page_ref_meta->swapping = false;
+        return false;
     }
 
     // Not enough local, swap out page
@@ -779,12 +843,6 @@ bool do_page_swap(DaemonContext& daemon_context, page_id_t swapin_page_id,
         swapout_page_ref_lock =
             std::unique_lock<CortSharedMutex>(swapout_page_meta->page_ref_lock, std::adopt_lock);
     }
-
-    // DLOG(
-    //     "DN %u: Expect inPage %lu (from DN: %u) outPage %lu. swapin_addr = %ld, swapin_key ="
-    //     "%d",
-    //     daemon_context.m_daemon_id, page_id, dest_daemon_conn->daemon_id, swapout_page_id,
-    //     swapin_addr, swapin_key);
 
     /* 2. Send tryMigratePage(page_id) to MN to get the daemon for the page on MN and latch the
      * page
@@ -837,11 +895,17 @@ bool do_page_swap(DaemonContext& daemon_context, page_id_t swapin_page_id,
     // before migration so that we can prevent errors caused by concurrent operations.
     daemon_context.m_page_table.EraseRemotePageRefMeta(swapin_page_meta);
 
+    // DLOG(
+    //     "DN %u: Expect inPage %lu (from DN: %u) outPage %lu. swapin_addr = %ld, swapin_key = %d "
+    //     "swapout_addr = %ld, swapout_key = %d",
+    //     daemon_context.m_daemon_id, swapin_page_id, dest_daemon_conn->daemon_id, swapout_page_id,
+    //     swapin_addr, swapin_key, swapout_addr, swapout_key);
+
     /* 3. Send page migration to daemon (tryMigratePage), wait for it to complete migration,
      * return to RPC */
     {
         auto migrate_fu = dest_daemon_conn->erpc_conn->call<CortPromise>(
-            rpc_daemon::MigratePage, {
+            rpc_daemon::migratePage, {
                                          .mac_id = daemon_context.m_daemon_id,
                                          .page_id = swapin_page_id,  // Expectation migration page
                                          .swap_page_id = swapout_page_id,
@@ -895,7 +959,8 @@ bool do_page_swap(DaemonContext& daemon_context, page_id_t swapin_page_id,
     }
 
     // DLOG("DN %u: Expect inPage %lu (from DN: %u) swap page finished!",
-    //      daemon_context.m_daemon_id, page_id, dest_daemon_conn->daemon_id);
+    // daemon_context.m_daemon_id,
+    //      swapin_page_id, dest_daemon_conn->daemon_id);
 
     daemon_context.m_stats.page_swap_sample();
     return true;

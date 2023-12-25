@@ -67,8 +67,10 @@ struct AllocPageRequest {
     size_t count;
 };
 struct AllocPageReply {
-    page_id_t start_page_id;  // Allocated start page id
-    size_t start_count;       // Number actually allocated in the requesting rack
+    page_id_t current_start_page_id;  // Allocated start page id
+    size_t current_page_count;        // Number actually allocated in the requesting rack
+    page_id_t other_start_page_id;
+    size_t other_page_count;
 };
 /**
  * @brief

@@ -555,7 +555,7 @@ RDMAFuture RDMAConnection::m_submit_impl(SgeWr *sge_wrs, size_t n) {
         sge_wrs[i].wr.next = &sge_wrs[i + 1].wr;
     }
 
-    std::unique_lock<Mutex> lck(m_mu_);
+    // std::unique_lock<Mutex> lck(m_mu_);
 
     if (m_current_sd_ == nullptr) {
         m_current_sd_ = std::make_unique<SyncData>();
@@ -563,7 +563,6 @@ RDMAFuture RDMAConnection::m_submit_impl(SgeWr *sge_wrs, size_t n) {
         m_current_sd_->timeout = false;
         m_current_sd_->inflight = n;
         m_current_sd_->wc_finish = false;
-        m_current_sd_->fu = m_current_sd_->pro.get_future();
         m_current_sd_->props_size = 1;
         m_current_sd_->props[0] = &boost::this_fiber::properties<priority_props>();
 
@@ -601,7 +600,7 @@ RDMAFuture RDMAConnection::m_submit_impl(SgeWr *sge_wrs, size_t n) {
     m_cm_ids_.pop_front();
     m_cm_ids_.push_back(cm_id);
 
-    lck.unlock();
+    // lck.unlock();
 
     // It's now thread-safe to handle send wr
 
@@ -620,6 +619,7 @@ RDMAFuture RDMAConnection::m_submit_impl(SgeWr *sge_wrs, size_t n) {
         if (UNLIKELY((int)(inflight + fu.m_sd_->inflight) > MAX_SEND_WR)) {
             errno = ENOSPC;
             DLOG_ERROR("ibv_post_send too much inflight wr");
+            boost::this_fiber::yield();
             m_poll_conn_sd_wr_();
             inflight = m_inflight_count_.load(std::memory_order_acquire);
             continue;
@@ -658,7 +658,7 @@ int RDMAConnection::m_acknowledge_sd_cqe_(int rc, ibv_wc wcs[]) {
             // Break out as operation completed successfully
             if (LIKELY(!sd->timeout)) {
                 sd->wc_finish = true;
-                sd->pro.set_value();
+                sd->cbk->set_value();
                 for (size_t i = 0; i < sd->props_size; ++i) {
                     sd->props[i]->set_high_priority();
                 }
@@ -702,7 +702,7 @@ int RDMAFuture::try_get() {
 }
 
 int RDMAFuture::get() {
-    m_sd_->fu.get();
+    m_sd_->cbk->get();
 
     boost::this_fiber::properties<priority_props>().set_low_priority();
 

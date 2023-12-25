@@ -35,6 +35,7 @@ class Barrier {
 };
 
 using CortMutex = boost::fibers::mutex;
+using CortConditionalVariable = boost::fibers::condition_variable;
 
 class CortSharedMutex {
    public:

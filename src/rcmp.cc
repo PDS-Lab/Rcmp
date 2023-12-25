@@ -20,6 +20,7 @@ PoolContext::PoolContext(ClientOptions options) {
     m_impl->InitCXLPool();
     m_impl->InitRPCNexus();
     m_impl->ConnectWithDaemon();
+    m_impl->InitHeatDecayCache();
 }
 
 PoolContext::~PoolContext() {
@@ -80,7 +81,9 @@ Status PoolContext::Read(GAddr gaddr, size_t size, void *buf) {
         auto &resp = fu.get();
 
         if (!resp.refs) {
+            m_impl->m_stats.page_cache_fault_sample(perf_stat_timer);
             memcpy(buf, resp.read_data, size);
+            m_impl->m_stats.read_sample(perf_stat_timer_);
             return Status::OK;
         }
 
@@ -168,6 +171,8 @@ Status PoolContext::Write(GAddr gaddr, size_t size, const void *buf) {
         auto &resp = fu.get();
 
         if (!resp.refs) {
+            m_impl->m_stats.page_cache_fault_sample(perf_stat_timer);
+            m_impl->m_stats.write_sample(perf_stat_timer_);
             return Status::OK;
         }
 
@@ -234,8 +239,10 @@ Status PoolContext::CAS(GAddr gaddr, uint64_t &expected, uint64_t desired, bool 
         auto &resp = fu.get();
 
         if (!resp.refs) {
+            m_impl->m_stats.page_cache_fault_sample(perf_stat_timer);
             ret = (expected == resp.old_val);
             expected = resp.old_val;
+            m_impl->m_stats.cas_sample(perf_stat_timer_);
             return Status::OK;
         }
 
@@ -416,6 +423,7 @@ void ClientContext::ConnectWithDaemon() {
     m_client_id = resp.client_mac_id;
     m_local_rack_daemon_connection.daemon_id = resp.daemon_mac_id;
     m_local_rack_daemon_connection.msgq_conn = std::make_unique<MsgQClient>(*m_msgq_rpc);
+    m_half_life_us = resp.half_life_us;
 
     DLOG("Connect with rack %d daemon %d success, my id is %d", m_options.rack_id,
          m_local_rack_daemon_connection.daemon_id, m_client_id);
@@ -436,6 +444,8 @@ void ClientContext::InitMsgQPooller() {
         m_fiber_pool_.EraseAll();
     });
 }
+
+void ClientContext::InitHeatDecayCache() { FreqStats::init_exp_decays(m_half_life_us); }
 
 /*********************** for test **************************/
 
@@ -460,7 +470,10 @@ void PoolContext::__DumpStats() {
         1.0 * msgq_stats.recv_time / (msgq_stats.recv_io + 1));
 }
 
-void PoolContext::__ClearStats() { m_impl->m_stats = {}; }
+void PoolContext::__ClearStats() {
+    m_impl->m_stats = {};
+    m_impl->m_msgq_nexus->m_stats = {};
+}
 
 Status PoolContext::__TestDataSend1(int *array, size_t size) {
     auto fu = m_impl->m_local_rack_daemon_connection.msgq_conn->call<SpinPromise>(

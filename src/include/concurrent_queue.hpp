@@ -49,9 +49,9 @@ class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::SP, ConcurrentQueueCon
 };
 
 template <typename T, size_t SZ>
-class ConcurrentMPSCQueue {
+class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::MP, ConcurrentQueueConsumerMode::SC> {
    public:
-    ConcurrentMPSCQueue() {
+    ConcurrentQueue() {
         m_prod_head.raw = 0;
         m_prod_tail.raw = 0;
         m_cons_tail = 0;
@@ -63,7 +63,7 @@ class ConcurrentMPSCQueue {
         atomic_po_val_t h, oh, nh;
 
         oh = m_prod_head.fetch_add_both(1, 1, std::memory_order_acquire);
-        while (UNLIKELY(oh.pos - m_cons_tail.load(std::memory_order_relaxed) >= SZ)) {
+        while (UNLIKELY(oh.pos - m_cons_tail >= SZ)) {
             h = m_prod_tail.load(std::memory_order_acquire);
             while (h.cnt == oh.cnt &&
                    !m_prod_tail.compare_exchange_weak(h, oh, std::memory_order_release,
@@ -87,7 +87,7 @@ class ConcurrentMPSCQueue {
 
         oh = m_prod_head.load(std::memory_order_acquire);
         do {
-            if (UNLIKELY(oh.pos - m_cons_tail.load(std::memory_order_relaxed) >= SZ)) {
+            if (UNLIKELY(oh.pos - m_cons_tail >= SZ)) {
                 return false;
             }
             nh.pos = oh.pos + 1;
@@ -114,7 +114,7 @@ class ConcurrentMPSCQueue {
     uint32_t TryDequeue(Iter first, Iter last) {
         uint32_t l = 0;
         uint32_t count = std::distance(first, last);
-        uint32_t ot = m_cons_tail.load(std::memory_order_acquire);
+        uint32_t ot = m_cons_tail;
         l = std::min(count, m_prod_tail.load(std::memory_order_relaxed).pos - ot);
         if (l == 0) {
             return 0;
@@ -124,7 +124,9 @@ class ConcurrentMPSCQueue {
             *(first++) = std::move(m_data[(ot + i) % SZ]);
         }
 
-        m_cons_tail.fetch_add(l, std::memory_order_release);
+        std::atomic_thread_fence(std::memory_order_acquire);
+
+        m_cons_tail += l;
         return l;
     }
 
@@ -134,59 +136,7 @@ class ConcurrentMPSCQueue {
 
     T m_data[SZ];
 
-    std::atomic<uint32_t> m_cons_tail;
-};
-
-template <typename T, size_t SZ>
-class ConcurrentQueue<T, SZ, ConcurrentQueueProducerMode::MP, ConcurrentQueueConsumerMode::SC> {
-   public:
-    size_t capacity() const { return SZ; }
-
-    void ForceEnqueue(T n) {
-        // Threads are randomised into a sub-queue
-        static thread_local int r =
-            ((uintptr_t)&r ^ ((uintptr_t)&r >> 5) ^ 0x783f8ac35) % shard_num;
-        auto &shard = m_queue_shards[r];
-        shard.ForceEnqueue(n);
-    }
-
-    bool TryEnqueue(T n) {
-        int i_ = m_eng() % shard_num;
-        int i = i_;
-        do {
-            auto &shard = m_queue_shards[i];
-            if (shard.tryEnqueue(n)) {
-                return true;
-            }
-            i = (i + 1) % shard_num;
-        } while (i != i_);
-
-        return false;
-    }
-
-    bool TryDequeue(T *n) { return TryDequeue(n, n + 1) == 1; }
-
-    template <typename Iter>
-    uint32_t TryDequeue(Iter first, Iter last) {
-        uint32_t l = 0;
-
-        for (int i = 0; i < shard_num; ++i) {
-            auto &shard = m_queue_shards[i];
-            uint32_t l_ = shard.TryDequeue(first, last);
-            l += l_;
-            for (int j = 0; j < l_; ++j) {
-                ++first;
-            }
-        }
-
-        return l;
-    }
-
-   private:
-    constexpr static size_t shard_num = 64;
-
-    std::mt19937 m_eng;
-    ConcurrentMPSCQueue<T, SZ / shard_num> m_queue_shards[shard_num];
+    volatile uint32_t m_cons_tail;
 };
 
 template <typename T, size_t SZ>

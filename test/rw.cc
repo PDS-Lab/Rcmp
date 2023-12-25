@@ -16,6 +16,11 @@ struct RCMPMemPool : public MemPoolBase {
     }
     virtual void Read(GAddr gaddr, size_t s, void *buf) override { ref->Read(gaddr, s, buf); }
 
+    virtual void DumpStats() override {
+        ref->__DumpStats();
+        ref->__ClearStats();
+    }
+
     rcmp::PoolContext *ref;
 };
 
@@ -79,13 +84,9 @@ int main(int argc, char *argv[]) {
             param.PAYLOAD = payload;
             run_bench(param);
         }
-        instance.ref->__DumpStats();
-        instance.ref->__ClearStats();
     }
 
     rcmp::Close(instance.ref);
-
-    // pool.ref->__DumpStats();
 
     // pool.ref->__StopPerf();
 

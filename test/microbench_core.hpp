@@ -66,6 +66,7 @@ struct MemPoolBase {
     virtual void Write(GAddr gaddr, size_t s, void *buf) = 0;
     virtual void WriteBatch(GAddr gaddr, size_t s, void *buf) = 0;
     virtual void Read(GAddr gaddr, size_t s, void *buf) = 0;
+    virtual void DumpStats() = 0;
 };
 
 struct BenchParam {
@@ -108,14 +109,15 @@ inline void run_sample(const string &testname, const BenchParam &param, int type
                 }
             } else if (type & TestType::ZIPF) {
                 zipf_distribution<> zipf_distr(param.RANGE / param.PAYLOAD, param.ZIPF);
-                mt19937_64 eng(tid);
+                mt19937_64 eng(0x9cfa2331b);
 
                 for (int i = 0; i < param.IT; ++i) {
                     mt19937_64 e(zipf_distr(eng));
                     rv[i] = e() * param.PAYLOAD;
                 }
             } else if (type & TestType::SEQ) {
-                int S = rdd(tid, 0);
+                mt19937_64 eng(tid);
+                int S = eng();
                 for (int i = 0; i < param.IT; ++i) {
                     rv[i] = (S + i) * param.PAYLOAD;
                 }
@@ -181,6 +183,9 @@ inline void run_sample(const string &testname, const BenchParam &param, int type
          param.NID, testname.c_str(), all_ps.getAverage() / 1e3, all_ps.getPercentile(50) / 1e3,
          all_ps.getPercentile(99) / 1e3, all_ps.getPercentile(99.9) / 1e3,
          all_ps.getPercentile(99.99) / 1e3);
+
+    MemPoolBase *pool = param.instances[0];
+    pool->DumpStats();
 }
 
 inline void run_init(BenchParam param) {
@@ -204,8 +209,8 @@ inline void run_bench(BenchParam param) {
 
     DLOG("start testing ...");
 
-    run_sample("random write", param, TestType::WRITE | TestType::RAND, redis);
-    run_sample("random read", param, TestType::READ | TestType::RAND, redis);
+    // run_sample("random write", param, TestType::WRITE | TestType::RAND, redis);
+    // run_sample("random read", param, TestType::READ | TestType::RAND, redis);
     run_sample("zipf write", param, TestType::WRITE | TestType::ZIPF, redis);
     run_sample("zipf read", param, TestType::READ | TestType::ZIPF, redis);
 

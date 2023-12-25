@@ -118,29 +118,28 @@ void erpc_call_target(erpc::ReqHandle *req_handle, void *context) {
     uint64_t perf_stat_timer;
     self_ctx->m_stats.start_sample(perf_stat_timer);
 
-    self_ctx->GetFiberPool().EnqueueTask(
-        [self_ctx, req_handle, perf_stat_timer = perf_stat_timer]() mutable {
-            auto &rpc = self_ctx->GetErpc();
-            erpc::ReqHandleWrap req_wrap(req_handle);
-            ErpcResponseHandle<typename EFW::ResponseType> resp_handle(rpc, req_wrap);
+    self_ctx->GetFiberPool().EnqueueTask([self_ctx, req_handle, perf_stat_timer]() mutable {
+        auto &rpc = self_ctx->GetErpc();
+        erpc::ReqHandleWrap req_wrap(req_handle);
+        ErpcResponseHandle<typename EFW::ResponseType> resp_handle(rpc, req_wrap);
 
-            auto req_raw = req_wrap.get_req_msgbuf();
-            auto req = reinterpret_cast<typename EFW::RequestType *>(req_raw.get_buf());
+        auto req_raw = req_wrap.get_req_msgbuf();
+        auto req = reinterpret_cast<typename EFW::RequestType *>(req_raw.get_buf());
 
-            typename EFW::PeerContext *peer_connection = nullptr;
+        typename EFW::PeerContext *peer_connection = nullptr;
 
-            if constexpr (ESTABLISH) {
-                peer_connection = new typename EFW::PeerContext();
-            } else {
-                peer_connection =
-                    dynamic_cast<typename EFW::PeerContext *>(self_ctx->GetConnection(req->mac_id));
-            }
+        if constexpr (ESTABLISH) {
+            peer_connection = new typename EFW::PeerContext();
+        } else {
+            peer_connection =
+                dynamic_cast<typename EFW::PeerContext *>(self_ctx->GetConnection(req->mac_id));
+        }
 
-            EFW::func(*self_ctx, *peer_connection, *req, resp_handle);
-            rpc.enqueue_response(req_wrap, resp_handle.GetBuffer());
+        EFW::func(*self_ctx, *peer_connection, *req, resp_handle);
+        rpc.enqueue_response(req_wrap, resp_handle.GetBuffer());
 
-            self_ctx->m_stats.rpc_exec_sample(perf_stat_timer);
-        });
+        self_ctx->m_stats.rpc_exec_sample(perf_stat_timer);
+    });
 }
 
 template <typename EFW, bool ESTABLISH>
@@ -149,41 +148,40 @@ void msgq_call_target(msgq::MsgBuffer &req_raw, void *ctx) {
     uint64_t perf_stat_timer;
     self_ctx->m_stats.start_sample(perf_stat_timer);
 
-    self_ctx->GetFiberPool().EnqueueTask(
-        [self_ctx, req_raw, perf_stat_timer = perf_stat_timer]() mutable {
-            auto req = reinterpret_cast<typename EFW::RequestType *>(req_raw.get_buf());
+    self_ctx->GetFiberPool().EnqueueTask([self_ctx, req_raw, perf_stat_timer]() mutable {
+        auto req = reinterpret_cast<typename EFW::RequestType *>(req_raw.get_buf());
 
-            typename EFW::PeerContext *peer_connection = nullptr;
-            msgq::MsgQueueRPC *rpc;
-            msgq::MsgBuffer resp_raw;
+        typename EFW::PeerContext *peer_connection = nullptr;
+        msgq::MsgQueueRPC *rpc;
+        msgq::MsgBuffer resp_raw;
 
-            if constexpr (ESTABLISH) {
-                peer_connection = new typename EFW::PeerContext();
-                RawResponseHandle<typename EFW::ResponseType> resp_handle;
-                EFW::func(*self_ctx, *peer_connection, *req, resp_handle);
+        if constexpr (ESTABLISH) {
+            peer_connection = new typename EFW::PeerContext();
+            RawResponseHandle<typename EFW::ResponseType> resp_handle;
+            EFW::func(*self_ctx, *peer_connection, *req, resp_handle);
 
-                rpc = peer_connection->GetMsgQ();
-                MsgQResponseHandle<typename EFW::ResponseType> resp_handle_(rpc);
+            rpc = peer_connection->GetMsgQ();
+            MsgQResponseHandle<typename EFW::ResponseType> resp_handle_(rpc);
 
-                resp_handle_.Init(resp_handle.GetSize());
-                typename EFW::ResponseType &resp = resp_handle_.Get();
-                memcpy(&resp, resp_handle.GetBuffer(), resp_handle.GetSize());
-                rpc->enqueue_response(req_raw, resp_handle_.GetBuffer());
-            } else {
-                peer_connection =
-                    dynamic_cast<typename EFW::PeerContext *>(self_ctx->GetConnection(req->mac_id));
-                rpc = peer_connection->GetMsgQ();
+            resp_handle_.Init(resp_handle.GetSize());
+            typename EFW::ResponseType &resp = resp_handle_.Get();
+            memcpy(&resp, resp_handle.GetBuffer(), resp_handle.GetSize());
+            rpc->enqueue_response(req_raw, resp_handle_.GetBuffer());
+        } else {
+            peer_connection =
+                dynamic_cast<typename EFW::PeerContext *>(self_ctx->GetConnection(req->mac_id));
+            rpc = peer_connection->GetMsgQ();
 
-                MsgQResponseHandle<typename EFW::ResponseType> resp_handle(rpc);
-                EFW::func(*self_ctx, *peer_connection, *req, resp_handle);
-                rpc->enqueue_response(req_raw, resp_handle.GetBuffer());
-            }
+            MsgQResponseHandle<typename EFW::ResponseType> resp_handle(rpc);
+            EFW::func(*self_ctx, *peer_connection, *req, resp_handle);
+            rpc->enqueue_response(req_raw, resp_handle.GetBuffer());
+        }
 
-            // The buffer on the sending side will be released by the receiving side
-            rpc->free_msg_buffer(req_raw);
+        // The buffer on the sending side will be released by the receiving side
+        rpc->free_msg_buffer(req_raw);
 
-            self_ctx->m_stats.rpc_exec_sample(perf_stat_timer);
-        });
+        self_ctx->m_stats.rpc_exec_sample(perf_stat_timer);
+    });
 }
 
 }  // namespace detail

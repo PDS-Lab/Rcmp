@@ -103,7 +103,7 @@ struct MsgQueue final {
     uint32_t dequeue_msg(MsgHeader *hv, size_t max_deq);
     void free_msg_buffer(MsgBuffer &msg_buf);
 
-    ConcurrentQueue<MsgHeader, 10240, ConcurrentQueueProducerMode::MP,
+    ConcurrentQueue<MsgHeader, msgq_ring_depth, ConcurrentQueueProducerMode::MP,
                     ConcurrentQueueConsumerMode::SC>
         msgq_q;
     RingArena<msgq_ring_buf_len, 8> m_ra;

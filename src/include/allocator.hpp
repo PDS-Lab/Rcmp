@@ -104,7 +104,8 @@ class RingArena {
     const void* base() const { return m_bs; }
 
     void* allocate(size_t s) {
-        DLOG_ASSERT(s <= block_size, "Can't allocate large than block size: %lu, %lu", s, block_size);
+        DLOG_ASSERT(s <= block_size, "Can't allocate large than block size: %lu, %lu", s,
+                    block_size);
 
         thread_local uint8_t b_cur = (reinterpret_cast<uintptr_t>(&b_cur) >> 5) % BucketNum;
         b_cur = (b_cur + 1) % BucketNum;
@@ -117,7 +118,7 @@ class RingArena {
                 npv = opv;
                 npv.pos += s;
                 if (npv.pos < block_size) {
-                    npv.cnt++;
+                    ++npv.cnt;
 
                     if (b.pv.compare_exchange_weak(opv, npv, std::memory_order_acquire,
                                                    std::memory_order_acquire)) {
@@ -143,6 +144,7 @@ class RingArena {
         Block& b = m_bs[bc];
         atomic_po_val_t opv = b.pv.load(std::memory_order_acquire), npv;
         do {
+            DLOG_ASSERT(opv.cnt != 0);
             npv = opv;
             if ((--npv.cnt) == 0) {
                 npv.pos = 0;
@@ -161,3 +163,35 @@ class RingArena {
 
     Block m_bs[BucketNum];
 };
+
+template <typename T>
+class ObjectPool {
+   public:
+    T* pop() {
+        if (pool.empty()) {
+            return new T();
+        } else {
+            T* obj = pool.back();
+            pool.pop_back();
+            obj->clear();
+            return obj;
+        }
+    }
+
+    void put(T* p) { pool.push_back(p); }
+
+   private:
+    class raw_ptr_vector : public std::vector<T*> {
+       public:
+        ~raw_ptr_vector() {
+            for (auto* p : *this) {
+                delete (p);
+            }
+        }
+    };
+
+    static thread_local raw_ptr_vector pool;
+};
+
+template <typename T>
+thread_local typename ObjectPool<T>::raw_ptr_vector ObjectPool<T>::pool;

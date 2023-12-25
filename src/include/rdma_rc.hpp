@@ -54,8 +54,10 @@ struct SyncData {
     bool timeout;
     uint8_t props_size;
     std::array<priority_props *, 8> props;
-    CortPromise<void> pro;
-    boost::fibers::shared_future<void> fu;
+    ControlBlock *cbk;
+
+    SyncData() : cbk(ObjectPool<ControlBlock>().pop()) {}
+    ~SyncData() { ObjectPool<ControlBlock>().put(cbk); }
 
     void *operator new(std::size_t size) { return ObjectPoolAllocator<SyncData>().allocate(1); }
 

@@ -58,7 +58,7 @@ class FreqStats {
     Heatness m_wr_heat;
     Heatness m_rd_heat;
 
-    static void init_exp_decays(uint64_t half_life_us);
+    static void init_exp_decays(float half_life_us);
 
    private:
     static Mutex m_exp_decays_lck;

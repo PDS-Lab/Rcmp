@@ -90,9 +90,7 @@ class SpinFuture<void> {
         }
     }
 
-    void wait() {
-        throw std::runtime_error("wait dead spinning");
-    }
+    void wait() { throw std::runtime_error("wait dead spinning"); }
 
     template <typename _Rep, typename _Period>
     std::future_status wait_for(const std::chrono::duration<_Rep, _Period> &__rel) const {
@@ -114,3 +112,23 @@ template <typename T>
 using CortPromise = boost::fibers::promise<T>;
 template <typename T>
 using CortFuture = boost::fibers::future<T>;
+
+struct ControlBlock {
+    bool ready = false;
+    boost::fibers::mutex mtx;
+    boost::fibers::condition_variable cv;
+
+    void clear() { ready = false; }
+
+    void get() {
+        std::unique_lock<boost::fibers::mutex> lck(mtx);
+        cv.wait(lck, [&]() { return ready; });
+    }
+    void set_value() {
+        {
+            std::unique_lock<boost::fibers::mutex> lck(mtx);
+            ready = true;
+        }
+        cv.notify_all();
+    }
+};

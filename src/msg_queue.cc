@@ -236,8 +236,17 @@ void MsgQueueRPC::run_event_loop_once() {
 
 offset_t MsgQueue::alloc_msg_buffer(size_t size) {
     void* ptr;
+    bool noticed = false;
     do {
         ptr = m_ra.allocate(size);
+        if (!ptr) {
+            if (!noticed) {
+                DLOG_WARNING("msg queue full");
+                noticed = true;
+            }
+            boost::this_fiber::yield();
+            std::this_thread::yield();
+        }
     } while (ptr == nullptr);
     return reinterpret_cast<uintptr_t>(ptr) - reinterpret_cast<uintptr_t>(m_ra.base());
 }

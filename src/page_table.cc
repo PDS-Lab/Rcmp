@@ -17,7 +17,7 @@ PageRackMetadata *PageDirectory::AddPage(RackMacTable *rack_table, page_id_t pag
     table.insert(page_id, page_meta);
     rack_table->current_allocated_page_num++;
 
-    DLOG("Add page %lu --> rack %u", page_id, page_meta->rack_id);
+    // DLOG("Add page %lu --> rack %u", page_id, page_meta->rack_id);
 
     return page_meta;
 }
@@ -27,7 +27,7 @@ void PageDirectory::RemovePage(RackMacTable *rack_table, page_id_t page_id) {
     PageRackMetadata *page_meta = it->second;
     table.erase(it);
 
-    DLOG("Del page %lu --> rack %u", page_id, page_meta->rack_id);
+    // DLOG("Del page %lu --> rack %u", page_id, page_meta->rack_id);
 
     delete page_meta;
     rack_table->current_allocated_page_num--;
@@ -87,7 +87,9 @@ bool PageTableManager::PickUnvisitPage(page_id_t &page_id, PageMetadata *&page_m
 
 std::vector<std::pair<page_id_t, PageMetadata *>> PageTableManager::RandomPickVMPage(size_t n) {
     thread_local std::mt19937 eng(rand());
-    return table.getRandomN(eng, n);
+    return table.getRandomN(eng, n, [](const std::pair<page_id_t, PageMetadata *> p){
+        return p.second->vm_meta != nullptr;
+    });
 }
 
 PageCacheTable::~PageCacheTable() {

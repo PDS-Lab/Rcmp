@@ -20,6 +20,7 @@ struct JoinRackRequest {
 struct JoinRackReply {
     mac_id_t client_mac_id;
     mac_id_t daemon_mac_id;
+    float half_life_us;
 };
 /**
  * @brief Adds client to the rack. Called when the connection is established.
@@ -242,7 +243,7 @@ struct MigratePageReply {
  * @param req
  * @param resp_handle
  */
-void MigratePage(DaemonContext& daemon_context, DaemonToDaemonConnection& daemon_connection,
+void migratePage(DaemonContext& daemon_context, DaemonToDaemonConnection& daemon_connection,
                  MigratePageRequest& req, ResponseHandle<MigratePageReply>& resp_handle);
 
 struct TryDelPageRequest {
