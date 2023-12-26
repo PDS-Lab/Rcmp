@@ -191,7 +191,7 @@ inline void run_sample(const string &testname, const BenchParam &param, int type
 inline void run_init(BenchParam param) {
     DLOG("start initing ...");
     MemPoolBase *pool = param.instances[0];
-    if (param.RANGE) {
+    if (param.NID == 0) {
         MemPoolBase::GAddr ga = pool->Alloc(param.RANGE);
         DLOG_EXPR(ga, ==, param.SA);
     }

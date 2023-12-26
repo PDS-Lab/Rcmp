@@ -75,11 +75,14 @@ bool PageTableManager::PickUnvisitPage(page_id_t &page_id, PageMetadata *&page_m
     while (!unvisited_pages.empty()) {
         auto p = unvisited_pages.front();
         unvisited_pages.pop();
-        if ((!p.second->vm_meta || p.second->vm_meta->ref_client.empty()) &&
-            p.second->page_ref_lock.try_lock()) {
-            page_id = p.first;
-            page_meta = p.second;
-            return true;
+        if (p.second->page_ref_lock.try_lock()) {
+            if (p.second->vm_meta != nullptr && p.second->vm_meta->ref_client.empty()) {
+                page_id = p.first;
+                page_meta = p.second;
+                return true;
+            } else {
+                p.second->page_ref_lock.unlock();
+            }
         }
     }
     return false;
